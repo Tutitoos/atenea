@@ -11,13 +11,14 @@ import (
 )
 
 func TestPrepareDirectProbe(t *testing.T) {
-	selection := Selection{
-		HostName: "example.test", User: "person@example.test", Port: 2222,
-		HostKeyAlias: "reviewed.example.test", Snapshot: "fixture-snapshot",
-		IdentityFiles: []string{"/nonexistent/fixture-key"},
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person@example.test\n Port 2222\n HostKeyAlias reviewed.example.test\n IdentityFile /nonexistent/fixture-key\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
 	}
 	knownHosts := []byte("reviewed.example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture\n")
-	plan, err := PrepareDirectProbe(selection, knownHosts)
+	plan, err := PrepareDirectProbe(config, "", selection, knownHosts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,33 +61,50 @@ func TestPrepareDirectProbe(t *testing.T) {
 }
 
 func TestPrepareDirectProbeRejectsUnresolvedRoutes(t *testing.T) {
-	base := Selection{HostName: "example.test", User: "person", Port: 22, Snapshot: "fixture"}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n")
+	base, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name string
 		edit func(*Selection)
 		want error
 	}{
-		{"proxy jump", func(s *Selection) { s.ProxyJump = "jump" }, ErrProbeUnsupported},
-		{"proxy command", func(s *Selection) { s.ProxyCommand = "helper" }, ErrProbeUnsupported},
-		{"host option", func(s *Selection) { s.HostName = "-oProxyCommand=evil" }, ErrUnresolved},
-		{"host account", func(s *Selection) { s.HostName = "person@other.test" }, ErrUnresolved},
-		{"host whitespace", func(s *Selection) { s.HostName = "host name" }, ErrUnresolved},
-		{"key alias option", func(s *Selection) { s.HostKeyAlias = "-oStrictHostKeyChecking=no" }, ErrUnresolved},
-		{"identity none", func(s *Selection) { s.IdentityFiles = []string{"none"} }, ErrUnresolved},
+		{"host option", func(s *Selection) { s.HostName = "-oProxyCommand=evil" }, ErrChanged},
+		{"host account", func(s *Selection) { s.HostName = "person@other.test" }, ErrChanged},
+		{"host whitespace", func(s *Selection) { s.HostName = "host name" }, ErrChanged},
+		{"key alias option", func(s *Selection) { s.HostKeyAlias = "-oStrictHostKeyChecking=no" }, ErrChanged},
+		{"identity none", func(s *Selection) { s.IdentityFiles = []string{"none"} }, ErrChanged},
 		{"empty snapshot", func(s *Selection) { s.Snapshot = "" }, ErrUnresolved},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			selection := base
 			tt.edit(&selection)
-			plan, err := PrepareDirectProbe(selection, []byte("fixture known hosts"))
+			plan, err := PrepareDirectProbe(config, "", selection, []byte("fixture known hosts"))
 			if !errors.Is(err, tt.want) || plan != nil {
 				t.Fatalf("plan = %v, err = %v, want %v", plan, err, tt.want)
 			}
 		})
 	}
-	if plan, err := PrepareDirectProbe(base, nil); !errors.Is(err, ErrUnresolved) || plan != nil {
+	if plan, err := PrepareDirectProbe(config, "", base, nil); !errors.Is(err, ErrUnresolved) || plan != nil {
 		t.Fatalf("empty trust snapshot: plan = %v, err = %v", plan, err)
+	}
+	for _, proxy := range []string{"ProxyJump jump.example.test", "ProxyCommand helper example.test"} {
+		writeFixture(t, config, "Host selected\n HostName example.test\n User person\n "+proxy+"\n")
+		selected, err := ResolveStatic(config, "", "selected")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan, err := PrepareDirectProbe(config, "", selected, []byte("fixture known hosts")); !errors.Is(err, ErrProbeUnsupported) || plan != nil {
+			t.Fatalf("proxy route: plan = %v, err = %v", plan, err)
+		}
+	}
+	writeFixture(t, config, "Host selected\n HostName changed.example.test\n User person\n")
+	if plan, err := PrepareDirectProbe(config, "", base, []byte("fixture known hosts")); !errors.Is(err, ErrChanged) || plan != nil {
+		t.Fatalf("stale config: plan = %v, err = %v", plan, err)
 	}
 }
 
@@ -95,9 +113,13 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 	if err != nil {
 		t.Skip("OpenSSH client unavailable")
 	}
-	plan, err := PrepareDirectProbe(Selection{
-		HostName: "example.test", User: "person", Port: 2222, Snapshot: "fixture",
-	}, []byte("example.test ssh-ed25519 fixture\n"))
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n Port 2222\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

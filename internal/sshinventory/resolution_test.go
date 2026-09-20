@@ -79,3 +79,34 @@ func TestResolveStaticRejectsDynamicTargetAndPreservesProxyOrder(t *testing.T) {
 		t.Fatalf("canonicalization accepted: %v", err)
 	}
 }
+
+func TestRevalidateSelectionRejectsConfigAndSelectionChanges(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host first second\n HostName target.example.test\n User person\n")
+	first, err := ResolveStatic(config, "", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ResolveStatic(config, "", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RevalidateSelection(config, "", first); err != nil {
+		t.Fatal(err)
+	}
+	if first.HostName != second.HostName || first.User != second.User || first.Port != second.Port {
+		t.Fatal("aliases should resolve to the same provisional account")
+	}
+	tampered := first
+	tampered.HostName = "other.example.test"
+	if err := RevalidateSelection(config, "", tampered); !errors.Is(err, ErrChanged) {
+		t.Fatalf("modified selected host: %v", err)
+	}
+	writeFixture(t, config, "Host renamed second\n HostName target.example.test\n User person\n")
+	if err := RevalidateSelection(config, "", second); !errors.Is(err, ErrChanged) {
+		t.Fatalf("renamed alias changed snapshot: %v", err)
+	}
+	if err := RevalidateSelection(config, "", first); !errors.Is(err, ErrChanged) && !errors.Is(err, ErrUnresolved) {
+		t.Fatalf("removed alias must invalidate selection: %v", err)
+	}
+}

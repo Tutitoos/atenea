@@ -20,10 +20,14 @@ type ProbePlan struct {
 }
 
 // PrepareDirectProbe builds a direct-route diagnostic plan. The caller must
-// supply known_hosts bytes from an independently reviewed source and recheck
-// the selection snapshot before running the plan. StrictHostKeyChecking
+// supply known_hosts bytes from an independently reviewed source. It rechecks
+// the selected config roots before and after writing temporary files. The
+// caller must recheck again immediately before running the plan. StrictHostKeyChecking
 // refuses unknown or changed keys; this function never enrolls a key.
-func PrepareDirectProbe(selection Selection, knownHostsSnapshot []byte) (*ProbePlan, error) {
+func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, knownHostsSnapshot []byte) (*ProbePlan, error) {
+	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
+		return nil, err
+	}
 	if selection.Snapshot == "" || selection.User == "" || selection.Port == 0 ||
 		!safeHostArgument(selection.HostName) || !safeAccountArgument(selection.User) ||
 		(selection.HostKeyAlias != "" && !safeHostArgument(selection.HostKeyAlias)) {
@@ -88,6 +92,10 @@ func PrepareDirectProbe(selection Selection, knownHostsSnapshot []byte) (*ProbeP
 		args = append(args, "-i", identity)
 	}
 	args = append(args, selection.HostName)
+	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
+		cleanup()
+		return nil, err
+	}
 	return &ProbePlan{Args: args, Snapshot: selection.Snapshot, root: root}, nil
 }
 

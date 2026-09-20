@@ -38,6 +38,10 @@ the later probe must review the route and known-host policy, verify the
 fingerprint again and bind an authenticated destination and account before
 trust or credentials can be used.
 
+`RevalidateSelection` repeats static resolution against the same user/system
+roots and rejects a changed snapshot or modified selected values. It is a
+precondition check, not a verified host identity or an authorization grant.
+
 `PrepareDirectProbe` builds a restricted OpenSSH argument list for a selected
 direct route. It never starts SSH. It rejects proxy routes and unsafe target
 arguments rather than silently changing their path. The caller must provide a
@@ -48,6 +52,8 @@ known-hosts copy is the sole trust source. The arguments disable remote
 commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
 connection sharing and automatic host-key updates. Password prompts are
 disabled for this diagnostic plan. `Close` removes its temporary files.
+The builder revalidates the selection before and after creating the temporary
+files. A future executor must revalidate again immediately before use.
 
 This is only a command plan. No code here executes it, interprets OpenSSH
 errors, enrolls keys, proves authenticated connectivity or supplies a stable

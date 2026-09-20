@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,23 @@ type Selection struct {
 	IdentityFiles []string
 	Snapshot      string
 	Sources       []Diagnostic
+}
+
+// RevalidateSelection rereads the same config roots and rejects a stale or
+// modified selected alias. It must run again immediately before execution;
+// a successful check alone does not authorize a connection.
+func RevalidateSelection(userConfig, systemConfig string, selected Selection) error {
+	if selected.Alias == "" || selected.Snapshot == "" {
+		return ErrUnresolved
+	}
+	current, err := ResolveStatic(userConfig, systemConfig, selected.Alias)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current, selected) {
+		return ErrChanged
+	}
+	return nil
 }
 
 type resolver struct {
