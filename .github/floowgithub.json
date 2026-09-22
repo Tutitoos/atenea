@@ -1,0 +1,7 @@
+{
+  "base_branch": "main",
+  "branch_pattern": "^(feat|fix|docs|refactor|chore)/(\\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$",
+  "issue_required": true,
+  "closing_keywords": ["Closes"],
+  "exactly_one_closing_reference": true
+}

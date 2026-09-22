@@ -4,7 +4,7 @@ These instructions apply to the entire repository.
 
 ## Git and GitHub
 
-- Read `docs/content/git-workflow.md` and use `.agents/skills/atenea-github-delivery/` for issue, branch, commit, pull request, review, and merge work.
+- Read `docs/content/git-workflow.md` and use the installed `$floowgithub` skill for issue, branch, commit, pull request, review, and merge work.
 - Use one primary issue per implementable branch and PR. Include exactly one matching `Closes #N`, except for bot dependency PRs and private security advisories.
 - Never commit directly to `main`. Create an isolated worktree from a verified `origin/main` and use `<category>/<issue>-<slug>` with `feat`, `fix`, `docs`, `refactor`, or `chore`.
 - Preserve a branch name explicitly required by an accepted plan. Link its issue in the PR instead of rewriting published history.
