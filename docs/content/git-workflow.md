@@ -18,4 +18,4 @@ Every non-bot PR targets `main`, includes exactly one `Closes #N`, states exact 
 
 Review checks, formal reviews, issue comments, inline comments, and unresolved threads. Verify automated findings in code. Readiness requires successful required checks, satisfied acceptance criteria, no actionable thread, and an unchanged reviewed SHA. Never self-approve or bypass protection. Merge, installation, release, migration, and deployment are distinct effects.
 
-Use `.agents/skills/atenea-github-delivery/` for the operational workflow and deterministic snapshot checker.
+Use the installed `$floowgithub` skill for the operational workflow and deterministic snapshot checker. ATENEA's machine-readable policy lives in `.github/floowgithub.json`; project-specific validation commands remain in `AGENTS.md`.
