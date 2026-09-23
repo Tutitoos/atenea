@@ -4,9 +4,9 @@ These instructions apply to the entire repository.
 
 ## Git and GitHub
 
-- Read `docs/content/git-workflow.md` and use the installed `$floowgithub` skill for issue, branch, commit, pull request, review, and merge work.
-- Use ATENEA Workflow (Tutitoos Project #4) for Project draft tasks. Link each delivery issue and PR to its owning task through `Parent Task`, and update checklist evidence and Kanban status as work progresses.
-- Use one primary issue per implementable branch and PR. Include exactly one matching `Closes #N`, except for bot dependency PRs and private security advisories.
+- Read `docs/content/git-workflow.md` and use the installed `$floowgithub` skill for issue, branch, commit, pull request, QA, and merge work.
+- Each issue is the task and owns its checklist, acceptance criteria, linked child issues, and PRs. Update checkboxes only against current evidence. QA includes code review, checks, and functional validation.
+- Use one primary issue per implementable branch and PR. Include exactly one matching `Refs #N` while work remains, or `Closes #N` only when the merge completes the issue; bot dependency PRs and private security advisories are exceptions.
 - Never commit directly to `main`. Create an isolated worktree from a verified `origin/main` and use `<category>/<issue>-<slug>` with `feat`, `fix`, `docs`, `refactor`, or `chore`.
 - Preserve a branch name explicitly required by an accepted plan. Link its issue in the PR instead of rewriting published history.
 - Keep one writer per worktree. Preserve user changes and never stash, reset, amend, rebase, force-push, or discard work you do not own.

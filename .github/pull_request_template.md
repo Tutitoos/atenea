@@ -1,6 +1,6 @@
 ## Related issue or private advisory
 
-Closes #<!-- exactly one primary issue; bot dependency PRs are exempt. For a private security advisory, remove this line and use GitHub's private advisory link without exposing it here. -->
+Refs #<!-- exactly one primary issue while work remains. Use Closes only when this merge completes the issue; bot dependency PRs are exempt. For a private security advisory, remove this line and use GitHub's private advisory link without exposing it here. -->
 
 ## Result
 
@@ -24,7 +24,8 @@ Closes #<!-- exactly one primary issue; bot dependency PRs are exempt. For a pri
 ## Checklist
 
 - [ ] One coherent scope and one primary issue
-- [ ] Branch and `Closes` agree, or an approved branch-name exception is explained
+- [ ] Branch and issue reference agree, or an approved branch-name exception is explained
+- [ ] `Closes` is used only if the issue checklist and QA are complete
 - [ ] Acceptance criteria are satisfied
 - [ ] No credentials, personal data, temporary evidence, or unintended files are included
 - [ ] Tests, documentation, and embedded dashboard assets are current
