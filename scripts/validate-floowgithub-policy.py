@@ -36,10 +36,16 @@ else:
                 errors.append("branch_pattern must reject master")
     if policy.get("issue_required") is not True:
         errors.append("ATENEA must require a primary issue")
+    if policy.get("issue_checklist_required") is not True:
+        errors.append("ATENEA must require an issue checklist")
+    if policy.get("reference_keywords") != ["Refs", "Closes"]:
+        errors.append("ATENEA must allow Refs and Closes issue references")
     if policy.get("closing_keywords") != ["Closes"]:
         errors.append("ATENEA must use the Closes keyword")
-    if policy.get("exactly_one_closing_reference") is not True:
-        errors.append("ATENEA must require exactly one closing reference")
+    if policy.get("exactly_one_issue_reference") is not True:
+        errors.append("ATENEA must require exactly one issue reference")
+    if "project" in policy or "tasks" in policy:
+        errors.append("ATENEA must not require GitHub Projects")
 
 if errors:
     print("\n".join(errors), file=sys.stderr)

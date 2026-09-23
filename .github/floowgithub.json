@@ -2,6 +2,17 @@
   "base_branch": "main",
   "branch_pattern": "^(feat|fix|docs|refactor|chore)/(\\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$",
   "issue_required": true,
-  "closing_keywords": ["Closes"],
-  "exactly_one_closing_reference": true
+  "issue_checklist_required": true,
+  "reference_keywords": [
+    "Refs",
+    "Closes"
+  ],
+  "closing_keywords": [
+    "Closes"
+  ],
+  "exactly_one_issue_reference": true,
+  "worktrees": {
+    "one_active_per_issue": true,
+    "require_clean_before_removal": true
+  }
 }
