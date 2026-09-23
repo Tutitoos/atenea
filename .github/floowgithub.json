@@ -3,5 +3,32 @@
   "branch_pattern": "^(feat|fix|docs|refactor|chore)/(\\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$",
   "issue_required": true,
   "closing_keywords": ["Closes"],
-  "exactly_one_closing_reference": true
+  "exactly_one_closing_reference": true,
+  "project": {
+    "owner": "Tutitoos",
+    "number": 4,
+    "task_id_prefix": "TASK",
+    "status_field": "Status",
+    "task_link_field": "Parent Task",
+    "statuses": {
+      "backlog": "Backlog",
+      "in_progress": "In Progress",
+      "needs_fix": "Needs Fix",
+      "qa": "QA",
+      "completed": "Completed"
+    }
+  },
+  "tasks": {
+    "maximum_depth": 2,
+    "checklist_required": true,
+    "acceptance_criteria_required": true,
+    "validation_required": true,
+    "issues_required_for_code": true,
+    "synchronize_parent_checklist": true,
+    "synchronize_evidence": true
+  },
+  "worktrees": {
+    "one_active_per_issue": true,
+    "require_clean_before_removal": true
+  }
 }
