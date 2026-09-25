@@ -401,11 +401,11 @@ func infer(text string) Kind {
 	if containsAny(words, "not only", "not just") && containsAny(words, changeWords...) {
 		return KindChange
 	}
-	if startsWithIntent(words, "understand", "explain", "summarize", "summarise", "describe", "tell me what", "dime qué", "explica", "resume", "resúmeme", "describe") { //nolint:misspell // British spelling is intentional.
-		return KindUnderstand
-	}
 	if hasChangeAfterTransition(words) {
 		return KindChange
+	}
+	if startsWithIntent(words, "understand", "explain", "summarize", "summarise", "describe", "tell me what", "dime qué", "explica", "resume", "resúmeme", "describe") { //nolint:misspell // British spelling is intentional.
+		return KindUnderstand
 	}
 	if startsWithIntent(words, "please", "can you", "could you", "would you", "por favor", "puedes", "podrías", "podrias", "solo", "only", "just") {
 		return infer(strings.TrimSpace(stripPolitePrefix(words)))
@@ -443,8 +443,13 @@ func startsWithIntent(words string, prefixes ...string) bool {
 
 func hasChangeAfterTransition(words string) bool {
 	for _, transition := range []string{" then ", " and then ", " after that ", " followed by ", " luego ", " después ", " despues ", " a continuación "} {
-		if i := strings.Index(words, transition); i >= 0 && containsAny(" "+strings.TrimSpace(words[i+len(transition):])+" ", changeWords...) {
-			return true
+		if i := strings.Index(words, transition); i >= 0 {
+			// Classify the requested second phase rather than searching for a
+			// change verb anywhere in it. For example, "explain how to fix"
+			// asks for guidance, while "fix it" asks for a change.
+			if infer(strings.TrimSpace(words[i+len(transition):])) == KindChange {
+				return true
+			}
 		}
 	}
 	return false
