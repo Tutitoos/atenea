@@ -78,3 +78,45 @@ func TestDiscoverNonGitRootIsDeterministicAndChangesWithContent(t *testing.T) {
 		t.Fatal("non-git content change did not invalidate identity")
 	}
 }
+
+func TestDiscoverTracksIndexChangesWithIdenticalWorkingTree(t *testing.T) {
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git: %v %s", err, out)
+		}
+	}
+	file := filepath.Join(root, "file.txt")
+	write := func(value string) {
+		t.Helper()
+		if err := os.WriteFile(file, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init")
+	write("initial")
+	git("add", ".")
+	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
+	nested := filepath.Join(root, "app")
+	if err := os.Mkdir(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write("staged A")
+	git("add", "file.txt")
+	write("working C")
+	first, err := Discover(t.Context(), nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("staged B")
+	git("add", "file.txt")
+	write("working C")
+	second, err := Discover(t.Context(), nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Fingerprint == second.Fingerprint {
+		t.Fatal("different staged blobs with identical MM status and working bytes have identical identities")
+	}
+}

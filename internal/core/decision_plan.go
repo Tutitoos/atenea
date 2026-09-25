@@ -21,6 +21,10 @@ func (v *conversation) decisionPlanTool() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"objective": map[string]any{"type": "string", "description": "The complete user objective to plan."},
+			"accepted_plan": map[string]any{"type": "object", "additionalProperties": false,
+				"description": "Exact locally accepted reference created by atenea decide accept-plan. Requires repository. Never grants effects.",
+				"properties":  map[string]any{"id": map[string]any{"type": "string"}, "revision": map[string]any{"type": "string"}},
+				"required":    []string{"id", "revision"}},
 			"criterion": map[string]any{"type": "string", "description": "Optional user-supplied acceptance criterion."},
 			"files":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Repository-relative files explicitly named by the user."},
 			"context": map[string]any{
@@ -79,6 +83,23 @@ func (v *conversation) decisionPlan(ctx context.Context, args map[string]any) (a
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: toolDecisionPlan + ": context: " + err.Error()}
 	}
+	var accepted *decision.AcceptedPlanReference
+	if raw, exists := args["accepted_plan"]; exists {
+		repository, _ := args[repositoryArg].(string)
+		if strings.TrimSpace(repository) == "" || decisionContext != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "accepted_plan requires repository and cannot be combined with context"}
+		}
+		encoded, marshalErr := json.Marshal(raw)
+		if marshalErr != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "invalid accepted_plan"}
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+		decoder.DisallowUnknownFields()
+		accepted = &decision.AcceptedPlanReference{}
+		if err := decoder.Decode(accepted); err != nil || accepted.ID == "" || accepted.Revision == "" {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "accepted_plan requires id and revision"}
+		}
+	}
 	repositoryArgs := args
 	if repository, _ := args[repositoryArg].(string); strings.TrimSpace(repository) == "" && decisionContext != nil && decisionContext.Repository != "" {
 		repositoryArgs = make(map[string]any, len(args)+1)
@@ -113,6 +134,7 @@ func (v *conversation) decisionPlan(ctx context.Context, args map[string]any) (a
 	plan, err := planner.BuildContext(ctx, decision.Request{
 		Text:            objective,
 		Context:         decisionContext,
+		AcceptedPlan:    accepted,
 		Criterion:       strings.TrimSpace(criterion),
 		Limits:          limits,
 		Repository:      repository,

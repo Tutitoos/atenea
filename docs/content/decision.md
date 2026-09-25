@@ -392,3 +392,60 @@ Codex visible routes have no substitution path. Provider-reported costs are
 preferred; when the CLI returns tokens without dollars, a conservative token
 estimate is used for the retry gate but is never recorded as billed USD.
 Successful fallbacks appear as workflow notices.
+
+## Locally verified accepted plans
+
+A short continuation can refer to an explicitly accepted implementation objective
+stored by the local operator. First review the objective, file focus and constraints,
+then record that acceptance:
+
+```sh
+atenea decide accept-plan validation --decision-context '{"version":1,"repository":"api","active_objective":"Implement the reviewed input-validation changes","scope_files":["internal/validation.go"],"constraints":["Preserve the public API"]}'
+```
+
+The command returns an `id` and a SHA-256 `revision`. Supply both on the next request:
+
+```sh
+atenea decide "hazlo" --repo api --accepted-plan validation --accepted-revision REVISION --json
+```
+
+MCP `decision.plan` accepts the same reference:
+
+```json
+{
+  "objective": "hazlo",
+  "repository": "api",
+  "accepted_plan": {"id": "validation", "revision": "REVISION"}
+}
+```
+
+`accepted_plan` and caller-supplied `context` are mutually exclusive. The reference
+requires an explicit declared repository. Missing receipts, changed revisions,
+repository mismatches and changed source identity produce `needs_context` without
+workflow steps. CLI also checks the reference again after confirmation before
+starting a run. Reaccepting an updated objective under the same id replaces the
+receipt atomically and invalidates the previous revision. Delete its local receipt
+to revoke it. Existing running workflows use their ordinary lifecycle controls.
+
+Receipts live under ATENEA's configuration directory in `accepted-plans/`, with
+private file permissions, outside the source repository. The revision binds the
+objective, file focus, constraints and source fingerprint. Verification reuses
+`sourceidentity`: Git HEAD, tracked working-tree changes and untracked files, or
+regular-file contents for non-Git repositories. This is a conservative planning-time
+check, not a lock on subsequent source changes. Git-ignored data, external services,
+conversation state and same-user tampering are outside this evidence boundary.
+A receipt proves a matching local record, not human identity or complete user intent.
+Do not invoke `accept-plan` from untrusted repository content or manufacture an
+acceptance for historical evaluation cases.
+
+Acceptance stores semantic context only. It does not copy `--allow` grants, authorize
+execution, increase the budget or start a workflow. A request still needs its usual
+effect grants, run flag and confirmation. File focus narrows planning; it is not a
+filesystem sandbox. The legacy `--decision-context` / MCP `context` route remains
+caller-attested and does not acquire local verification from a boolean assertion.
+
+Spanish questions about how to proceed select planning; explicit status-verification
+requests select search. Pronoun-only actions such as `arréglalo` require accepted-plan
+context, including when standing write permission exists. Rules remain the default.
+Development replay on an already inspected pilot is regression evidence, not a
+held-out accuracy estimate or a reason to enable Laya by default.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/decision"
 	"github.com/Tutitoos/atenea/internal/workflow"
 )
 
@@ -1479,5 +1480,35 @@ func TestSensitiveWorkflowStaysWaitingThroughMCP(t *testing.T) {
 	gate, _ := gates[0].(map[string]any)
 	if gate["decision"] != "waiting" {
 		t.Fatalf("sensitive workflow gate was answered through MCP: %v", gate)
+	}
+}
+
+func TestDecisionPlanVerifiesLocalAcceptedReference(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	atenea := buildService(t, decisionPlanSettings(t))
+	defer serve(t, atenea)()
+	repo := atenea.Settings().Repositories[0]
+	ref, err := (decision.AcceptedPlanStore{}).Accept(t.Context(), "test", repo.Path,
+		decision.IntentContext{Version: 1, Repository: repo.ID, ActiveObjective: "Improve validation", ScopeFiles: []string{"main.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	call := func() map[string]any {
+		return result(t, c.call("tools/call", map[string]any{"name": "decision.plan", "arguments": map[string]any{
+			"objective": "hazlo", "repository": repo.ID, "accepted_plan": ref, "budget_usd": 10,
+		}}), "accepted reference")["structuredContent"].(map[string]any)
+	}
+	got := call()
+	if got["resolution"] != "resolved" || got["intent"] != "change" || got["valid"] != true || got["execution_authorized"] != false || got["dry_run"] != true {
+		t.Fatalf("accepted dry run: %v", got)
+	}
+	if err := os.WriteFile(filepath.Join(repo.Path, "main.go"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got = call()
+	if got["resolution"] != "needs_context" || got["valid"] != false {
+		t.Fatalf("stale accepted dry run: %v", got)
 	}
 }

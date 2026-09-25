@@ -41,6 +41,7 @@ const (
 type Request struct {
 	Text            string
 	Context         *IntentContext
+	AcceptedPlan    *AcceptedPlanReference
 	Criterion       string
 	Limits          contract.Limits
 	Repository      string
@@ -166,11 +167,12 @@ type Selector interface {
 // selector. Without a selector it still produces a useful static catalog
 // plan, which is what makes `--dry-run` safe on an offline machine.
 type Planner struct {
-	Config     config.Config
-	Selector   Selector
-	Estimator  BudgetEstimator
-	Ranker     ModelRanker
-	Classifier IntentClassifier
+	Config        config.Config
+	Selector      Selector
+	Estimator     BudgetEstimator
+	Ranker        ModelRanker
+	Classifier    IntentClassifier
+	AcceptedPlans *AcceptedPlanStore
 }
 
 // Build creates and validates one decision plan.
@@ -199,6 +201,30 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 		return Plan{}, contract.Fail(contract.FailureInvalidInput, "decision: max tokens requires a positive max duration")
 	}
 
+	if req.AcceptedPlan != nil {
+		var root string
+		for _, repo := range p.Config.Repositories {
+			if repo.ID == req.Repository {
+				root = repo.Path
+				break
+			}
+		}
+		store := AcceptedPlanStore{}
+		if p.AcceptedPlans != nil {
+			store = *p.AcceptedPlans
+		}
+		var err error
+		if req.Context != nil || root == "" {
+			err = fmt.Errorf("accepted_plan requires an explicit declared repository and cannot be combined with context")
+		} else {
+			req.Context, err = store.Resolve(ctx, *req.AcceptedPlan, req.Repository, root)
+		}
+		if err != nil {
+			// Missing or stale context is a successful abstention, not a planner failure.
+			return Plan{Text: text, Resolution: ResolutionNeedsContext, ResolutionReason: "unverified_accepted_plan", //nolint:nilerr // Report the error as non-executable needs_context, like inline context resolution.
+				Workflow: workflow.Graph{Task: text}, Reasons: []Reason{{Stage: "context", Message: err.Error()}}}, nil
+		}
+	}
 	resolution := resolveIntent(req.Text, req.Context, req.Repository)
 	effectiveText, contextFiles := resolution.Text, resolution.ScopeFiles
 	if resolution.Status == ResolutionNeedsContext {
@@ -549,8 +575,30 @@ func infer(text string) Kind {
 	if startsWithIntent(words, "understand", "explain", "summarize", "summarise", "describe", "tell me what", "dime qué", "explica", "resume", "resúmeme", "describe") { //nolint:misspell // British spelling is intentional.
 		return KindUnderstand
 	}
-	if startsWithIntent(words, "please", "can you", "could you", "would you", "por favor", "puedes", "podrías", "podrias", "solo", "only", "just") {
+	if startsWithIntent(words, "please", "can you", "could you", "would you", "por favor", "vale", "puedes", "podrías", "podrias", "solo", "only", "just") {
 		return infer(strings.TrimSpace(stripPolitePrefix(words)))
+	}
+	// Questions about a course of action are planning, including accentless
+	// Spanish input. Keep this before the change vocabulary.
+	if startsWithIntent(words, "cómo podemos", "como podemos", "cómo lo hacemos", "como lo hacemos", "cómo hacemos", "como hacemos", "qué hacemos", "que hacemos", "ahora qué hacemos", "ahora que hacemos", "qué hay que hacer", "que hay que hacer", "ahora qué hay que hacer", "ahora que hay que hacer") {
+		return KindPlan
+	}
+	// Status verification retrieves evidence; the mention of a PR or a change
+	// does not ask for a modification. Avoid treating all reviews as searches.
+	if startsWithIntent(words, "revisa si", "revisa que", "comprueba si", "comprueba que", "verifica si", "verifica que", "consulta el estado", "consulta las", "consulta los") {
+		for _, verb := range []string{"corrige", "arregla", "implementa", "aplica", "cambia", "modifica", "actualiza", "edita", "añade"} {
+			// "si no cambia" can be an indicative status question. A
+			// conditional command needs an explicit clause boundary.
+			normalized := strings.Join(strings.Fields(cleaned), " ") + " "
+			conditional := false
+			for _, boundary := range []string{"; si no, ", ". si no, ", ", si no, "} {
+				conditional = conditional || strings.Contains(normalized, boundary+verb+" ")
+			}
+			if conditional {
+				return KindChange
+			}
+		}
+		return KindSearch
 	}
 	if containsAny(words, "how would", "how could", "how can we", "how do i", "how to", "design how", "diseña cómo", "cómo arreglar", "cómo corregir", "cómo modificar", "como arreglar", "como corregir", "como modificar", "tell me how you would", "outline how") ||
 		startsWithIntent(words, "tell me how to") {
@@ -618,7 +666,7 @@ func hasFutureChangeDiscussion(words string) bool {
 func stripPolitePrefix(words string) string {
 	for {
 		stripped := false
-		for _, prefix := range []string{"please", "can you", "could you", "would you", "por favor", "puedes", "podrías", "podrias", "solo", "only", "just"} {
+		for _, prefix := range []string{"please", "can you", "could you", "would you", "por favor", "vale", "puedes", "podrías", "podrias", "solo", "only", "just"} {
 			if strings.HasPrefix(words, " "+prefix+" ") {
 				words = " " + strings.TrimSpace(strings.TrimPrefix(words, " "+prefix+" ")) + " "
 				stripped = true
