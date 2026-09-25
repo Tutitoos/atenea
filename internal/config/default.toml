@@ -37,6 +37,19 @@ ttl = "5m"
 # traces.db in that same directory.
 enabled = false
 
+[decision]
+# rules keeps the deterministic intent classifier as-is and performs no
+# network request. Use observe to compare a local Laya service without changing
+# the selected plan, or laya to select sufficiently confident predictions.
+mode = "rules"
+laya_endpoint = ""
+# Store credentials in the environment; only the variable name belongs here.
+laya_api_key_env = ""
+timeout = "10s"
+# Starting gate only. Calibrate against the repository's labeled evaluation set
+# before enabling mode = "laya" for operational use.
+minimum_confidence = 0.8
+
 [orchestrator]
 # The agent that receives a commission, explores the repositories in scope,
 # splits the work into a graph of steps and hands them out.

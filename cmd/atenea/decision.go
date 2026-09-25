@@ -101,7 +101,7 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 		ranker = decision.AdaptiveModelRanker{History: &workflowDecisionHistory{store: store}}
 	}
 	planner := decision.Planner{Config: cfg, Selector: atenea, Estimator: estimator, Ranker: ranker}
-	plan, err := planner.Build(decision.Request{
+	plan, err := planner.BuildContext(context.Background(), decision.Request{
 		Text: text, Criterion: criterion, Limits: limits, Repository: repository, Files: files.values, BudgetUSD: budget,
 		Effects: effects, StandingEffects: cfg.Orchestrator.StandingEffects, Prefer: prefer, Tool: tool,
 	})

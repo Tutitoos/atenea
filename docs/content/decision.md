@@ -15,6 +15,98 @@ persists nor launches the workflow. The managed `atenea-plan-mode` Codex skill
 uses this surface automatically only while the active collaboration mode is
 Plan.
 
+## Intent classification with Laya
+
+The `[decision]` settings block controls intent classification. The default
+`mode = "rules"` keeps the built-in deterministic classifier and makes no
+network request. `mode = "observe"` sends the commission to a configured Laya
+service and records its proposal while keeping the rules result in the plan.
+`mode = "laya"` selects a valid Laya result only when its `answer_confidence`
+meets `minimum_confidence`; otherwise the plan uses the deterministic result.
+Laya's `confidence` field measures normalized entropy and is not the value to
+use for this gate.
+
+ATENEA speaks Laya's `POST /v1/systemone` HTTP protocol. A minimal local setup is
+to install Laya with its optional service dependencies and bind it to loopback:
+
+```sh
+python -m pip install "laya[serve]"
+LAYA_HOST=127.0.0.1 LAYA_PORT=8000 LAYA_PRELOAD=0 laya-serve
+```
+
+Then set the effective ATENEA configuration:
+
+```toml
+[decision]
+mode = "observe" # change to "laya" only after evaluating this checkpoint
+laya_endpoint = "http://127.0.0.1:8000/v1/systemone"
+laya_api_key_env = "ATENEA_LAYA_API_KEY" # omit when the service has no bearer key
+timeout = "10s"
+minimum_confidence = 0.8
+```
+
+If the service requires a bearer token, put its value in the named environment
+variable. ATENEA never stores the token in its settings file. Commission text is
+sent to the endpoint only in `observe` or `laya` mode. Keep the service bound to
+loopback for local use; use HTTPS and an explicitly trusted endpoint for a
+remote service. Redirects are refused.
+
+The confidence value is an initial setting, not a validated threshold for a
+particular checkpoint or domain. Use the labeled evaluation corpus and its
+runner to measure the exact checkpoint and language mix before enabling Laya
+for plan selection:
+
+```sh
+python scripts/evaluate-laya-intents.py \
+  http://127.0.0.1:8000/v1/systemone --model multilingual --threshold 0.8
+```
+
+The runner reports baseline and Laya accuracy, coverage at the requested
+threshold, gated accuracy, and a confusion matrix for separate calibration and
+test splits. By default, the service chooses a checkpoint for each request; use
+`--model multilingual` to pin one checkpoint across both language groups. The
+report includes the requested model plus model and routing IDs returned by the
+service. Verify those IDs against the checkpoint you intended to measure. The
+current rules baseline on this curated corpus is 25/32 (78.1%) on calibration
+and 11/16 (68.8%) on the held-out test split. The held-out set is intentionally
+small and emphasizes negations and plan-versus-change ambiguity; these figures
+describe this corpus, not general production accuracy.
+
+### Measured Laya run
+
+On 2026-09-25, the runner completed all 48 rows against local `laya==0.3.20`
+(`torch==2.14.0`, Python 3.13.15, MPS). The request pinned `multilingual`; the
+service reported model `laya-rl-agent` and route `multilingual`. The checkpoint
+was `convaiinnovations/laya` subfolder `multilingual`, Hub revision
+`55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`. Corpus SHA-256:
+`bcb642e70fee6e03dc467e11cca6f36d6c01dbd775b6c831a585d0cfda5cae55`.
+The corpus contains 12 examples for each label (`understand`, `search`, `plan`,
+`change`), split into 32 calibration rows and 16 held-out rows (four per label).
+
+| Split | Rules | Laya raw | Laya coverage at 0.8 | Laya accuracy when selected | Gated result |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Calibration (32) | 25/32 (78.1%) | 22/32 (68.8%) | 23/32 (71.9%) | 20/23 (87.0%) | 26/32 (81.3%) |
+| Held-out test (16) | 11/16 (68.8%) | 12/16 (75.0%) | 12/16 (75.0%) | 9/12 (75.0%) | 11/16 (68.8%) |
+
+Raw Laya confusion matrix over all 48 rows:
+
+| Expected \\ predicted | change | plan | search | understand |
+| --- | ---: | ---: | ---: | ---: |
+| change | 10 | 1 | 0 | 1 |
+| plan | 3 | 6 | 0 | 3 |
+| search | 0 | 1 | 11 | 0 |
+| understand | 2 | 1 | 2 | 7 |
+
+The 0.8 gate improved calibration by one example and left held-out accuracy
+unchanged. This run does not show a held-out uplift, so keep `rules` as the
+default and treat `0.8` as an experimental threshold. Use `observe` to gather
+representative traffic evidence before considering `laya` mode. Local fake-server
+tests still validate only the wire contract; the table above is a separate run
+against the real checkpoint. The evaluated checkpoint is marked Apache-2.0 on
+its [Hugging Face model page](https://huggingface.co/convaiinnovations/laya/tree/main/multilingual);
+check the license on the pinned artifact before redistributing weights. ATENEA
+does not bundle Python, PyTorch, or model weights.
+
 ```sh
 atenea decide "buscar el flujo de autenticación" --trace
 atenea decide "diseñar el flujo de pagos" --repo taxiprime-backend --json
@@ -22,9 +114,9 @@ atenea decide "diseñar el flujo de pagos" --repo taxiprime-backend --json
 
 The plan makes these decisions visible, in order:
 
-1. **Intent** — `understand`, `search`, `plan` or `change`, using a small
-   deterministic classifier that can later be replaced by a model returning
-   the same vocabulary.
+1. **Intent** — `understand`, `search`, `plan` or `change`, using deterministic
+   rules by default, or the optional Laya classifier in observation or opt-in
+   selection mode.
 2. **Agent and model** — the least powerful suitable declared agent is chosen
    (`reader` for searches, `explore` otherwise, then `plan` for plan/change
    work). Either role may be configured as `auto`: exploration uses safe

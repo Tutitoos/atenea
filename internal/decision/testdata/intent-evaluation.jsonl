@@ -1,0 +1,48 @@
+{"text":"Explícame qué hace este módulo sin modificarlo.","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"What is the architecture of the routing layer?","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"Resume el flujo de inicio de sesión.","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"Why does the retry policy exist?","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"Explain how authentication works; don't edit anything.","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"Necesito entender por qué falla la tarea.","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"What does this function return?","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"Aclara las diferencias entre estos perfiles.","expected":"understand","rules_intent":"understand","split":"calibration"}
+{"text":"No busques código; resume este diseño.","expected":"understand","rules_intent":"understand","split":"test"}
+{"text":"Don't fix anything, explain this error.","expected":"understand","rules_intent":"change","split":"test"}
+{"text":"¿Cuál es el propósito de este paquete?","expected":"understand","rules_intent":"understand","split":"test"}
+{"text":"Describe the existing cache behavior.","expected":"understand","rules_intent":"understand","split":"test"}
+{"text":"Busca dónde se valida el token.","expected":"search","rules_intent":"search","split":"calibration"}
+{"text":"Find the handler for session refresh.","expected":"search","rules_intent":"search","split":"calibration"}
+{"text":"Locate references to DecisionPlan.","expected":"search","rules_intent":"search","split":"calibration"}
+{"text":"Muéstrame dónde se crea el coordinator.","expected":"search","rules_intent":"search","split":"calibration"}
+{"text":"Search the repository for this error message.","expected":"search","rules_intent":"search","split":"calibration"}
+{"text":"Encuentra las pruebas de conexión.","expected":"search","rules_intent":"understand","split":"calibration"}
+{"text":"Quiero localizar las pruebas de conexión.","expected":"search","rules_intent":"search","split":"calibration"}
+{"text":"Show me callers of BuildContext.","expected":"search","rules_intent":"understand","split":"calibration"}
+{"text":"¿Dónde se elige el modelo plan?","expected":"search","rules_intent":"plan","split":"test"}
+{"text":"Find callers of the token validator.","expected":"search","rules_intent":"search","split":"test"}
+{"text":"Busca quién construye el grafo de trabajo.","expected":"search","rules_intent":"change","split":"test"}
+{"text":"Point me to the settings parser.","expected":"search","rules_intent":"understand","split":"test"}
+{"text":"Diseña una estrategia para endurecer este contrato.","expected":"plan","rules_intent":"plan","split":"calibration"}
+{"text":"Planifica una auditoría de seguridad del flujo.","expected":"plan","rules_intent":"plan","split":"calibration"}
+{"text":"How would you split this migration into steps?","expected":"plan","rules_intent":"plan","split":"calibration"}
+{"text":"Prepare a plan for improving the decision engine.","expected":"plan","rules_intent":"plan","split":"calibration"}
+{"text":"Propón opciones para mejorar la selección de agente.","expected":"plan","rules_intent":"understand","split":"calibration"}
+{"text":"Qué plan recomendarías para reducir el coste?","expected":"plan","rules_intent":"plan","split":"calibration"}
+{"text":"Outline a refactoring approach but do not apply it.","expected":"plan","rules_intent":"change","split":"calibration"}
+{"text":"Could you draft steps to migrate to the new API?","expected":"plan","rules_intent":"understand","split":"calibration"}
+{"text":"No implementes nada todavía; solo propón un plan.","expected":"plan","rules_intent":"plan","split":"test"}
+{"text":"Do not make changes yet. Tell me how you would add Laya.","expected":"plan","rules_intent":"change","split":"test"}
+{"text":"Diseña cómo migrar los ajustes al nuevo esquema.","expected":"plan","rules_intent":"plan","split":"test"}
+{"text":"Plan a way to document the routing rules.","expected":"plan","rules_intent":"plan","split":"test"}
+{"text":"Implement the new OAuth fallback now.","expected":"change","rules_intent":"change","split":"calibration"}
+{"text":"Añade un campo de auditoría al resultado.","expected":"change","rules_intent":"change","split":"calibration"}
+{"text":"Fix the panic in the parser.","expected":"change","rules_intent":"change","split":"calibration"}
+{"text":"Refactor the planner to share budget inputs.","expected":"change","rules_intent":"change","split":"calibration"}
+{"text":"Change the default timeout to 20 seconds.","expected":"change","rules_intent":"change","split":"calibration"}
+{"text":"Please build the feature described in issue 22.","expected":"change","rules_intent":"change","split":"calibration"}
+{"text":"Agrega pruebas para la ruta de planificación.","expected":"change","rules_intent":"understand","split":"calibration"}
+{"text":"Update the README for the new release.","expected":"change","rules_intent":"understand","split":"calibration"}
+{"text":"Cambiar el clasificador para devolver evidencia tipada.","expected":"change","rules_intent":"change","split":"test"}
+{"text":"Fix the timeout and update documentation.","expected":"change","rules_intent":"change","split":"test"}
+{"text":"Implement this plan now.","expected":"change","rules_intent":"change","split":"test"}
+{"text":"Añade la integración Laya a la aplicación.","expected":"change","rules_intent":"change","split":"test"}
