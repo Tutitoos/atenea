@@ -142,6 +142,26 @@ defaults: a file quietly ignored is a machine running settings nobody chose.
 A file from a *newer* core than the binary is told to upgrade the binary
 instead, because no edit to the file can fix that one.
 
+## Decision classification
+
+`[decision]` selects how the planner classifies `understand`, `search`, `plan`
+and `change` requests. It defaults to deterministic rules and does not contact
+any service. To inspect a Laya prediction without changing the planned workflow,
+set `mode = "observe"`; `mode = "laya"` opts into using predictions above the
+configured `minimum_confidence`. Configure Laya's local HTTP endpoint and
+timeout in this block. The full protocol, privacy boundary and evaluation
+instructions are in [Decision router]({{< relref "decision" >}}).
+
+```toml
+[decision]
+mode = "rules" # rules, observe, or laya
+laya_endpoint = "" # POST endpoint ending in /v1/systemone
+laya_model = "" # optional checkpoint pin: english, multilingual, typed-decisions
+laya_api_key_env = "" # environment variable name; never put the token here
+timeout = "10s"
+minimum_confidence = 0.8
+```
+
 ## The orchestrator
 
 ```toml

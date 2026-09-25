@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -66,6 +67,7 @@ type Config struct {
 	Contract     contract.Version
 	Core         Core
 	Orchestrator Orchestrator
+	Decision     DecisionSettings
 	// Model fixes which model backs each of the two model-backed built-in
 	// agents, explore and plan, by role.
 	Model Model
@@ -125,6 +127,17 @@ type Knowledge struct {
 	Enabled      bool
 	Path         string
 	WorkflowPath string
+}
+
+// DecisionSettings configures the optional typed intent classifier. The rules
+// classifier remains the default and does not contact the configured endpoint.
+type DecisionSettings struct {
+	Mode              string
+	LayaEndpoint      string
+	LayaModel         string
+	LayaAPIKeyEnv     string
+	Timeout           time.Duration
+	MinimumConfidence float64
 }
 
 // MCPServer is one MCP endpoint a client should be pointed at instead of
@@ -1368,6 +1381,7 @@ type file struct {
 	Contract         string                `toml:"contract"`
 	Core             fileCore              `toml:"core"`
 	Orchestrator     fileOrchestrator      `toml:"orchestrator"`
+	Decision         fileDecision          `toml:"decision"`
 	Model            fileModel             `toml:"model"`
 	Workflow         fileWorkflow          `toml:"workflow"`
 	WorkflowProfiles []fileWorkflowProfile `toml:"workflow_profile"`
@@ -1401,6 +1415,15 @@ type fileKnowledge struct {
 	Enabled      bool   `toml:"enabled"`
 	Path         string `toml:"path"`
 	WorkflowPath string `toml:"workflow_path"`
+}
+
+type fileDecision struct {
+	Mode              string   `toml:"mode"`
+	LayaEndpoint      string   `toml:"laya_endpoint"`
+	LayaModel         string   `toml:"laya_model"`
+	LayaAPIKeyEnv     string   `toml:"laya_api_key_env"`
+	Timeout           string   `toml:"timeout"`
+	MinimumConfidence *float64 `toml:"minimum_confidence"`
 }
 
 // fileModel is [model] as written.
@@ -2086,6 +2109,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
+		return Config{}, err
+	}
+	if cfg.Decision, err = decoded.Decision.build(source); err != nil {
 		return Config{}, err
 	}
 	if cfg.Model, err = decoded.Model.build(source); err != nil {
@@ -3476,6 +3502,83 @@ func (c fileCore) build(source string) (Core, error) {
 	}
 	out.HealthProbeEvery = healthEvery
 	return out, nil
+}
+
+func (d fileDecision) build(source string) (DecisionSettings, error) {
+	out := DecisionSettings{
+		Mode:              strings.ToLower(strings.TrimSpace(d.Mode)),
+		LayaEndpoint:      strings.TrimSpace(d.LayaEndpoint),
+		LayaModel:         strings.ToLower(strings.TrimSpace(d.LayaModel)),
+		LayaAPIKeyEnv:     strings.TrimSpace(d.LayaAPIKeyEnv),
+		Timeout:           10 * time.Second,
+		MinimumConfidence: 0.8,
+	}
+	fail := func(format string, args ...any) (DecisionSettings, error) {
+		return DecisionSettings{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: decision: %s", source, fmt.Sprintf(format, args...))
+	}
+	if out.Mode == "" {
+		out.Mode = "rules"
+	}
+	if out.Mode != "rules" && out.Mode != "observe" && out.Mode != "laya" {
+		return fail("mode %q must be rules, observe or laya", out.Mode)
+	}
+	if out.LayaModel != "" && out.LayaModel != "english" && out.LayaModel != "multilingual" && out.LayaModel != "typed-decisions" {
+		return fail("laya_model must be english, multilingual or typed-decisions")
+	}
+	if strings.TrimSpace(d.Timeout) != "" {
+		parsed, err := time.ParseDuration(strings.TrimSpace(d.Timeout))
+		if err != nil || parsed <= 0 || parsed > 2*time.Minute {
+			return fail("timeout must be positive and no greater than 2m")
+		}
+		out.Timeout = parsed
+	}
+	if d.MinimumConfidence != nil {
+		confidence := *d.MinimumConfidence
+		if confidence <= 0 || confidence > 1 || math.IsNaN(confidence) || math.IsInf(confidence, 0) {
+			return fail("minimum_confidence must be greater than 0 and at most 1")
+		}
+		out.MinimumConfidence = confidence
+	}
+	if out.LayaEndpoint != "" {
+		endpoint, err := url.Parse(out.LayaEndpoint)
+		if err != nil || !endpoint.IsAbs() || endpoint.Hostname() == "" ||
+			(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+			endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
+			endpoint.Path != "/v1/systemone" {
+			return fail("laya_endpoint must be an HTTP(S) URL ending in /v1/systemone, without credentials, query or fragment")
+		}
+		if endpoint.Scheme == "http" {
+			host := strings.ToLower(endpoint.Hostname())
+			ip := net.ParseIP(host)
+			if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+				return fail("laya_endpoint must use HTTPS unless it targets loopback")
+			}
+		}
+	}
+	if out.Mode != "rules" && out.LayaEndpoint == "" {
+		return fail("laya_endpoint is required when mode is %q", out.Mode)
+	}
+	if out.LayaAPIKeyEnv != "" && !validEnvironmentName(out.LayaAPIKeyEnv) {
+		return fail("laya_api_key_env must name an environment variable")
+	}
+	return out, nil
+}
+
+func validEnvironmentName(value string) bool {
+	for index, char := range value {
+		letter := char == '_' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z'
+		if index == 0 {
+			if !letter {
+				return false
+			}
+			continue
+		}
+		if !letter && (char < '0' || char > '9') {
+			return false
+		}
+	}
+	return value != ""
 }
 
 // defaultModelTimeout mirrors claudecode's own DefaultTimeout: a model turn

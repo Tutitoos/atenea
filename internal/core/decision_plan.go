@@ -69,7 +69,7 @@ func (v *conversation) decisionPlanTool() map[string]any {
 	}
 }
 
-func (v *conversation) decisionPlan(_ context.Context, args map[string]any) (any, *rpcError) {
+func (v *conversation) decisionPlan(ctx context.Context, args map[string]any) (any, *rpcError) {
 	objective, _ := args["objective"].(string)
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
@@ -110,7 +110,7 @@ func (v *conversation) decisionPlan(_ context.Context, args map[string]any) (any
 		Estimator: decision.DefaultBudgetEstimator{},
 		Ranker:    decision.StaticModelRanker{},
 	}
-	plan, err := planner.Build(decision.Request{
+	plan, err := planner.BuildContext(ctx, decision.Request{
 		Text:            objective,
 		Context:         decisionContext,
 		Criterion:       strings.TrimSpace(criterion),
