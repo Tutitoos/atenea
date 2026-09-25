@@ -140,20 +140,38 @@ Keep labels in a separate file so the service never sees them.
 
 Each line of the private case file has `id`, `text`, and `split`; only an
 explicitly authorized write scenario may carry `granted_effects: ["write"]`.
-Each line of the private gold file has the same `id` and one `expected` intent:
+An optional `context` uses the versioned `decision.IntentContext` shape, and
+`files` can state the paths requested by the case. Each line of the private
+gold file has the same `id` and either an `expected` intent or an
+`expected_resolution`:
 
 ```json
 {"id":"r001","text":"Planifica la migración sin cambiar archivos.","split":"test"}
-{"id":"r001","expected":"plan"}
+{"id":"r002","text":"hazlo","split":"test","context":{"version":1,"repository":"atenea","accepted_plan_id":"accepted-7","accepted_plan_revision":"r2","accepted_plan_current":true,"active_objective":"actualizar la búsqueda","scope_files":["internal/search.go"],"constraints":["mantener compatibilidad"]}}
+{"id":"r003","text":"hazlo","split":"test"}
 ```
 
-These example lines belong in **different files**. Run the local Laya service
-with the intended routing configuration, then evaluate the same requests against
-ATENEA's rules and gated Laya plans. Pass the effective ATENEA settings file
-with configured model roles and a declared repository. The embedded defaults
-leave model roles empty, so they cannot produce valid plans for comparison.
-The evaluator never runs a workflow. The model sees only request text, once
-per case.
+```json
+{"id":"r001","expected":"plan"}
+{"id":"r002","expected":"change","expected_resolution":"resolved"}
+{"id":"r003","expected_resolution":"needs_context"}
+```
+
+The case and gold lines belong in **different files**. A resolved label needs
+an `expected` intent; a `needs_context` label omits it. Legacy gold rows with
+only `expected` still mean `expected_resolution: resolved`. Run the local Laya
+service with the intended routing configuration, then evaluate the no-context
+rules and gated plans plus context-aware plans for rows that provide context.
+For a regular request, the contextual classifier receives the effective
+objective, constraints, and current request. For each regular request whose
+context resolves, the service is called once without context and once with
+context. An accepted-plan continuation is resolved from its typed context and
+intentionally bypasses Laya. Missing or invalid context and file-scope
+mismatches remain scoreable `needs_context` outcomes and are intentional
+service skips. Pass the effective ATENEA settings file with configured model
+roles and a declared repository. The embedded defaults leave model roles empty,
+so they cannot produce valid plans for comparison. The evaluator never runs a
+workflow or sends gold labels to the service.
 
 ```sh
 go run ./cmd/atenea-laya-eval \
@@ -169,30 +187,37 @@ go run ./cmd/atenea-laya-eval \
   --review-packet /private/laya-review.jsonl
 ```
 
-The report contains no request text. It records paired wins/losses, accuracy
-and confusion by split, model/route identities, response availability, false
-`change` classifications, and whether either compiled plan carried an effect
-outside the case's explicit grant. It hashes the corpus, gold, and settings
-files to identify the exact evaluated inputs without copying their text.
-`observe_duration_ms` includes planning
-work and the model call; it is not pure model latency. A missing response uses
-the rules result and counts as a service failure. A run against a fake service
-proves the harness only; use the real checkpoint and verify its identity for
-model-real evidence. Laya may route English and non-English requests to different
-checkpoints; the report lists every route. The optional `--model` pins the same
-checkpoint that `[decision].laya_model` uses in production. Use
-`--expected-routing-model NAME` to reject a response from a different route,
-and record the exact checkpoint revision separately.
+The report contains no request or context text. It records intent and
+resolution confusion, paired wins/losses, false `change` classifications,
+plan validity and effects, model/route identities, and service responses,
+failures, and intentional skips. Context metrics use only labeled rows that
+actually supplied context; `context_count` and `context_labeled` expose those
+denominators. A valid `needs_context` plan has no workflow steps. It is an
+intentional outcome, not a service failure. Corpus, gold, and settings hashes
+identify the evaluated inputs without copying their text.
+`observe_duration_ms` includes planning work and the model call; it is not pure
+model latency; context rows also have `context_observe_duration_ms`. A missing
+response falls back to rules and counts as a service failure. A run against a
+fake service proves the harness only; use the real
+checkpoint and verify its identity for model-real evidence. Laya may route
+English and non-English requests to different checkpoints; the report lists
+every route. The optional `--model` pins the same checkpoint that
+`[decision].laya_model` uses in production. Use `--expected-routing-model NAME`
+to reject a response from a different route, and record the exact checkpoint
+revision separately.
 
 For blind review, give two independent reviewers separate copies of the
-`--review-packet` file, **without the report**. Each packet includes the
-anonymized request and two unmarked plan summaries: intent, agent, roles,
-models, selected tools, workflow steps, effects, estimated budget, and validity.
-Each reviewer fills `preferred_option` with `a`, `b`, `tie`, or `both_bad` and
-adds a short `reason`. Review whether the plan answers the request, selects
-appropriate steps and preserves the user's limits. Score the two completed
-packets; disagreements require a third adjudication packet containing just
-those IDs:
+`--review-packet` file, **without the report**. Before evaluation, anonymize
+request text, context, constraints, and paths. The packet includes the request,
+semantic context, scoped files, and two unmarked plan summaries: intent, agent,
+roles, model availability (not model names), selected tools, workflow steps,
+effects, estimated budget, validity, and file scope. Repository and accepted
+plan identifiers are replaced with generic labels. Each reviewer fills
+`preferred_option` with `a`, `b`, `tie`, or `both_bad` and adds a short
+`reason`. Review whether the plan answers the request, selects appropriate
+steps, preserves the user's limits, and stays within the supplied scope. Score
+the two completed packets; disagreements require a third adjudication packet
+containing just those IDs:
 
 ```sh
 python scripts/score-laya-plan-reviews.py \
@@ -209,10 +234,10 @@ service availability and latency, and no material regression in any intent.
 The tool reports evidence; it does not turn on `mode = "laya"` automatically.
 For live shadow observation, use `mode = "observe"` with the same local
 service. It records Laya's proposal in each dry-run plan while the rules plan
-remains selected. Collect and redact those requests into the private case file;
-the packet and any full decision plan contain request text and must remain
-private. No representative private corpus or live shadow result was available
-for the 48-row run above.
+remains selected. Keep case, label, review, and full plan files private with
+restrictive permissions; the review packet still contains the anonymized
+request and semantic context. No representative private corpus or live shadow
+result was available for the 48-row run above.
 
 ```sh
 atenea decide "buscar el flujo de autenticación" --trace

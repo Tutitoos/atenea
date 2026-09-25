@@ -27,29 +27,36 @@ import (
 )
 
 type sample struct {
-	ID             string            `json:"id"`
-	Text           string            `json:"text"`
-	Split          string            `json:"split"`
-	GrantedEffects []contract.Effect `json:"granted_effects,omitempty"`
+	ID             string                  `json:"id"`
+	Text           string                  `json:"text"`
+	Split          string                  `json:"split"`
+	Context        *decision.IntentContext `json:"context,omitempty"`
+	Files          []string                `json:"files,omitempty"`
+	GrantedEffects []contract.Effect       `json:"granted_effects,omitempty"`
 }
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 var safeEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type label struct {
-	ID       string        `json:"id"`
-	Expected decision.Kind `json:"expected"`
+	ID                 string                    `json:"id"`
+	Expected           decision.Kind             `json:"expected,omitempty"`
+	ExpectedResolution decision.ResolutionStatus `json:"expected_resolution,omitempty"`
 }
 
 type planView struct {
-	Intent      decision.Kind `json:"intent"`
-	Agent       string        `json:"agent"`
-	Specialists []string      `json:"specialists"`
-	Steps       []stepView    `json:"steps"`
-	Models      []string      `json:"models"`
-	Tools       []string      `json:"tools"`
-	BudgetUSD   float64       `json:"budget_required_usd"`
-	Valid       bool          `json:"valid"`
+	Resolution       decision.ResolutionStatus `json:"resolution"`
+	ResolutionReason string                    `json:"resolution_reason,omitempty"`
+	ContextUsed      bool                      `json:"context_used,omitempty"`
+	Intent           decision.Kind             `json:"intent,omitempty"`
+	Agent            string                    `json:"agent,omitempty"`
+	Specialists      []string                  `json:"specialists,omitempty"`
+	Steps            []stepView                `json:"steps,omitempty"`
+	Effects          []contract.Effect         `json:"effects,omitempty"`
+	Models           []string                  `json:"models,omitempty"`
+	Tools            []string                  `json:"tools,omitempty"`
+	BudgetUSD        float64                   `json:"budget_required_usd,omitempty"`
+	Valid            bool                      `json:"valid"`
 }
 
 type stepView struct {
@@ -58,66 +65,108 @@ type stepView struct {
 }
 
 type result struct {
-	ID           string        `json:"id"`
-	Split        string        `json:"split"`
-	Expected     decision.Kind `json:"expected,omitempty"`
-	Rules        decision.Kind `json:"rules"`
-	Laya         decision.Kind `json:"laya,omitempty"`
-	Gated        decision.Kind `json:"gated"`
-	Confidence   float64       `json:"answer_confidence,omitempty"`
-	Model        string        `json:"model,omitempty"`
-	RoutingModel string        `json:"routing_model,omitempty"`
-	Fallback     string        `json:"fallback,omitempty"`
-	ObserveMS    int64         `json:"observe_duration_ms"`
-	RulesPlan    planView      `json:"rules_plan"`
-	GatedPlan    planView      `json:"gated_plan"`
-	Safe         bool          `json:"safe"`
-	BlindedA     string        `json:"blinded_a"`
-	BlindedB     string        `json:"blinded_b"`
+	ID                     string                    `json:"id"`
+	Split                  string                    `json:"split"`
+	HasContext             bool                      `json:"has_context"`
+	Expected               decision.Kind             `json:"expected,omitempty"`
+	ExpectedResolution     decision.ResolutionStatus `json:"expected_resolution,omitempty"`
+	Rules                  decision.Kind             `json:"rules,omitempty"`
+	Laya                   decision.Kind             `json:"laya,omitempty"`
+	Gated                  decision.Kind             `json:"gated,omitempty"`
+	Context                decision.Kind             `json:"context_intent,omitempty"`
+	ContextLaya            decision.Kind             `json:"context_laya,omitempty"`
+	ContextGated           decision.Kind             `json:"context_gated,omitempty"`
+	Confidence             float64                   `json:"answer_confidence,omitempty"`
+	ContextConfidence      float64                   `json:"context_answer_confidence,omitempty"`
+	Model                  string                    `json:"model,omitempty"`
+	RoutingModel           string                    `json:"routing_model,omitempty"`
+	ContextModel           string                    `json:"context_model,omitempty"`
+	ContextRoutingModel    string                    `json:"context_routing_model,omitempty"`
+	Fallback               string                    `json:"fallback,omitempty"`
+	ContextFallback        string                    `json:"context_fallback,omitempty"`
+	LayaDisposition        string                    `json:"laya_disposition"`
+	ContextLayaDisposition string                    `json:"context_laya_disposition"`
+	ObserveMS              int64                     `json:"observe_duration_ms"`
+	ContextObserveMS       int64                     `json:"context_observe_duration_ms,omitempty"`
+	RulesPlan              planView                  `json:"rules_plan"`
+	GatedPlan              planView                  `json:"gated_plan"`
+	ContextPlan            planView                  `json:"context_plan"`
+	ContextGatedPlan       planView                  `json:"context_gated_plan"`
+	Safe                   bool                      `json:"safe"`
+	BlindedA               string                    `json:"blinded_a"`
+	BlindedB               string                    `json:"blinded_b"`
 }
 
 type splitMetrics struct {
-	Count            int            `json:"count"`
-	RulesCorrect     int            `json:"rules_correct"`
-	LayaCorrect      int            `json:"laya_correct"`
-	GatedCorrect     int            `json:"gated_correct"`
-	LayaCovered      int            `json:"laya_covered"`
-	GatedWins        int            `json:"gated_wins"`
-	GatedLosses      int            `json:"gated_losses"`
-	UnsafePlans      int            `json:"unsafe_plans"`
-	FalseChangeRules int            `json:"false_change_rules"`
-	FalseChangeLaya  int            `json:"false_change_laya"`
-	FalseChangeGated int            `json:"false_change_gated"`
-	ConfusionRules   map[string]int `json:"confusion_rules"`
-	ConfusionLaya    map[string]int `json:"confusion_laya"`
-	ConfusionGated   map[string]int `json:"confusion_gated"`
+	Count                   int            `json:"count"`
+	ContextCount            int            `json:"context_count"`
+	ContextLabeled          int            `json:"context_labeled"`
+	RulesCorrect            int            `json:"rules_correct"`
+	LayaCorrect             int            `json:"laya_correct"`
+	GatedCorrect            int            `json:"gated_correct"`
+	ContextCorrect          int            `json:"context_correct"`
+	ContextGatedCorrect     int            `json:"context_gated_correct"`
+	LayaCovered             int            `json:"laya_covered"`
+	ContextLayaCovered      int            `json:"context_laya_covered"`
+	LayaLabeled             int            `json:"laya_labeled"`
+	ContextLayaCorrect      int            `json:"context_laya_correct"`
+	ContextLayaLabeled      int            `json:"context_laya_labeled"`
+	GatedWins               int            `json:"gated_wins"`
+	GatedLosses             int            `json:"gated_losses"`
+	ContextGatedWins        int            `json:"context_gated_wins"`
+	ContextGatedLosses      int            `json:"context_gated_losses"`
+	UnsafePlans             int            `json:"unsafe_plans"`
+	FalseChangeRules        int            `json:"false_change_rules"`
+	FalseChangeLaya         int            `json:"false_change_laya"`
+	FalseChangeGated        int            `json:"false_change_gated"`
+	FalseChangeContext      int            `json:"false_change_context"`
+	FalseChangeContextGated int            `json:"false_change_context_gated"`
+	ConfusionRules          map[string]int `json:"confusion_rules"`
+	ConfusionLaya           map[string]int `json:"confusion_laya"`
+	ConfusionGated          map[string]int `json:"confusion_gated"`
+	ConfusionContext        map[string]int `json:"confusion_context"`
+	ConfusionContextLaya    map[string]int `json:"confusion_context_laya"`
+	ConfusionContextGated   map[string]int `json:"confusion_context_gated"`
 }
 
 type report struct {
-	Evidence         string                   `json:"evidence"`
-	CorpusSHA256     string                   `json:"corpus_sha256"`
-	LabelsSHA256     string                   `json:"labels_sha256,omitempty"`
-	SettingsSHA256   string                   `json:"settings_sha256"`
-	RequestedModel   string                   `json:"requested_model,omitempty"`
-	Threshold        float64                  `json:"threshold"`
-	Count            int                      `json:"count"`
-	Labeled          int                      `json:"labeled"`
-	ServiceResponses int                      `json:"service_responses"`
-	ServiceFailures  int                      `json:"service_failures"`
-	Models           []string                 `json:"models"`
-	RoutingModels    []string                 `json:"routing_models"`
-	BySplit          map[string]*splitMetrics `json:"by_split,omitempty"`
-	Cases            []result                 `json:"cases"`
+	SchemaVersion                  int                      `json:"schema_version"`
+	Evidence                       string                   `json:"evidence"`
+	CorpusSHA256                   string                   `json:"corpus_sha256"`
+	LabelsSHA256                   string                   `json:"labels_sha256,omitempty"`
+	SettingsSHA256                 string                   `json:"settings_sha256"`
+	RequestedModel                 string                   `json:"requested_model,omitempty"`
+	Threshold                      float64                  `json:"threshold"`
+	Count                          int                      `json:"count"`
+	Labeled                        int                      `json:"labeled"`
+	ServiceResponses               int                      `json:"service_responses"`
+	ServiceFailures                int                      `json:"service_failures"`
+	ServiceIntentionalSkips        int                      `json:"service_intentional_skips"`
+	ContextServiceResponses        int                      `json:"context_service_responses"`
+	ContextServiceFailures         int                      `json:"context_service_failures"`
+	ContextServiceIntentionalSkips int                      `json:"context_service_intentional_skips"`
+	ContextCases                   int                      `json:"context_cases"`
+	Models                         []string                 `json:"models"`
+	RoutingModels                  []string                 `json:"routing_models"`
+	BySplit                        map[string]*splitMetrics `json:"by_split,omitempty"`
+	Cases                          []result                 `json:"cases"`
 }
 
 type reviewItem struct {
-	ID       string   `json:"id"`
-	Text     string   `json:"text"`
-	Split    string   `json:"split"`
-	OptionA  planView `json:"option_a"`
-	OptionB  planView `json:"option_b"`
-	Decision string   `json:"preferred_option"`
-	Reason   string   `json:"reason"`
+	ID       string                  `json:"id"`
+	Text     string                  `json:"text"`
+	Split    string                  `json:"split"`
+	Context  *decision.IntentContext `json:"context,omitempty"`
+	OptionA  reviewPlanView          `json:"option_a"`
+	OptionB  reviewPlanView          `json:"option_b"`
+	Decision string                  `json:"preferred_option"`
+	Reason   string                  `json:"reason"`
+}
+
+type reviewPlanView struct {
+	Summary      planView `json:"summary"`
+	Repositories []string `json:"repositories,omitempty"`
+	ScopeFiles   []string `json:"scope_files,omitempty"`
 }
 
 type fixedClassifier struct {
@@ -209,7 +258,7 @@ func run(args []string, out io.Writer) error {
 	cfg.Decision = config.DecisionSettings{Mode: "observe", LayaEndpoint: *endpoint, LayaModel: *model, LayaAPIKeyEnv: *apiKeyEnv,
 		Timeout: *timeout, MinimumConfidence: *threshold}
 	observing := decision.Planner{Config: cfg}
-	rep := report{Evidence: "local dry-run plans and responses from the configured Laya service; model identity must be verified separately",
+	rep := report{SchemaVersion: 2, Evidence: "paired local dry-run plans with and without caller-supplied context; model identity must be verified separately",
 		CorpusSHA256: corpusHash, LabelsSHA256: labelsHash, SettingsSHA256: settingsHash,
 		RequestedModel: *model, Threshold: *threshold, Count: len(cases),
 		BySplit: map[string]*splitMetrics{}, Cases: make([]result, 0, len(cases))}
@@ -217,59 +266,91 @@ func run(args []string, out io.Writer) error {
 	models := map[string]bool{}
 	routes := map[string]bool{}
 	for _, row := range cases {
-		req := decision.Request{Text: row.Text, Repository: *repository, BudgetUSD: 10, Effects: row.GrantedEffects}
+		req := decision.Request{Text: row.Text, Repository: *repository, Files: row.Files, BudgetUSD: 10, Effects: row.GrantedEffects}
 		start := time.Now()
 		rulesPlan, err := observing.BuildContext(context.Background(), req)
 		if err != nil {
 			return fmt.Errorf("case %s: rules/observe plan: %w", row.ID, err)
 		}
 		observeMS := time.Since(start).Milliseconds()
-		if rulesPlan.IntentEvidence.Source != "rules" {
-			return fmt.Errorf("case %s: observation changed the selected rules intent", row.ID)
-		}
-		selected := fixedClassifier{err: errors.New("no valid Laya proposal")}
-		if rulesPlan.IntentEvidence.Laya != nil {
-			selected = fixedClassifier{classification: *rulesPlan.IntentEvidence.Laya}
-		}
-		cfg.Decision.Mode = "laya"
-		gatedPlan, err := (decision.Planner{Config: cfg, Classifier: selected}).BuildContext(context.Background(), req)
-		cfg.Decision.Mode = "observe"
+		gatedPlan, err := buildGatedPlan(cfg, req, rulesPlan)
 		if err != nil {
 			return fmt.Errorf("case %s: gated plan: %w", row.ID, err)
 		}
-		if !rulesPlan.Valid || !gatedPlan.Valid {
-			return fmt.Errorf("case %s: settings produced an invalid rules or gated plan; configure valid model roles and budget", row.ID)
+
+		contextPlan, contextGatedPlan := rulesPlan, gatedPlan
+		contextObserveMS := int64(0)
+		contextDisposition := "not_run_no_context"
+		if row.Context != nil {
+			rep.ContextCases++
+			contextReq := req
+			contextReq.Context = row.Context
+			contextStarted := time.Now()
+			contextPlan, err = observing.BuildContext(context.Background(), contextReq)
+			if err != nil {
+				return fmt.Errorf("case %s: context/observe plan: %w", row.ID, err)
+			}
+			contextObserveMS = time.Since(contextStarted).Milliseconds()
+			contextGatedPlan, err = buildGatedPlan(cfg, contextReq, contextPlan)
+			if err != nil {
+				return fmt.Errorf("case %s: context/gated plan: %w", row.ID, err)
+			}
+			contextDisposition = layaDisposition(contextPlan)
 		}
-		item := result{ID: row.ID, Split: row.Split, Rules: rulesPlan.Intent, Gated: gatedPlan.Intent,
-			Fallback: rulesPlan.IntentEvidence.FallbackReason, RulesPlan: view(rulesPlan), GatedPlan: view(gatedPlan),
-			ObserveMS: observeMS, Safe: safePlan(rulesPlan, row.GrantedEffects) && safePlan(gatedPlan, row.GrantedEffects)}
+		item := result{ID: row.ID, Split: row.Split, HasContext: row.Context != nil, Rules: rulesPlan.Intent, Gated: gatedPlan.Intent,
+			Context: contextPlan.Intent, ContextGated: contextGatedPlan.Intent,
+			Fallback: rulesPlan.IntentEvidence.FallbackReason, ContextFallback: contextPlan.IntentEvidence.FallbackReason,
+			LayaDisposition: layaDisposition(rulesPlan), ContextLayaDisposition: contextDisposition,
+			RulesPlan: view(rulesPlan), GatedPlan: view(gatedPlan), ContextPlan: view(contextPlan), ContextGatedPlan: view(contextGatedPlan),
+			ObserveMS: observeMS, ContextObserveMS: contextObserveMS,
+			Safe: safeEvaluationPlan(rulesPlan, row.GrantedEffects) && safeEvaluationPlan(gatedPlan, row.GrantedEffects) &&
+				safeEvaluationPlan(contextPlan, row.GrantedEffects) && safeEvaluationPlan(contextGatedPlan, row.GrantedEffects)}
+		accountServiceResult(&rep, rulesPlan, false)
+		if row.Context != nil {
+			accountServiceResult(&rep, contextPlan, true)
+		}
 		if proposal := rulesPlan.IntentEvidence.Laya; proposal != nil {
 			item.Laya, item.Confidence, item.Model, item.RoutingModel = proposal.Intent, proposal.Confidence, proposal.Model, proposal.RoutingModel
-			rep.ServiceResponses++
 			models[proposal.Model] = true
 			routes[proposal.RoutingModel] = true
 			if *expectedRoute != "" && proposal.RoutingModel != *expectedRoute {
 				return fmt.Errorf("case %s: Laya routed to %q, expected %q", row.ID, proposal.RoutingModel, *expectedRoute)
 			}
-		} else {
-			rep.ServiceFailures++
+		}
+		if proposal := contextPlan.IntentEvidence.Laya; proposal != nil && row.Context != nil {
+			item.ContextLaya, item.ContextConfidence = proposal.Intent, proposal.Confidence
+			item.ContextModel, item.ContextRoutingModel = proposal.Model, proposal.RoutingModel
+			models[proposal.Model] = true
+			routes[proposal.RoutingModel] = true
+			if *expectedRoute != "" && proposal.RoutingModel != *expectedRoute {
+				return fmt.Errorf("case %s: context Laya routed to %q, expected %q", row.ID, proposal.RoutingModel, *expectedRoute)
+			}
 		}
 		if gold, ok := labels[row.ID]; ok {
 			item.Expected = gold.Expected
+			item.ExpectedResolution = expectedResolution(gold)
 			rep.Labeled++
-			updateMetrics(rep.BySplit, item, *threshold)
+			updateMetrics(rep.BySplit, item, gold, *threshold)
 		}
 		var order [1]byte
 		if _, err := rand.Read(order[:]); err != nil {
 			return fmt.Errorf("case %s: randomize review order: %w", row.ID, err)
 		}
-		if order[0]&1 == 0 {
-			item.BlindedA, item.BlindedB = "rules", "gated"
-			packet = append(packet, reviewItem{ID: row.ID, Text: row.Text, Split: row.Split, OptionA: item.RulesPlan, OptionB: item.GatedPlan})
-		} else {
-			item.BlindedA, item.BlindedB = "gated", "rules"
-			packet = append(packet, reviewItem{ID: row.ID, Text: row.Text, Split: row.Split, OptionA: item.GatedPlan, OptionB: item.RulesPlan})
+		leftName, rightName := "rules", "gated"
+		leftPlan, rightPlan := reviewView(rulesPlan), reviewView(gatedPlan)
+		if row.Context != nil {
+			leftName, rightName = "gated", "context_gated"
+			leftPlan, rightPlan = reviewView(gatedPlan), reviewView(contextGatedPlan)
 		}
+		review := reviewItem{ID: row.ID, Text: row.Text, Split: row.Split, Context: blindContext(row.Context)}
+		if order[0]&1 == 0 {
+			item.BlindedA, item.BlindedB = leftName, rightName
+			review.OptionA, review.OptionB = leftPlan, rightPlan
+		} else {
+			item.BlindedA, item.BlindedB = rightName, leftName
+			review.OptionA, review.OptionB = rightPlan, leftPlan
+		}
+		packet = append(packet, review)
 		rep.Cases = append(rep.Cases, item)
 	}
 	for model := range models {
@@ -383,7 +464,11 @@ func readLabels(path string, cases []sample) (map[string]label, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
 			return nil, fmt.Errorf("invalid label JSON: %w", err)
 		}
-		if !known[row.ID] || labels[row.ID].ID != "" || !validIntent(row.Expected) {
+		resolution := expectedResolution(row)
+		validResolution := resolution == decision.ResolutionResolved || resolution == decision.ResolutionNeedsContext
+		validExpected := (resolution == decision.ResolutionResolved && validIntent(row.Expected)) ||
+			(resolution == decision.ResolutionNeedsContext && row.Expected == "")
+		if !known[row.ID] || labels[row.ID].ID != "" || !validResolution || !validExpected {
 			return nil, fmt.Errorf("label for %q is unknown, repeated or invalid", row.ID)
 		}
 		labels[row.ID] = row
@@ -406,8 +491,9 @@ func validIntent(value decision.Kind) bool {
 }
 
 func view(plan decision.Plan) planView {
-	out := planView{Intent: plan.Intent, Agent: plan.Agent, Specialists: plan.Specialists,
-		BudgetUSD: plan.Budget.RequiredUSD, Valid: plan.Valid}
+	out := planView{Resolution: plan.Resolution, ResolutionReason: plan.ResolutionReason, ContextUsed: plan.ContextUsed,
+		Intent: plan.Intent, Agent: plan.Agent, Specialists: plan.Specialists,
+		Effects: plan.Effects, BudgetUSD: plan.Budget.RequiredUSD, Valid: plan.Valid}
 	for _, step := range plan.Workflow.Steps {
 		out.Steps = append(out.Steps, stepView{Type: step.TypeName, Effects: step.Permission.Effects})
 	}
@@ -420,6 +506,53 @@ func view(plan decision.Plan) planView {
 		}
 	}
 	return out
+}
+
+func blindContext(context *decision.IntentContext) *decision.IntentContext {
+	if context == nil {
+		return nil
+	}
+	redacted := *context
+	redacted.ScopeFiles = append([]string(nil), context.ScopeFiles...)
+	redacted.Constraints = append([]string(nil), context.Constraints...)
+	if redacted.Repository != "" {
+		redacted.Repository = "repository"
+	}
+	if redacted.AcceptedPlanID != "" {
+		redacted.AcceptedPlanID = "accepted-plan"
+		redacted.AcceptedPlanRevision = "current"
+	}
+	return &redacted
+}
+
+func reviewView(plan decision.Plan) reviewPlanView {
+	summary := view(plan)
+	for i, model := range plan.Models {
+		availability := "unavailable"
+		if model.Available {
+			availability = "available"
+		}
+		summary.Models[i] = model.Role + ":" + availability
+	}
+
+	var repositories []string
+	if len(plan.Repositories) > 0 {
+		repositories = []string{"repository"}
+	}
+	fileSet := map[string]bool{}
+	for _, step := range plan.Workflow.Steps {
+		for _, file := range step.Task.Files {
+			if file != "" {
+				fileSet[file] = true
+			}
+		}
+	}
+	files := make([]string, 0, len(fileSet))
+	for file := range fileSet {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	return reviewPlanView{Summary: summary, Repositories: repositories, ScopeFiles: files}
 }
 
 func safePlan(plan decision.Plan, granted []contract.Effect) bool {
@@ -442,50 +575,169 @@ func safePlan(plan decision.Plan, granted []contract.Effect) bool {
 	return true
 }
 
-func updateMetrics(splits map[string]*splitMetrics, row result, threshold float64) {
+func safeEvaluationPlan(plan decision.Plan, granted []contract.Effect) bool {
+	if plan.Resolution == decision.ResolutionNeedsContext {
+		return !plan.Valid && len(plan.Workflow.Steps) == 0 && len(plan.Effects) == 0
+	}
+	return plan.Resolution == decision.ResolutionResolved && plan.Valid && safePlan(plan, granted)
+}
+
+func buildGatedPlan(cfg config.Config, req decision.Request, observed decision.Plan) (decision.Plan, error) {
+	selected := fixedClassifier{err: errors.New("no valid Laya proposal")}
+	if observed.IntentEvidence.Laya != nil {
+		selected = fixedClassifier{classification: *observed.IntentEvidence.Laya}
+	}
+	cfg.Decision.Mode = "laya"
+	return (decision.Planner{Config: cfg, Classifier: selected}).BuildContext(context.Background(), req)
+}
+
+func layaDisposition(plan decision.Plan) string {
+	if plan.IntentEvidence.Laya != nil {
+		return "responded"
+	}
+	if plan.IntentEvidence.Source == "context" {
+		return "skipped_context_resolved"
+	}
+	if plan.Resolution == decision.ResolutionNeedsContext {
+		return "skipped_needs_context"
+	}
+	if plan.IntentEvidence.FallbackReason != "" {
+		return "failed_fallback"
+	}
+	return "skipped_not_applicable"
+}
+
+func accountServiceResult(rep *report, plan decision.Plan, contextual bool) {
+	switch layaDisposition(plan) {
+	case "responded":
+		rep.ServiceResponses++
+		if contextual {
+			rep.ContextServiceResponses++
+		}
+	case "failed_fallback":
+		rep.ServiceFailures++
+		if contextual {
+			rep.ContextServiceFailures++
+		}
+	default:
+		rep.ServiceIntentionalSkips++
+		if contextual {
+			rep.ContextServiceIntentionalSkips++
+		}
+	}
+}
+
+func expectedResolution(gold label) decision.ResolutionStatus {
+	if gold.ExpectedResolution == "" {
+		return decision.ResolutionResolved
+	}
+	return gold.ExpectedResolution
+}
+
+func correctPlan(plan planView, gold label) bool {
+	if expectedResolution(gold) == decision.ResolutionNeedsContext {
+		return plan.Resolution == decision.ResolutionNeedsContext
+	}
+	return plan.Resolution == decision.ResolutionResolved && plan.Intent == gold.Expected
+}
+
+func predictedOutcome(plan planView) string {
+	if plan.Resolution != decision.ResolutionResolved {
+		if plan.Resolution == "" {
+			return "invalid_resolution"
+		}
+		return string(plan.Resolution)
+	}
+	return string(plan.Intent)
+}
+
+func goldOutcome(gold label) string {
+	if expectedResolution(gold) == decision.ResolutionNeedsContext {
+		return string(decision.ResolutionNeedsContext)
+	}
+	return string(gold.Expected)
+}
+
+func falseChange(plan planView, gold label) bool {
+	return goldOutcome(gold) != string(decision.KindChange) && plan.Resolution == decision.ResolutionResolved && plan.Intent == decision.KindChange
+}
+
+func updateMetrics(splits map[string]*splitMetrics, row result, gold label, threshold float64) {
 	m := splits[row.Split]
 	if m == nil {
-		m = &splitMetrics{ConfusionRules: map[string]int{}, ConfusionLaya: map[string]int{}, ConfusionGated: map[string]int{}}
+		m = &splitMetrics{ConfusionRules: map[string]int{}, ConfusionLaya: map[string]int{}, ConfusionGated: map[string]int{},
+			ConfusionContext: map[string]int{}, ConfusionContextLaya: map[string]int{}, ConfusionContextGated: map[string]int{}}
 		splits[row.Split] = m
 	}
 	m.Count++
-	if row.Rules == row.Expected {
+	if correctPlan(row.RulesPlan, gold) {
 		m.RulesCorrect++
 	}
-	if row.Laya == row.Expected {
-		m.LayaCorrect++
-	}
-	if row.Gated == row.Expected {
+	if correctPlan(row.GatedPlan, gold) {
 		m.GatedCorrect++
 	}
-	if row.Laya != "" && row.Confidence >= threshold {
-		m.LayaCovered++
+	if row.LayaDisposition == "responded" && expectedResolution(gold) == decision.ResolutionResolved {
+		m.LayaLabeled++
+		if row.Laya == gold.Expected {
+			m.LayaCorrect++
+		}
+		if row.Confidence >= threshold {
+			m.LayaCovered++
+		}
+		m.ConfusionLaya[goldOutcome(gold)+"→"+string(row.Laya)]++
 	}
-	if row.Rules != row.Expected && row.Gated == row.Expected {
+	if !correctPlan(row.RulesPlan, gold) && correctPlan(row.GatedPlan, gold) {
 		m.GatedWins++
 	}
-	if row.Rules == row.Expected && row.Gated != row.Expected {
+	if correctPlan(row.RulesPlan, gold) && !correctPlan(row.GatedPlan, gold) {
 		m.GatedLosses++
 	}
 	if !row.Safe {
 		m.UnsafePlans++
 	}
-	if row.Expected != decision.KindChange {
-		if row.Rules == decision.KindChange {
-			m.FalseChangeRules++
-		}
-		if row.Laya == decision.KindChange {
-			m.FalseChangeLaya++
-		}
-		if row.Gated == decision.KindChange {
-			m.FalseChangeGated++
-		}
+	if falseChange(row.RulesPlan, gold) {
+		m.FalseChangeRules++
 	}
-	m.ConfusionRules[string(row.Expected)+"→"+string(row.Rules)]++
-	if row.Laya != "" {
-		m.ConfusionLaya[string(row.Expected)+"→"+string(row.Laya)]++
+	if falseChange(row.GatedPlan, gold) {
+		m.FalseChangeGated++
 	}
-	m.ConfusionGated[string(row.Expected)+"→"+string(row.Gated)]++
+	goldKey := goldOutcome(gold)
+	m.ConfusionRules[goldKey+"→"+predictedOutcome(row.RulesPlan)]++
+	m.ConfusionGated[goldKey+"→"+predictedOutcome(row.GatedPlan)]++
+	if row.HasContext {
+		m.ContextCount++
+		m.ContextLabeled++
+		if correctPlan(row.ContextPlan, gold) {
+			m.ContextCorrect++
+		}
+		if correctPlan(row.ContextGatedPlan, gold) {
+			m.ContextGatedCorrect++
+		}
+		if row.ContextLayaDisposition == "responded" && expectedResolution(gold) == decision.ResolutionResolved {
+			m.ContextLayaLabeled++
+			if row.ContextLaya == gold.Expected {
+				m.ContextLayaCorrect++
+			}
+			if row.ContextConfidence >= threshold {
+				m.ContextLayaCovered++
+			}
+			m.ConfusionContextLaya[goldKey+"→"+string(row.ContextLaya)]++
+		}
+		if !correctPlan(row.GatedPlan, gold) && correctPlan(row.ContextGatedPlan, gold) {
+			m.ContextGatedWins++
+		}
+		if correctPlan(row.GatedPlan, gold) && !correctPlan(row.ContextGatedPlan, gold) {
+			m.ContextGatedLosses++
+		}
+		if falseChange(row.ContextPlan, gold) {
+			m.FalseChangeContext++
+		}
+		if falseChange(row.ContextGatedPlan, gold) {
+			m.FalseChangeContextGated++
+		}
+		m.ConfusionContext[goldKey+"→"+predictedOutcome(row.ContextPlan)]++
+		m.ConfusionContextGated[goldKey+"→"+predictedOutcome(row.ContextGatedPlan)]++
+	}
 }
 
 func writePrivate(path string, value any) (err error) {

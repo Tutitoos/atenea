@@ -248,7 +248,7 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 		intent = resolution.Intent
 		intentEvidence = IntentEvidence{Mode: mode, Source: "context"}
 	} else {
-		intent, intentEvidence = p.classifyIntent(ctx, text)
+		intent, intentEvidence = p.classifyIntent(ctx, req.Text)
 	}
 	agent := p.agentFor(intent, req.Files)
 	criterion := strings.TrimSpace(req.Criterion)
