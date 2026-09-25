@@ -14,11 +14,12 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "internal/decision/testdata/intent-evaluation.jsonl"
+# Laya renders choices in insertion order; match encoding/json's sorted Go map keys.
 CRITERIA = {
-    "understand": "Explain, summarize, or understand existing information without asking to search a specific target or make a plan.",
-    "search": "Find, locate, or inspect existing information, code, or behavior.",
-    "plan": "Design, plan, or recommend future work without asking to implement it now.",
     "change": "Implement, add, edit, fix, or refactor something now.",
+    "plan": "Design, plan, or recommend future work without asking to implement it now.",
+    "search": "Find, locate, or inspect existing information, code, or behavior.",
+    "understand": "Explain, summarize, or understand existing information without asking to search a specific target or make a plan.",
 }
 
 

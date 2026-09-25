@@ -43,6 +43,7 @@ enabled = false
 # the selected plan, or laya to select sufficiently confident predictions.
 mode = "rules"
 laya_endpoint = ""
+laya_model = "" # optional: english, multilingual, or typed-decisions
 # Store credentials in the environment; only the variable name belongs here.
 laya_api_key_env = ""
 timeout = "10s"

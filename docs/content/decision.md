@@ -40,6 +40,7 @@ Then set the effective ATENEA configuration:
 [decision]
 mode = "observe" # change to "laya" only after evaluating this checkpoint
 laya_endpoint = "http://127.0.0.1:8000/v1/systemone"
+laya_model = "multilingual" # optional; empty lets Laya route each request
 laya_api_key_env = "ATENEA_LAYA_API_KEY" # omit when the service has no bearer key
 timeout = "10s"
 minimum_confidence = 0.8
@@ -49,7 +50,9 @@ If the service requires a bearer token, put its value in the named environment
 variable. ATENEA never stores the token in its settings file. Commission text is
 sent to the endpoint only in `observe` or `laya` mode. Keep the service bound to
 loopback for local use; use HTTPS and an explicitly trusted endpoint for a
-remote service. Redirects are refused.
+remote service. Redirects are refused. `laya_model` accepts `english`,
+`multilingual`, or `typed-decisions`. An empty value leaves routing to Laya;
+pinning a checkpoint makes a comparison repeatable across languages.
 
 The confidence value is an initial setting, not a validated threshold for a
 particular checkpoint or domain. Use the labeled evaluation corpus and its
@@ -85,8 +88,8 @@ The corpus contains 12 examples for each label (`understand`, `search`, `plan`,
 
 | Split | Rules | Laya raw | Laya coverage at 0.8 | Laya accuracy when selected | Gated result |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Calibration (32) | 25/32 (78.1%) | 22/32 (68.8%) | 23/32 (71.9%) | 20/23 (87.0%) | 26/32 (81.3%) |
-| Held-out test (16) | 11/16 (68.8%) | 12/16 (75.0%) | 12/16 (75.0%) | 9/12 (75.0%) | 11/16 (68.8%) |
+| Calibration (32) | 25/32 (78.1%) | 22/32 (68.8%) | 26/32 (81.3%) | 21/26 (80.8%) | 24/32 (75.0%) |
+| Held-out test (16) | 11/16 (68.8%) | 12/16 (75.0%) | 13/16 (81.3%) | 11/13 (84.6%) | 13/16 (81.3%) |
 
 Raw Laya confusion matrix over all 48 rows:
 
@@ -97,15 +100,115 @@ Raw Laya confusion matrix over all 48 rows:
 | search | 0 | 1 | 11 | 0 |
 | understand | 2 | 1 | 2 | 7 |
 
-The 0.8 gate improved calibration by one example and left held-out accuracy
-unchanged. This run does not show a held-out uplift, so keep `rules` as the
-default and treat `0.8` as an experimental threshold. Use `observe` to gather
-representative traffic evidence before considering `laya` mode. Local fake-server
-tests still validate only the wire contract; the table above is a separate run
-against the real checkpoint. The evaluated checkpoint is marked Apache-2.0 on
+These figures use the exact option order sent by ATENEA's Go adapter. The
+initial standalone Python runner sent options in a different order: its earlier
+gate results were 26/32 on calibration and 11/16 on test. Laya's confidence
+depends on option order, so that earlier gate result cannot represent the
+production request. The Python runner now matches Go's wire order. A second
+run through the Go dry-run planner produced 48 valid paired plans, 48 service
+responses, no service failures and no effects outside the explicit grants.
+With the aligned order, the gate loses one calibration case and gains two
+held-out cases. It also raises false `change` classifications from one to
+three in calibration. This small curated corpus does not justify enabling
+`laya` by default or treating `0.8` as validated. Use `observe` to gather
+representative traffic evidence. A separate unpinned, offline-only probe
+routed one Spanish request to the English checkpoint and got HTTP 500; pinning
+`multilingual` avoided that missing-checkpoint failure. Local fake-server
+tests validate only the wire contract; these measurements use the real
+checkpoint. Per-case predictions and provenance are stored in
+`benchmarks/runs/laya-intent-2026-09-25/report.json`. The evaluated checkpoint
+is marked Apache-2.0 on
 its [Hugging Face model page](https://huggingface.co/convaiinnovations/laya/tree/main/multilingual);
 check the license on the pinned artifact before redistributing weights. ATENEA
 does not bundle Python, PyTorch, or model weights.
+
+### Representative decision evaluation
+
+The 48 curated examples above are a smoke corpus, not a production-quality
+estimate. For a promotion decision, collect 200–400 distinct, consented or
+otherwise legitimately available real requests, remove names, paths, secrets,
+and customer data, and keep the files outside Git. Include the actual language
+mix and separate stress cases for negation, ambiguous requests, and
+`plan` versus `change`. Set the calibration/test split before trying thresholds;
+group near-duplicates in one split. Have two reviewers label the intended
+action independently and resolve disagreements before running the classifier.
+Keep labels in a separate file so the service never sees them.
+
+Each line of the private case file has `id`, `text`, and `split`; only an
+explicitly authorized write scenario may carry `granted_effects: ["write"]`.
+Each line of the private gold file has the same `id` and one `expected` intent:
+
+```json
+{"id":"r001","text":"Planifica la migración sin cambiar archivos.","split":"test"}
+{"id":"r001","expected":"plan"}
+```
+
+These example lines belong in **different files**. Run the local Laya service
+with the intended routing configuration, then evaluate the same requests against
+ATENEA's rules and gated Laya plans. Pass the effective ATENEA settings file
+with configured model roles and a declared repository. The embedded defaults
+leave model roles empty, so they cannot produce valid plans for comparison.
+The evaluator never runs a workflow. The model sees only request text, once
+per case.
+
+```sh
+go run ./cmd/atenea-laya-eval \
+  --cases /private/laya-cases.jsonl \
+  --labels /private/laya-labels.jsonl \
+  --settings /private/atenea.toml \
+  --repository atenea \
+  --endpoint http://127.0.0.1:8000/v1/systemone \
+  --model multilingual \
+  --expected-routing-model multilingual \
+  --threshold 0.8 \
+  --report /private/laya-report.json \
+  --review-packet /private/laya-review.jsonl
+```
+
+The report contains no request text. It records paired wins/losses, accuracy
+and confusion by split, model/route identities, response availability, false
+`change` classifications, and whether either compiled plan carried an effect
+outside the case's explicit grant. It hashes the corpus, gold, and settings
+files to identify the exact evaluated inputs without copying their text.
+`observe_duration_ms` includes planning
+work and the model call; it is not pure model latency. A missing response uses
+the rules result and counts as a service failure. A run against a fake service
+proves the harness only; use the real checkpoint and verify its identity for
+model-real evidence. Laya may route English and non-English requests to different
+checkpoints; the report lists every route. The optional `--model` pins the same
+checkpoint that `[decision].laya_model` uses in production. Use
+`--expected-routing-model NAME` to reject a response from a different route,
+and record the exact checkpoint revision separately.
+
+For blind review, give two independent reviewers separate copies of the
+`--review-packet` file, **without the report**. Each packet includes the
+anonymized request and two unmarked plan summaries: intent, agent, roles,
+models, selected tools, workflow steps, effects, estimated budget, and validity.
+Each reviewer fills `preferred_option` with `a`, `b`, `tie`, or `both_bad` and
+adds a short `reason`. Review whether the plan answers the request, selects
+appropriate steps and preserves the user's limits. Score the two completed
+packets; disagreements require a third adjudication packet containing just
+those IDs:
+
+```sh
+python scripts/score-laya-plan-reviews.py \
+  --report /private/laya-report.json \
+  --reviewer /private/laya-reviewer-1.jsonl \
+  --reviewer /private/laya-reviewer-2.jsonl \
+  --adjudication /private/laya-adjudication.jsonl
+```
+
+Predeclare a promotion rule before reading the held-out results: require a
+clear paired improvement in correct decisions and blind plan preference,
+no increase in false `change` results or unauthorized effects, acceptable
+service availability and latency, and no material regression in any intent.
+The tool reports evidence; it does not turn on `mode = "laya"` automatically.
+For live shadow observation, use `mode = "observe"` with the same local
+service. It records Laya's proposal in each dry-run plan while the rules plan
+remains selected. Collect and redact those requests into the private case file;
+the packet and any full decision plan contain request text and must remain
+private. No representative private corpus or live shadow result was available
+for the 48-row run above.
 
 ```sh
 atenea decide "buscar el flujo de autenticación" --trace

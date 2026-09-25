@@ -156,6 +156,7 @@ instructions are in [Decision router]({{< relref "decision" >}}).
 [decision]
 mode = "rules" # rules, observe, or laya
 laya_endpoint = "" # POST endpoint ending in /v1/systemone
+laya_model = "" # optional checkpoint pin: english, multilingual, typed-decisions
 laya_api_key_env = "" # environment variable name; never put the token here
 timeout = "10s"
 minimum_confidence = 0.8

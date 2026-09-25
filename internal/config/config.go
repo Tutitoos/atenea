@@ -134,6 +134,7 @@ type Knowledge struct {
 type DecisionSettings struct {
 	Mode              string
 	LayaEndpoint      string
+	LayaModel         string
 	LayaAPIKeyEnv     string
 	Timeout           time.Duration
 	MinimumConfidence float64
@@ -1419,6 +1420,7 @@ type fileKnowledge struct {
 type fileDecision struct {
 	Mode              string   `toml:"mode"`
 	LayaEndpoint      string   `toml:"laya_endpoint"`
+	LayaModel         string   `toml:"laya_model"`
 	LayaAPIKeyEnv     string   `toml:"laya_api_key_env"`
 	Timeout           string   `toml:"timeout"`
 	MinimumConfidence *float64 `toml:"minimum_confidence"`
@@ -3506,6 +3508,7 @@ func (d fileDecision) build(source string) (DecisionSettings, error) {
 	out := DecisionSettings{
 		Mode:              strings.ToLower(strings.TrimSpace(d.Mode)),
 		LayaEndpoint:      strings.TrimSpace(d.LayaEndpoint),
+		LayaModel:         strings.ToLower(strings.TrimSpace(d.LayaModel)),
 		LayaAPIKeyEnv:     strings.TrimSpace(d.LayaAPIKeyEnv),
 		Timeout:           10 * time.Second,
 		MinimumConfidence: 0.8,
@@ -3519,6 +3522,9 @@ func (d fileDecision) build(source string) (DecisionSettings, error) {
 	}
 	if out.Mode != "rules" && out.Mode != "observe" && out.Mode != "laya" {
 		return fail("mode %q must be rules, observe or laya", out.Mode)
+	}
+	if out.LayaModel != "" && out.LayaModel != "english" && out.LayaModel != "multilingual" && out.LayaModel != "typed-decisions" {
+		return fail("laya_model must be english, multilingual or typed-decisions")
 	}
 	if strings.TrimSpace(d.Timeout) != "" {
 		parsed, err := time.ParseDuration(strings.TrimSpace(d.Timeout))

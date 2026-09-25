@@ -23,6 +23,7 @@ const maxLayaStateCharacters = 50_000
 // its /v1/systemone protocol. It does not own or launch the Python service.
 type LayaClassifier struct {
 	endpoint  string
+	model     string
 	apiKeyEnv string
 	client    *http.Client
 }
@@ -37,6 +38,7 @@ func NewLayaClassifier(settings config.DecisionSettings) *LayaClassifier {
 	}
 	return &LayaClassifier{
 		endpoint:  strings.TrimSpace(settings.LayaEndpoint),
+		model:     strings.TrimSpace(settings.LayaModel),
 		apiKeyEnv: strings.TrimSpace(settings.LayaAPIKeyEnv),
 		client: &http.Client{
 			Timeout: timeout,
@@ -50,6 +52,7 @@ func NewLayaClassifier(settings config.DecisionSettings) *LayaClassifier {
 type layaRequest struct {
 	State     map[string]string             `json:"state"`
 	Questions map[string]layaChoiceQuestion `json:"questions"`
+	Model     string                        `json:"model,omitempty"`
 }
 
 type layaChoiceQuestion struct {
@@ -85,6 +88,7 @@ func (c *LayaClassifier) Classify(ctx context.Context, text string) (IntentClass
 	}
 	requestBody := layaRequest{
 		State: map[string]string{"body": text},
+		Model: c.model,
 		Questions: map[string]layaChoiceQuestion{
 			"intent": {
 				Type:         "choice",

@@ -29,6 +29,9 @@ func TestLayaClassifierUsesSystemOneAndAnswerConfidence(t *testing.T) {
 		if request.State["body"] != "Do not make changes yet; plan the migration." {
 			t.Errorf("state = %v", request.State)
 		}
+		if request.Model != "multilingual" {
+			t.Errorf("model = %q, want multilingual", request.Model)
+		}
 		question, ok := request.Questions["intent"]
 		if !ok || question.Type != "choice" || len(question.Criteria) != 4 {
 			t.Errorf("question = %+v", question)
@@ -40,7 +43,8 @@ func TestLayaClassifierUsesSystemOneAndAnswerConfidence(t *testing.T) {
 	t.Setenv("ATENEA_TEST_LAYA_KEY", "test-key")
 
 	classifier := NewLayaClassifier(config.DecisionSettings{
-		LayaEndpoint: server.URL + "/v1/systemone", LayaAPIKeyEnv: "ATENEA_TEST_LAYA_KEY", Timeout: time.Second,
+		LayaEndpoint: server.URL + "/v1/systemone", LayaModel: "multilingual",
+		LayaAPIKeyEnv: "ATENEA_TEST_LAYA_KEY", Timeout: time.Second,
 	})
 	got, err := classifier.Classify(t.Context(), "Do not make changes yet; plan the migration.")
 	if err != nil {
