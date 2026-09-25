@@ -348,6 +348,11 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	if advertised == nil || !strings.Contains(advertised["description"].(string), "WITHOUT executing") {
 		t.Fatalf("decision.plan was not advertised as a dry run: %v", advertised)
 	}
+	inputSchema := advertised["inputSchema"].(map[string]any)
+	properties := inputSchema["properties"].(map[string]any)
+	if _, ok := properties["context"].(map[string]any); !ok {
+		t.Fatalf("decision.plan schema does not advertise typed context: %v", inputSchema)
+	}
 
 	got := result(t, c.call("tools/call", map[string]any{
 		"name": "decision.plan",
@@ -386,6 +391,105 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("decision.plan persisted %d workflow(s)", len(runs))
+	}
+}
+
+func TestDecisionPlanResolvesContinuationContextWithoutLeavingDryRun(t *testing.T) {
+	settings := decisionPlanSettings(t) + "\n[[repository]]\nid = \"other\"\npath = \"/tmp\"\n"
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	var schema map[string]any
+	for _, raw := range listed["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if tool["name"] == "decision.plan" {
+			schema = tool["inputSchema"].(map[string]any)
+			break
+		}
+	}
+	alternatives, hasAlternatives := schema["anyOf"].([]any)
+	if schema == nil || !hasAlternatives || len(alternatives) != 2 {
+		t.Fatalf("multi-repository decision.plan schema cannot express repository from context: %v", schema)
+	}
+	required, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatalf("schema required fields = %v", schema["required"])
+	}
+	for _, rawRequired := range required {
+		if rawRequired == "repository" {
+			t.Fatalf("multi-repository schema requires a duplicate repository despite context support: %v", required)
+		}
+	}
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective":  "hazlo",
+			"budget_usd": 10,
+			"context": map[string]any{
+				"version": 1, "repository": "work", "accepted_plan_id": "plan-2", "accepted_plan_revision": "r1", "accepted_plan_current": true,
+				"active_objective": "mejorar la búsqueda", "scope_files": []any{"internal/search.go"},
+			},
+		},
+	}), "decision.plan contextual continuation")
+	structured := got["structuredContent"].(map[string]any)
+	if structured["intent"] != "change" || structured["resolution"] != "resolved" || structured["context_used"] != true {
+		t.Fatalf("contextual decision = %v", structured)
+	}
+	if structured["dry_run"] != true || structured["execution_authorized"] != false {
+		t.Fatalf("context changed the execution boundary: %v", structured)
+	}
+	repositories := structured["repositories"].([]any)
+	if len(repositories) != 1 || repositories[0] != "work" {
+		t.Fatalf("repositories = %v, want context-bound work repository", repositories)
+	}
+
+	missing := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective": "hazlo", "budget_usd": 10,
+			"context": map[string]any{"version": 1, "repository": "work", "active_objective": "mejorar la búsqueda"},
+		},
+	}), "decision.plan missing accepted plan")
+	missingPlan := missing["structuredContent"].(map[string]any)
+	if missingPlan["resolution"] != "needs_context" || missingPlan["resolution_reason"] != "missing_accepted_plan" || missingPlan["valid"] != false {
+		t.Fatalf("incomplete continuation = %v", missingPlan)
+	}
+	missingGraph := missingPlan["workflow"].(map[string]any)
+	if steps, _ := missingGraph["Steps"].([]any); len(steps) != 0 {
+		t.Fatalf("incomplete continuation has executable workflow steps: %v", steps)
+	}
+	unverified := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective": "hazlo", "budget_usd": 10,
+			"context": map[string]any{
+				"version": 1, "repository": "work", "accepted_plan_id": "plan-2", "accepted_plan_revision": "r1",
+				"active_objective": "mejorar la búsqueda", "accepted_plan_current": false,
+			},
+		},
+	}), "decision.plan unverified accepted plan")
+	unverifiedPlan := unverified["structuredContent"].(map[string]any)
+	if unverifiedPlan["resolution"] != "needs_context" || unverifiedPlan["resolution_reason"] != "plan_freshness_unverified" || unverifiedPlan["valid"] != false {
+		t.Fatalf("unverified continuation = %v", unverifiedPlan)
+	}
+	unverifiedGraph := unverifiedPlan["workflow"].(map[string]any)
+	if steps, _ := unverifiedGraph["Steps"].([]any); len(steps) != 0 {
+		t.Fatalf("unverified continuation has executable workflow steps: %v", steps)
+	}
+	store, err := workflow.Open(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	runs, err := store.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("contextual decision.plan persisted %d workflow(s)", len(runs))
 	}
 }
 

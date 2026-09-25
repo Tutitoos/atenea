@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -37,6 +38,7 @@ const (
 // Request is the input to the decision layer.
 type Request struct {
 	Text            string
+	Context         *IntentContext
 	Criterion       string
 	Limits          contract.Limits
 	Repository      string
@@ -94,22 +96,25 @@ type Reason struct {
 // returned, so a caller can trust that its agent names, edges, permissions and
 // budget are structurally valid.
 type Plan struct {
-	Text         string             `json:"text"`
-	Criterion    string             `json:"criterion"`
-	Limits       contract.Limits    `json:"limits"`
-	Coordinator  string             `json:"coordinator"`
-	Specialists  []string           `json:"specialists"`
-	Intent       Kind               `json:"intent"`
-	Repositories []string           `json:"repositories"`
-	Effects      []contract.Effect  `json:"effects"`
-	Agent        string             `json:"agent"`
-	Models       []ModelChoice      `json:"models"`
-	Tools        []ToolChoice       `json:"tools"`
-	Capabilities []CapabilityChoice `json:"capabilities"`
-	Budget       BudgetSummary      `json:"budget"`
-	Workflow     workflow.Graph     `json:"workflow"`
-	Valid        bool               `json:"valid"`
-	Reasons      []Reason           `json:"reasons"`
+	Text             string             `json:"text"`
+	Resolution       ResolutionStatus   `json:"resolution"`
+	ResolutionReason string             `json:"resolution_reason,omitempty"`
+	ContextUsed      bool               `json:"context_used,omitempty"`
+	Criterion        string             `json:"criterion"`
+	Limits           contract.Limits    `json:"limits"`
+	Coordinator      string             `json:"coordinator"`
+	Specialists      []string           `json:"specialists"`
+	Intent           Kind               `json:"intent"`
+	Repositories     []string           `json:"repositories"`
+	Effects          []contract.Effect  `json:"effects"`
+	Agent            string             `json:"agent"`
+	Models           []ModelChoice      `json:"models"`
+	Tools            []ToolChoice       `json:"tools"`
+	Capabilities     []CapabilityChoice `json:"capabilities"`
+	Budget           BudgetSummary      `json:"budget"`
+	Workflow         workflow.Graph     `json:"workflow"`
+	Valid            bool               `json:"valid"`
+	Reasons          []Reason           `json:"reasons"`
 }
 
 // BudgetSummary is the preflight accounting for the compiled workflow.
@@ -158,11 +163,43 @@ func (p Planner) Build(req Request) (Plan, error) {
 		return Plan{}, contract.Fail(contract.FailureInvalidInput, "decision: max tokens requires a positive max duration")
 	}
 
+	resolution := resolveIntent(req.Text, req.Context, req.Repository)
+	intent, effectiveText, contextFiles := resolution.Intent, resolution.Text, resolution.ScopeFiles
+	if resolution.Status == ResolutionNeedsContext {
+		return Plan{
+			Text:             text,
+			Resolution:       ResolutionNeedsContext,
+			ResolutionReason: resolution.ReasonCode,
+			Intent:           "",
+			Workflow:         workflow.Graph{Task: text},
+			Reasons:          []Reason{{Stage: "intent", Message: resolution.Reason}},
+		}, nil
+	}
+	if resolution.Repository != "" {
+		req.Repository = resolution.Repository
+	}
+	req.Text = effectiveText
+	if len(contextFiles) > 0 {
+		if len(req.Files) == 0 {
+			req.Files = contextFiles
+		} else {
+			req.Files = intersectFiles(req.Files, contextFiles)
+			if len(req.Files) == 0 {
+				return Plan{
+					Text:             text,
+					Resolution:       ResolutionNeedsContext,
+					ResolutionReason: ResolutionReasonScopeMismatch,
+					Workflow:         workflow.Graph{Task: text},
+					Reasons:          []Reason{{Stage: "scope", Message: "the requested files do not overlap the accepted plan scope"}},
+				}, nil
+			}
+		}
+	}
+
 	repos, err := p.repositories(req.Repository)
 	if err != nil {
 		return Plan{}, err
 	}
-	intent := infer(text)
 	agent := p.agentFor(intent, req.Files)
 	criterion := strings.TrimSpace(req.Criterion)
 	if criterion == "" {
@@ -170,6 +207,8 @@ func (p Planner) Build(req Request) (Plan, error) {
 	}
 	plan := Plan{
 		Text:         text,
+		Resolution:   ResolutionResolved,
+		ContextUsed:  resolution.ContextUsed,
 		Criterion:    criterion,
 		Limits:       req.Limits,
 		Coordinator:  "atenea-coordinator",
@@ -179,7 +218,7 @@ func (p Planner) Build(req Request) (Plan, error) {
 		Effects:      mergeEffects(req.StandingEffects, req.Effects),
 		Agent:        agent,
 		Reasons: []Reason{
-			{Stage: "intent", Message: fmt.Sprintf("classified as %s from the request text", intent)},
+			{Stage: "intent", Message: fmt.Sprintf("classified as %s from the current user request", intent)},
 			{Stage: "policy", Message: "user constraints and declared effects are applied before provider choice"},
 		},
 	}
@@ -336,6 +375,9 @@ var (
 		"refactorizar", "refactoriza", "refactor", "refactors", "refactoring",
 		"construir", "construye", "build", "builds", "building",
 		"añadir", "añade", "add", "adds", "adding",
+		"migrar", "migra", "migrate", "migrates", "migrating",
+		"corregir", "corrige", "arreglar", "arregla", "editar", "edita",
+		"modificar", "modifica", "actualizar", "actualiza",
 	}
 	planWords = []string{
 		"planificar", "planifica", "plan", "plans", "planning",
@@ -350,9 +392,33 @@ var (
 )
 
 func infer(text string) Kind {
-	words := wordsOf(text)
-	if containsAny(words, changeWords...) {
+	cleaned := strings.ToLower(stripQuotedText(text))
+	cleaned = removeNegatedChangePhrases(cleaned)
+	words := wordsOf(cleaned)
+	if hasFutureChangeDiscussion(words) {
+		return KindPlan
+	}
+	if containsAny(words, "not only", "not just") && containsAny(words, changeWords...) {
 		return KindChange
+	}
+	if startsWithIntent(words, "understand", "explain", "summarize", "summarise", "describe", "tell me what", "dime qué", "explica", "resume", "resúmeme", "describe") { //nolint:misspell // British spelling is intentional.
+		return KindUnderstand
+	}
+	if hasChangeAfterTransition(words) {
+		return KindChange
+	}
+	if startsWithIntent(words, "please", "can you", "could you", "would you", "por favor", "puedes", "podrías", "podrias", "solo", "only", "just") {
+		return infer(strings.TrimSpace(stripPolitePrefix(words)))
+	}
+	if containsAny(words, "how would", "how could", "how can we", "how do i", "how to", "design how", "diseña cómo", "cómo arreglar", "cómo corregir", "cómo modificar", "como arreglar", "como corregir", "como modificar", "tell me how you would", "outline how") ||
+		startsWithIntent(words, "tell me how to") {
+		return KindPlan
+	}
+	if startsWithIntent(words, "plan", "planifica", "planificar", "diseña", "diseñar", "design", "outline", "propose", "propón", "proponer", "prepare a plan", "preparar un plan") {
+		return KindPlan
+	}
+	if startsWithIntent(words, "find", "search", "locate", "where", "buscar", "busca", "localiza", "dónde", "donde", "look up", "investiga") {
+		return KindSearch
 	}
 	if containsAny(words, planWords...) {
 		return KindPlan
@@ -360,7 +426,116 @@ func infer(text string) Kind {
 	if containsAny(words, searchWords...) {
 		return KindSearch
 	}
+	if containsAny(words, changeWords...) {
+		return KindChange
+	}
 	return KindUnderstand
+}
+
+func startsWithIntent(words string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if words == " "+prefix+" " || strings.HasPrefix(words, " "+prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasChangeAfterTransition(words string) bool {
+	for _, transition := range []string{" then ", " and then ", " after that ", " followed by ", " luego ", " después ", " despues ", " a continuación "} {
+		if i := strings.Index(words, transition); i >= 0 && containsAny(" "+strings.TrimSpace(words[i+len(transition):])+" ", changeWords...) {
+			return true
+		}
+	}
+	return false
+}
+
+// Future or modal discussion mentions a change without asking ATENEA to perform it now.
+func hasFutureChangeDiscussion(words string) bool {
+	if !containsAny(words, changeWords...) {
+		return false
+	}
+	if startsWithIntent(words, "should i", "should we", "could we", "would we", "debería", "deberias", "deberías", "deberíamos", "deberiamos") {
+		return true
+	}
+	if !containsAny(words,
+		"next week", "next month", "tomorrow", "later", "later on", "eventually", "in the future", "down the road", "someday",
+		"we will", "we ll", "we should", "we might", "we may", "we could", "i will", "i ll", "they will", "you will", "going to",
+		"mañana", "más adelante", "en el futuro", "a futuro", "la semana que viene", "el mes que viene", "habría que",
+	) {
+		return false
+	}
+	return !containsAny(words, "now", "right now", "today", "immediately", "ahora", "ahora mismo", "hoy", "ya", "inmediatamente")
+}
+
+func stripPolitePrefix(words string) string {
+	for {
+		stripped := false
+		for _, prefix := range []string{"please", "can you", "could you", "would you", "por favor", "puedes", "podrías", "podrias", "solo", "only", "just"} {
+			if strings.HasPrefix(words, " "+prefix+" ") {
+				words = " " + strings.TrimSpace(strings.TrimPrefix(words, " "+prefix+" ")) + " "
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			return words
+		}
+	}
+}
+
+func removeNegatedChangePhrases(text string) string {
+	for _, phrase := range []string{
+		"do not make changes", "don't make changes", "don’t make changes", "do not change", "don't change", "don’t change",
+		"do not implement", "don't implement", "don’t implement", "do not edit", "don't edit", "don’t edit",
+		"do not fix", "don't fix", "don’t fix", "do not migrate", "don't migrate", "don’t migrate",
+		"do not modify", "don't modify", "don’t modify", "do not refactor", "don't refactor", "don’t refactor",
+		"do not apply", "don't apply", "don’t apply", "no hagas cambios", "no cambies", "no cambie", "no implementar",
+		"no implementes", "no edites", "no editar", "no modifiques", "no modificar", "no apliques", "no aplicar", //nolint:misspell // Spanish conjugations are intentional.
+		"no corrijas", "no arregles", "no actualices",
+	} {
+		text = strings.ReplaceAll(text, phrase, strings.Repeat(" ", utf8.RuneCountInString(phrase)))
+	}
+	return text
+}
+
+func stripQuotedText(text string) string {
+	var out strings.Builder
+	var quote rune
+	runes := []rune(text)
+	for i, r := range runes {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				out.WriteByte(' ')
+			} else {
+				out.WriteByte(' ')
+			}
+			continue
+		}
+		if (r == '\'' || r == '’') && i > 0 && i+1 < len(runes) && unicode.IsLetter(runes[i-1]) && unicode.IsLetter(runes[i+1]) {
+			out.WriteRune(r)
+			continue
+		}
+		if r == '"' || r == '`' || r == '“' || r == '‘' || r == '\'' {
+			switch r {
+			case '“':
+				quote = '”'
+			case '‘':
+				quote = '’'
+			default:
+				quote = r
+			}
+			out.WriteByte(' ')
+			continue
+		}
+		if r == '”' || r == '’' {
+			out.WriteByte(' ')
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // wordsOf reduces a commission to its words, lowercased, separated by single

@@ -66,6 +66,56 @@ atenea decide "buscar el flujo de autenticación" \
   --repo taxiprime-backend --run --confirm
 ```
 
+## Continuing an accepted plan
+
+The decision router does not retain a chat transcript. When a caller sends a
+short continuation such as `hazlo`, `go ahead`, `fix it` or `add it`, it must
+supply the compact, versioned context of the plan being continued. Without
+that context the router returns `resolution = needs_context`, an invalid plan
+and no workflow steps.
+The machine-readable `resolution_reason` distinguishes missing plan context,
+invalid context, repository mismatch and an empty file-scope intersection.
+
+```sh
+atenea decide "hazlo" --budget 5 \
+  --decision-context '{
+    "version": 1,
+    "repository": "taxiprime-backend",
+    "accepted_plan_id": "plan-42",
+    "accepted_plan_revision": "r3",
+    "accepted_plan_current": true,
+    "active_objective": "mejorar la búsqueda de viajes",
+    "scope_files": ["internal/trips/search.go"],
+    "constraints": ["mantener compatibilidad con la API"]
+  }' --json
+```
+
+The same object is accepted as the optional `context` argument to
+`decision.plan`. `version` is required. A supplied accepted plan also needs its
+repository, revision, active objective and `accepted_plan_current: true`; a file
+scope needs a repository. Set `accepted_plan_current` only after the caller
+checks the canonical plan record and confirms the supplied revision is current.
+If this attestation is missing or false, a continuation returns
+`needs_context` with `resolution_reason = plan_freshness_unverified`.
+When both the request and context specify a repository, they must match. If the
+request names files, they are intersected with `scope_files`; an empty overlap
+returns `needs_context`. The caller must check that the plan revision is still
+current and refresh the active scope and constraints after newer user
+restrictions. The workflow receives only the scoped file list.
+
+This is caller-supplied semantic context: ATENEA cannot authenticate that the
+referenced plan was accepted, independently verify the freshness attestation,
+or recover that decision from an MCP transcript. It checks the repository
+binding and supplied file intersection, but has no canonical plan store for
+freshness checks. Keep the context compact and free of secrets. A CLI `--run`
+stores the effective objective, constraints
+and file scope in its normal durable workflow record; dry runs do not persist
+that workflow.
+Context never adds effect grants or authorizes a run. MCP `decision.plan`
+remains `dry_run = true` and `execution_authorized = false`; CLI execution still
+uses its normal permission and confirmation checks. `scope_files` narrows the
+plan's file list, but is not a filesystem write sandbox.
+
 For an adaptive exploration followed by the mandatory Opus plan, start with a
 grant around `$0.90` and inspect the forecast before running:
 

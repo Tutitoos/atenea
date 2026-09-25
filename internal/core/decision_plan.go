@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
@@ -15,23 +16,56 @@ import (
 const toolDecisionPlan = "decision.plan"
 
 func (v *conversation) decisionPlanTool() map[string]any {
+	schema := v.aimedAt(map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"objective": map[string]any{"type": "string", "description": "The complete user objective to plan."},
+			"criterion": map[string]any{"type": "string", "description": "Optional user-supplied acceptance criterion."},
+			"files":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Repository-relative files explicitly named by the user."},
+			"context": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"description": "Optional caller-supplied semantic context for a continuation. It cannot prove user acceptance, grant effects or authorize execution.",
+				"properties": map[string]any{
+					"version":                map[string]any{"type": "integer", "const": 1},
+					"repository":             map[string]any{"type": "string"},
+					"accepted_plan_id":       map[string]any{"type": "string"},
+					"accepted_plan_revision": map[string]any{"type": "string"},
+					"accepted_plan_current":  map[string]any{"type": "boolean", "description": "Set true only after the caller verifies this accepted plan revision is still current."},
+					"active_objective":       map[string]any{"type": "string"},
+					"scope_files":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 100},
+					"constraints":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 100},
+				},
+				"required": []string{"version"},
+			},
+			"budget_usd":   map[string]any{"type": "number", "minimum": 0, "description": "Optional planning grant; zero uses configured policy."},
+			"max_duration": map[string]any{"type": "string", "description": "Optional positive duration such as 30m."},
+			"max_tokens":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional per-turn token declaration; requires max_duration."},
+		},
+		"required": []string{"objective"},
+	})
+	if len(v.core.catalog.Repositories()) > 1 {
+		if required, ok := schema["required"].([]string); ok {
+			filtered := make([]string, 0, len(required))
+			for _, name := range required {
+				if name != repositoryArg {
+					filtered = append(filtered, name)
+				}
+			}
+			schema["required"] = filtered
+		}
+		schema["anyOf"] = []any{
+			map[string]any{"required": []string{repositoryArg}},
+			map[string]any{"required": []string{"context"},
+				"properties": map[string]any{"context": map[string]any{"required": []string{"repository"}}}},
+		}
+	}
 	return map[string]any{
 		"name": toolDecisionPlan,
 		"description": "Build ATENEA's complete explainable decision and workflow graph for a Codex Plan-mode request, WITHOUT executing or persisting it. " +
+			"For a short continuation or pronoun-only action, supply the accepted plan's current context; otherwise the result is needs_context. " +
 			"This chooses intent, agents, models, capabilities, policy and budget. It never launches a workflow and does not authorize effects.",
-		"inputSchema": v.aimedAt(map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"objective":    map[string]any{"type": "string", "description": "The complete user objective to plan."},
-				"criterion":    map[string]any{"type": "string", "description": "Optional user-supplied acceptance criterion."},
-				"files":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Repository-relative files explicitly named by the user."},
-				"budget_usd":   map[string]any{"type": "number", "minimum": 0, "description": "Optional planning grant; zero uses configured policy."},
-				"max_duration": map[string]any{"type": "string", "description": "Optional positive duration such as 30m."},
-				"max_tokens":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional per-turn token declaration; requires max_duration."},
-			},
-			"required": []string{"objective"},
-		}),
+		"inputSchema": schema,
 	}
 }
 
@@ -41,7 +75,19 @@ func (v *conversation) decisionPlan(_ context.Context, args map[string]any) (any
 	if objective == "" {
 		return nil, &rpcError{Code: codeInvalidParams, Message: toolDecisionPlan + ": objective is required"}
 	}
-	repository, aimErr := v.workflowRepository(toolDecisionPlan, args)
+	decisionContext, err := decisionPlanIntentContext(args["context"])
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: toolDecisionPlan + ": context: " + err.Error()}
+	}
+	repositoryArgs := args
+	if repository, _ := args[repositoryArg].(string); strings.TrimSpace(repository) == "" && decisionContext != nil && decisionContext.Repository != "" {
+		repositoryArgs = make(map[string]any, len(args)+1)
+		for key, value := range args {
+			repositoryArgs[key] = value
+		}
+		repositoryArgs[repositoryArg] = decisionContext.Repository
+	}
+	repository, aimErr := v.workflowRepository(toolDecisionPlan, repositoryArgs)
 	if aimErr != nil {
 		return nil, aimErr
 	}
@@ -66,6 +112,7 @@ func (v *conversation) decisionPlan(_ context.Context, args map[string]any) (any
 	}
 	plan, err := planner.Build(decision.Request{
 		Text:            objective,
+		Context:         decisionContext,
 		Criterion:       strings.TrimSpace(criterion),
 		Limits:          limits,
 		Repository:      repository,
@@ -87,6 +134,33 @@ func (v *conversation) decisionPlan(_ context.Context, args map[string]any) (any
 	result["dry_run"] = true
 	result["execution_authorized"] = false
 	return toolResult(result)
+}
+
+func decisionPlanIntentContext(raw any) (*decision.IntentContext, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode context: %w", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	var context decision.IntentContext
+	if err := decoder.Decode(&context); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("unexpected trailing data")
+		}
+		return nil, fmt.Errorf("invalid trailing data: %w", err)
+	}
+	if context.Version == 0 {
+		return nil, fmt.Errorf("version is required")
+	}
+	return &context, nil
 }
 
 func decisionPlanFiles(raw any) ([]string, error) {

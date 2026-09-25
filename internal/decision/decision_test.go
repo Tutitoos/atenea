@@ -8,6 +8,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -319,16 +320,219 @@ func TestIntentIsClassifiedOnWholeWordsNotSubstrings(t *testing.T) {
 		"where is the address parser":              KindSearch,
 		"give me an explanation of the retry loop": KindUnderstand,
 		// And the words themselves still classify, inflected or not.
-		"fix the login bug":            KindChange,
-		"fixing the login bug":         KindChange,
-		"añade un campo al formulario": KindChange,
-		"how would you split this":     KindPlan,
-		"diseña el flujo de pagos":     KindPlan,
-		"buscar autenticación":         KindSearch,
-		"explain how the router works": KindUnderstand,
+		"fix the login bug":                                        KindChange,
+		"fixing the login bug":                                     KindChange,
+		"añade un campo al formulario":                             KindChange,
+		"how would you split this":                                 KindPlan,
+		"diseña el flujo de pagos":                                 KindPlan,
+		"buscar autenticación":                                     KindSearch,
+		"explain how the router works":                             KindUnderstand,
+		"Do not make changes yet. Tell me how you would add Laya.": KindPlan,
+		"Only explain how to fix the login bug.":                   KindUnderstand,
+		"Do not only explain; implement the fix.":                  KindChange,
+		"Search for the quoted instruction \"implement now\".":     KindSearch,
+		"Find the literal 'implement now' string.":                 KindSearch,
+		"Busca la frase “añade ahora”.":                            KindSearch,
+		"Outline a refactoring approach but do not apply it.":      KindPlan,
+		"Design how to migrate the database.":                      KindPlan,
+		"Migrate the database now.":                                KindChange,
+		"Search for the failing path, then fix it.":                KindChange,
+		"Only explain; do not edit.":                               KindUnderstand,
+		"Don't fix it; explain the bug.":                           KindUnderstand,
+		"How to migrate the database safely.":                      KindPlan,
+		"Corrige el error de acceso.":                              KindChange,
+		"Cómo corregir el error de acceso.":                        KindPlan,
+		"No corrijas el error; explica la causa.":                  KindUnderstand,
+		"We will migrate the database next week.":                  KindPlan,
+		"We should fix the login bug later.":                       KindPlan,
+		"Añade el campo mañana.":                                   KindPlan,
+		"Should we implement this now?":                            KindPlan,
+		"Implement this now.":                                      KindChange,
+		"Do not only explain; implement next week.":                KindPlan,
 	} {
 		if got := infer(text); got != want {
 			t.Errorf("infer(%q) = %s, want %s", text, got, want)
+		}
+	}
+}
+
+func TestBuildRequiresRepositoryBoundContextForBareContinuation(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	for _, text := range []string{"hazlo", "do it now", "fix it", "add it", "implement that", "ejecuta el plan", "run it"} {
+		t.Run(text, func(t *testing.T) {
+			plan, err := (Planner{Config: cfg}).Build(Request{
+				Text: text, Repository: "repo", BudgetUSD: 10,
+				StandingEffects: []contract.Effect{contract.EffectWrite},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Resolution != ResolutionNeedsContext || plan.ResolutionReason != ResolutionReasonMissingAcceptedPlan || plan.Valid ||
+				len(plan.Workflow.Steps) != 0 || len(plan.Effects) != 0 {
+				t.Fatalf("continuation plan = %+v, want non-executable needs_context result", plan)
+			}
+			if plan.Intent != "" || plan.Workflow.Task != text {
+				t.Fatalf("ambiguous continuation was expanded: intent=%q task=%q", plan.Intent, plan.Workflow.Task)
+			}
+		})
+	}
+}
+
+func TestBuildUsesAcceptedPlanContextWithoutWideningFilesOrEffects(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	cfg.Model.Implement, cfg.Model.Review, cfg.Model.Audit = "sonnet", "sonnet", "claude-opus-5"
+	for _, name := range []string{"implement", "review", "audit"} {
+		typeDef := config.AgentType{Spec: contract.AgentTypeSpec{Name: name, Kind: contract.AgentSpecialized,
+			Result: []contract.Field{{Name: "result", Type: contract.TypeString, Required: true}}},
+			Effects: []contract.Effect{contract.EffectRead}}
+		if name == "implement" {
+			typeDef.Effects = append(typeDef.Effects, contract.EffectWrite)
+		} else {
+			typeDef.Pool, typeDef.ReadsSubject = config.PoolReview, true
+		}
+		cfg.Agents = append(cfg.Agents, typeDef)
+	}
+
+	plan, err := (Planner{Config: cfg}).Build(Request{
+		Text: "fix it now", Files: []string{"internal/trips/search.go", "outside.go"}, BudgetUSD: 20,
+		StandingEffects: []contract.Effect{contract.EffectWrite},
+		Context: &IntentContext{Version: 1, Repository: "repo", AcceptedPlanID: "plan-7", AcceptedPlanRevision: "r3", AcceptedPlanCurrent: true,
+			ActiveObjective: "añadir búsqueda de viajes", ScopeFiles: []string{"internal/trips/search.go"},
+			Constraints: []string{"mantener compatibilidad"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Valid || plan.Resolution != ResolutionResolved || !plan.ContextUsed || plan.Intent != KindChange {
+		t.Fatalf("contextual continuation = valid:%t resolution:%s context:%t intent:%s reasons:%+v",
+			plan.Valid, plan.Resolution, plan.ContextUsed, plan.Intent, plan.Reasons)
+	}
+	if plan.Text != "fix it now" || !slices.Contains(plan.Repositories, "repo") {
+		t.Fatalf("current request/repository = %q/%v", plan.Text, plan.Repositories)
+	}
+	if len(plan.Workflow.Steps) == 0 {
+		t.Fatal("contextual continuation produced no workflow")
+	}
+	var implementation *workflow.Step
+	for i := range plan.Workflow.Steps {
+		step := &plan.Workflow.Steps[i]
+		if step.TypeName == "implement" {
+			implementation = step
+		}
+	}
+	if implementation == nil {
+		t.Fatal("accepted change context did not plan an implementation step")
+	}
+	if len(implementation.Task.Files) != 1 || implementation.Task.Files[0] != "internal/trips/search.go" {
+		t.Fatalf("implementation files = %v, want the accepted scope only", implementation.Task.Files)
+	}
+	if !slices.Contains(implementation.Permission.Effects, contract.EffectWrite) {
+		t.Fatalf("implementation effects = %v, want the independently granted standing write", implementation.Permission.Effects)
+	}
+}
+
+func TestBuildRejectsMismatchedRepositoryAndDisjointScopeContext(t *testing.T) {
+	context := &IntentContext{Version: 1, Repository: "repo", AcceptedPlanID: "plan-1", AcceptedPlanRevision: "r1", AcceptedPlanCurrent: true,
+		ActiveObjective: "add search", ScopeFiles: []string{"internal/search.go"}}
+	for name, request := range map[string]Request{
+		"repository mismatch": {Text: "hazlo", Repository: "other", Context: context, BudgetUSD: 10},
+		"disjoint files":      {Text: "hazlo", Repository: "repo", Files: []string{"internal/login.go"}, Context: context, BudgetUSD: 10},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := fixtureConfig("repo", "other")
+			plan, err := (Planner{Config: cfg}).Build(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Resolution != ResolutionNeedsContext || plan.Valid || len(plan.Workflow.Steps) != 0 {
+				t.Fatalf("plan = resolution:%s reason:%s valid:%t steps:%d", plan.Resolution, plan.ResolutionReason, plan.Valid, len(plan.Workflow.Steps))
+			}
+		})
+	}
+}
+
+func TestBuildRequiresRepositoryBindingForAcceptedPlanContinuation(t *testing.T) {
+	plan, err := (Planner{Config: fixtureConfig("repo")}).Build(Request{
+		Text: "do it", Repository: "repo", BudgetUSD: 10,
+		Context: &IntentContext{Version: 1, AcceptedPlanID: "plan-4", AcceptedPlanRevision: "r2", AcceptedPlanCurrent: true, ActiveObjective: "add search"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Resolution != ResolutionNeedsContext || plan.ResolutionReason != ResolutionReasonUnboundContinuation || len(plan.Workflow.Steps) != 0 {
+		t.Fatalf("unbound plan context = resolution:%s reason:%s steps:%d", plan.Resolution, plan.ResolutionReason, len(plan.Workflow.Steps))
+	}
+}
+
+func TestBuildRequiresCallerToVerifyAcceptedPlanRevisionIsCurrent(t *testing.T) {
+	plan, err := (Planner{Config: fixtureConfig("repo")}).Build(Request{
+		Text: "do it", Repository: "repo", BudgetUSD: 10,
+		Context: &IntentContext{Version: 1, Repository: "repo", AcceptedPlanID: "plan-4", AcceptedPlanRevision: "r2",
+			ActiveObjective: "add search"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Resolution != ResolutionNeedsContext || plan.ResolutionReason != ResolutionReasonPlanFreshnessUnverified || plan.Valid ||
+		len(plan.Workflow.Steps) != 0 || len(plan.Effects) != 0 {
+		t.Fatalf("unverified plan context = resolution:%s reason:%s valid:%t effects:%v steps:%d",
+			plan.Resolution, plan.ResolutionReason, plan.Valid, plan.Effects, len(plan.Workflow.Steps))
+	}
+}
+
+func TestAcceptedPlanContextDoesNotGrantWriteEffect(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	plan, err := (Planner{Config: cfg}).Build(Request{
+		Text: "hazlo", BudgetUSD: 10,
+		Context: &IntentContext{Version: 1, Repository: "repo", AcceptedPlanID: "plan-3", AcceptedPlanRevision: "r2", AcceptedPlanCurrent: true,
+			ActiveObjective: "añadir búsqueda", ScopeFiles: []string{"internal/search.go"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Intent != KindChange || slices.Contains(plan.Effects, contract.EffectWrite) {
+		t.Fatalf("contextual intent/effects = %s/%v; context must not add write", plan.Intent, plan.Effects)
+	}
+	for _, step := range plan.Workflow.Steps {
+		if step.TypeName == "implement" || slices.Contains(step.Permission.Effects, contract.EffectWrite) {
+			t.Fatalf("context granted an implementation effect: %+v", step)
+		}
+	}
+}
+
+func TestBuildDoesNotTurnNegatedChangeRequestIntoImplementationOnWriteFloor(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	plan, err := (Planner{Config: cfg}).Build(Request{
+		Text: "Do not make changes yet. Tell me how you would add Laya.", Repository: "repo", BudgetUSD: 10,
+		StandingEffects: []contract.Effect{contract.EffectWrite},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Intent != KindPlan || !plan.Valid {
+		t.Fatalf("intent/valid = %s/%t, want a valid plan-only workflow", plan.Intent, plan.Valid)
+	}
+	for _, step := range plan.Workflow.Steps {
+		if step.TypeName == "implement" {
+			t.Fatalf("negated plan request acquired implementation step: %+v", step)
+		}
+	}
+}
+
+func TestBuildDoesNotTurnFutureChangeDiscussionIntoImplementationOnWriteFloor(t *testing.T) {
+	plan, err := (Planner{Config: fixtureConfig("repo")}).Build(Request{
+		Text: "We will migrate the database next week.", Repository: "repo", BudgetUSD: 10,
+		StandingEffects: []contract.Effect{contract.EffectWrite},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Intent != KindPlan || !plan.Valid {
+		t.Fatalf("future intent/valid = %s/%t, want a valid plan-only workflow", plan.Intent, plan.Valid)
+	}
+	for _, step := range plan.Workflow.Steps {
+		if step.TypeName == "implement" {
+			t.Fatalf("future discussion acquired implementation step: %+v", step)
 		}
 	}
 }
