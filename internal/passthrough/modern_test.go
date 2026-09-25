@@ -172,6 +172,7 @@ func TestModernHTTPReconnectReprobesAndInvalidatesCatalog(t *testing.T) {
 func TestModernHTTPCancellationClosesRequest(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	closed := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var message map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&message)
@@ -184,20 +185,34 @@ func TestModernHTTPCancellationClosesRequest(t *testing.T) {
 		select {
 		case <-release:
 		case <-r.Context().Done():
+			close(closed)
 		}
 	}))
 	t.Cleanup(func() { close(release); server.Close() })
-	b := passthrough.New(passthrough.Spec{ID: "modern", URL: server.URL, Allowed: []string{"allowed"}, ProtocolMode: passthrough.ProtocolModernPin, Timeout: time.Second})
-	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	b := passthrough.New(passthrough.Spec{ID: "modern", URL: server.URL, Allowed: []string{"allowed"}, ProtocolMode: passthrough.ProtocolModernPin, Timeout: 10 * time.Second})
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	callDone := make(chan error, 1)
 	go func() { _, err := b.Call(ctx, "allowed", nil); callDone <- err }()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("tools/call was not sent")
 	}
-	if err := <-callDone; err == nil {
-		t.Fatal("canceled call succeeded")
+	// Cancel only once tools/call is in flight. A deadline from before
+	// discovery raced startup on loaded CI runners and tested the wrong phase.
+	cancel()
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("canceled call succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled call did not return")
+	}
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server request context was not canceled")
 	}
 }
