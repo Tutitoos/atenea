@@ -154,14 +154,16 @@ type report struct {
 }
 
 type reviewItem struct {
-	ID       string                  `json:"id"`
-	Text     string                  `json:"text"`
-	Split    string                  `json:"split"`
-	Context  *decision.IntentContext `json:"context,omitempty"`
-	OptionA  reviewPlanView          `json:"option_a"`
-	OptionB  reviewPlanView          `json:"option_b"`
-	Decision string                  `json:"preferred_option"`
-	Reason   string                  `json:"reason"`
+	ID             string                  `json:"id"`
+	Text           string                  `json:"text"`
+	Split          string                  `json:"split"`
+	Files          []string                `json:"files"`
+	GrantedEffects []contract.Effect       `json:"granted_effects"`
+	Context        *decision.IntentContext `json:"context,omitempty"`
+	OptionA        reviewPlanView          `json:"option_a"`
+	OptionB        reviewPlanView          `json:"option_b"`
+	Decision       string                  `json:"preferred_option"`
+	Reason         string                  `json:"reason"`
 }
 
 type reviewPlanView struct {
@@ -343,7 +345,8 @@ func run(args []string, out io.Writer) error {
 			leftName, rightName = "gated", "context_gated"
 			leftPlan, rightPlan = reviewView(gatedPlan), reviewView(contextGatedPlan)
 		}
-		review := reviewItem{ID: row.ID, Text: row.Text, Split: row.Split, Context: blindContext(row.Context)}
+		review := reviewItem{ID: row.ID, Text: row.Text, Split: row.Split, Context: blindContext(row.Context),
+			Files: append([]string{}, row.Files...), GrantedEffects: append([]contract.Effect{}, row.GrantedEffects...)}
 		if order[0]&1 == 0 {
 			item.BlindedA, item.BlindedB = leftName, rightName
 			review.OptionA, review.OptionB = leftPlan, rightPlan
@@ -521,7 +524,9 @@ func blindContext(context *decision.IntentContext) *decision.IntentContext {
 	}
 	if redacted.AcceptedPlanID != "" {
 		redacted.AcceptedPlanID = "accepted-plan"
-		redacted.AcceptedPlanRevision = "current"
+	}
+	if redacted.AcceptedPlanRevision != "" {
+		redacted.AcceptedPlanRevision = "revision"
 	}
 	return &redacted
 }

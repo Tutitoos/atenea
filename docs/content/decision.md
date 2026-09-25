@@ -212,6 +212,7 @@ revision separately.
 For blind review, give two independent reviewers separate copies of the
 `--review-packet` file, **without the report**. Before evaluation, anonymize
 request text, context, constraints, and paths. The packet includes the request,
+requested `files` and explicit `granted_effects` (empty arrays when absent),
 semantic context, scoped files, and two unmarked plan summaries: intent, agent,
 roles, model availability (not model names), selected tools, workflow steps,
 effects, estimated budget, validity, and file scope. Candidate and context-source

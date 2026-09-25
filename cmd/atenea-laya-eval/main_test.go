@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/decision"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 func TestPairedDryRunUsesOneLayaCallPerCaseAndKeepsPrivateTextOutOfReport(t *testing.T) {
@@ -226,6 +227,18 @@ func TestScopedContextContinuationAndNeedsContextAreScoredWithoutFalseServiceFai
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, line := range bytes.Split(bytes.TrimSpace(packet), []byte("\n")) {
+		var review reviewItem
+		if err := json.Unmarshal(line, &review); err != nil {
+			t.Fatal(err)
+		}
+		if review.GrantedEffects == nil || len(review.GrantedEffects) != 0 || review.Files == nil {
+			t.Fatalf("packet must explicitly preserve absent grants/files as empty arrays: %+v", review)
+		}
+		if review.ID == "scope" && (len(review.Files) != 1 || review.Files[0] != "docs/outside.md") {
+			t.Fatalf("reviewer cannot identify requested file outside context scope: %+v", review)
+		}
+	}
 	for _, privateValue := range []string{"hazlo", "OBJECTIVE_SECRET", "CONSTRAINT_SECRET", "SCOPE_OBJECTIVE_SECRET", "internal/decision/eval.go"} {
 		if !strings.Contains(string(packet), privateValue) {
 			t.Fatalf("private blinded review packet is missing %q", privateValue)
@@ -295,6 +308,7 @@ func TestFalseChangeMetricsTrackBothLayaVariants(t *testing.T) {
 	dir := t.TempDir()
 	cases := filepath.Join(dir, "cases.jsonl")
 	labels := filepath.Join(dir, "labels.jsonl")
+	packetPath := filepath.Join(dir, "packet.jsonl")
 	caseRow := `{"id":"plan","split":"test","text":"Planifica el índice de búsqueda.","granted_effects":["write"],"context":{"version":1,"repository":"current","active_objective":"preserve tenant boundaries"}}` + "\n"
 	if err := os.WriteFile(cases, []byte(caseRow), 0o600); err != nil {
 		t.Fatal(err)
@@ -304,8 +318,19 @@ func TestFalseChangeMetricsTrackBothLayaVariants(t *testing.T) {
 	}
 	var out bytes.Buffer
 	if err := run([]string{"--cases", cases, "--labels", labels, "--settings", testSettings(t),
-		"--endpoint", server.URL + "/v1/systemone", "--model", "multilingual"}, &out); err != nil {
+		"--endpoint", server.URL + "/v1/systemone", "--model", "multilingual", "--review-packet", packetPath}, &out); err != nil {
 		t.Fatal(err)
+	}
+	packet, err := os.ReadFile(packetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var review reviewItem
+	if err := json.Unmarshal(bytes.TrimSpace(packet), &review); err != nil {
+		t.Fatal(err)
+	}
+	if len(review.GrantedEffects) != 1 || review.GrantedEffects[0] != contract.EffectWrite {
+		t.Fatalf("reviewer cannot distinguish explicit write grant from inferred intent: %+v", review)
 	}
 	var got report
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
@@ -315,6 +340,17 @@ func TestFalseChangeMetricsTrackBothLayaVariants(t *testing.T) {
 	if metrics == nil || metrics.FalseChangeLaya != 1 || metrics.FalseChangeContextLaya != 1 ||
 		metrics.FalseChangeGated != 1 || metrics.FalseChangeContextGated != 1 || got.ServiceResponses != 2 || got.ContextServiceResponses != 1 {
 		t.Fatalf("false-change metrics = %+v, report=%+v", metrics, got)
+	}
+}
+
+func TestBlindContextRedactsRevisionWithoutPlanID(t *testing.T) {
+	input := &decision.IntentContext{Version: 1, AcceptedPlanRevision: "private-revision-only"}
+	got := blindContext(input)
+	if got.AcceptedPlanRevision != "revision" || got.AcceptedPlanID != "" || got.AcceptedPlanCurrent {
+		t.Fatalf("revision-only context must be pseudonymized without inventing a plan or freshness: %+v", got)
+	}
+	if input.AcceptedPlanRevision != "private-revision-only" {
+		t.Fatal("blinding mutated the original context")
 	}
 }
 
