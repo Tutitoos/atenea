@@ -1,0 +1,535 @@
+package sshinventory
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func directPinFixture(host string) []byte {
+	key, _ := ed25519FixtureKey()
+	return []byte(host + " " + key + "\n")
+}
+
+func TestPrepareDirectProbeRejectsBroadTrustSnapshot(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ed25519FixtureKey()
+	for _, tt := range []struct {
+		name string
+		data []byte
+	}{
+		{"wildcard", []byte("*.test " + key + "\n")},
+		{"multiple hosts", []byte("example.test,other.test " + key + "\n")},
+		{"host CA", []byte("@cert-authority example.test " + key + "\n")},
+		{"revoked marker", []byte("@revoked example.test " + key + "\n")},
+		{"hashed host", []byte("|1|salt|digest " + key + "\n")},
+		{"two keys", append(directPinFixture("example.test"), directPinFixture("other.test")...)},
+		{"malformed key", []byte("example.test ssh-ed25519 AAAA\n")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := PrepareDirectProbe(config, "", selection, tt.data)
+			if err == nil || plan != nil {
+				t.Fatalf("broad or malformed known_hosts accepted: %v", err)
+			}
+		})
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("other.test"))
+	if err != nil {
+		t.Fatalf("unrelated concrete key should allow an unknown-key diagnosis: %v", err)
+	}
+	defer func() { _ = plan.Close() }()
+}
+
+func TestPrepareDirectProbe(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person@example.test\n Port 2222\n HostKeyAlias reviewed.example.test\n IdentityFile /nonexistent/fixture-key\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHosts := directPinFixture("reviewed.example.test")
+	plan, err := PrepareDirectProbe(config, "", selection, knownHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := plan.root
+	t.Cleanup(func() { _ = plan.Close() })
+	if !privateProbeDirectory(root, plan.rootInfo) {
+		t.Fatal("probe directory is not private")
+	}
+	if plan.Snapshot() != selection.Snapshot {
+		t.Fatalf("snapshot = %q", plan.Snapshot())
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "known_hosts")); err != nil || string(got) != string(knownHosts) {
+		t.Fatalf("known_hosts = %q, %v", got, err)
+	}
+	for _, name := range []string{"config", "known_hosts"} {
+		file, err := os.Open(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, statErr := file.Stat()
+		private := statErr == nil && privateTrustFile(info, file)
+		_ = file.Close()
+		if !private {
+			t.Fatalf("%s is not private: %v", name, statErr)
+		}
+	}
+	logPath := filepath.Join(root, "client.log")
+	if err := createPrivateProbeFile(logPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logInfo, statErr := logFile.Stat()
+	privateLog := statErr == nil && privateTrustFile(logInfo, logFile)
+	_ = logFile.Close()
+	if !privateLog {
+		t.Fatalf("diagnostic log is not private: %v", statErr)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
+	}
+	planArgs := plan.Arguments()
+	args := strings.Join(planArgs, "\x00")
+	for _, required := range []string{"-N", "-T", "-n", "BatchMode=yes", "ClearAllForwardings=yes", "ControlMaster=no", "ControlPath=none", "ForwardAgent=no", "IdentitiesOnly=yes", "IdentityAgent=none", "StrictHostKeyChecking=yes", "UpdateHostKeys=no", "HostKeyAlias=reviewed.example.test"} {
+		if !strings.Contains(args, required) {
+			t.Errorf("missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"-L", "-R", "-D", "ProxyCommand=", "ProxyJump="} {
+		if strings.Contains(args, forbidden) {
+			t.Errorf("unexpected %q", forbidden)
+		}
+	}
+	if planArgs[len(planArgs)-1] != selection.HostName {
+		t.Fatal("destination is not final argument")
+	}
+	planArgs[len(planArgs)-1] = "wrong.example.test"
+	if plan.Arguments()[len(plan.Arguments())-1] != selection.HostName {
+		t.Fatal("caller modified plan arguments")
+	}
+	if err := plan.Revalidate(); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, config, "Host selected\n HostName changed.example.test\n User person@example.test\n Port 2222\n HostKeyAlias reviewed.example.test\n IdentityFile /nonexistent/fixture-key\n")
+	if err := plan.Revalidate(); !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale plan revalidated: %v", err)
+	}
+	if _, err := ExecuteDirectProbe(context.Background(), "/nonexistent/ssh", plan); !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale plan was executed: %v", err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Arguments()) != 0 || plan.Snapshot() != "" || !errors.Is(plan.Revalidate(), ErrUnresolved) {
+		t.Fatal("closed plan remains usable")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("temporary root remains: %v", err)
+	}
+}
+
+func TestProbePlanRejectsReplacedPrivateDirectory(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := plan.root
+	moved := root + "-moved"
+	t.Cleanup(func() {
+		_ = os.RemoveAll(root)
+		_ = os.RemoveAll(moved)
+	})
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := createPrivateTrustDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Revalidate(); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("replaced directory revalidated: %v", err)
+	}
+	if err := plan.Close(); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("Close removed a replacement directory: %v", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("Close removed a different directory: %v", err)
+	}
+}
+
+func TestPrepareDirectProbeRejectsUnresolvedRoutes(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n")
+	base, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		edit func(*Selection)
+		want error
+	}{
+		{"host option", func(s *Selection) { s.HostName = "-oProxyCommand=evil" }, ErrChanged},
+		{"host account", func(s *Selection) { s.HostName = "person@other.test" }, ErrChanged},
+		{"host whitespace", func(s *Selection) { s.HostName = "host name" }, ErrChanged},
+		{"key alias option", func(s *Selection) { s.HostKeyAlias = "-oStrictHostKeyChecking=no" }, ErrChanged},
+		{"identity none", func(s *Selection) { s.IdentityFiles = []string{"none"} }, ErrChanged},
+		{"empty snapshot", func(s *Selection) { s.Snapshot = "" }, ErrUnresolved},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selection := base
+			tt.edit(&selection)
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+			if !errors.Is(err, tt.want) || plan != nil {
+				t.Fatalf("plan = %v, err = %v, want %v", plan, err, tt.want)
+			}
+		})
+	}
+	if plan, err := PrepareDirectProbe(config, "", base, nil); !errors.Is(err, ErrUnresolved) || plan != nil {
+		t.Fatalf("empty trust snapshot: plan = %v, err = %v", plan, err)
+	}
+	for _, proxy := range []string{"ProxyJump jump.example.test", "ProxyCommand helper example.test"} {
+		writeFixture(t, config, "Host selected\n HostName example.test\n User person\n "+proxy+"\n")
+		selected, err := ResolveStatic(config, "", "selected")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan, err := PrepareDirectProbe(config, "", selected, directPinFixture("example.test")); !errors.Is(err, ErrProbeUnsupported) || plan != nil {
+			t.Fatalf("proxy route: plan = %v, err = %v", plan, err)
+		}
+	}
+	writeFixture(t, config, "Host selected\n HostName changed.example.test\n User person\n")
+	if plan, err := PrepareDirectProbe(config, "", base, directPinFixture("example.test")); !errors.Is(err, ErrChanged) || plan != nil {
+		t.Fatalf("stale config: plan = %v, err = %v", plan, err)
+	}
+}
+
+func TestPrepareDirectProbeAllowsExplicitlyDisabledProxy(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	for _, option := range []string{"ProxyJump none", "ProxyCommand none", "ProxyJump None", "ProxyCommand None"} {
+		t.Run(option, func(t *testing.T) {
+			config := filepath.Join(t.TempDir(), "config")
+			writeFixture(t, config, "Host selected\n HostName example.test\n User person\n "+option+"\n")
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+			if err != nil {
+				t.Fatalf("original ssh -G: %v: %s", err, original)
+			}
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("ssh -G: %v: %s", err, output)
+			}
+			for _, settings := range [][]byte{original, output} {
+				for _, line := range strings.Split(string(settings), "\n") {
+					line = strings.TrimSuffix(line, "\r")
+					if strings.HasPrefix(line, "proxyjump ") || strings.HasPrefix(line, "proxycommand ") {
+						t.Fatalf("disabled proxy became an active route: %s", line)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDirectProbeSuppressesSelectedSessionCommands(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	marker := filepath.Join(root, "local-command-ran")
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n RemoteCommand echo remote-marker\n LocalCommand "+sideEffectCommand(t, marker)+"\n PermitLocalCommand yes\n RequestTTY force\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original ssh -G: %v: %s", err, original)
+	}
+	for _, expected := range []string{"remotecommand echo remote-marker", "localcommand ", "permitlocalcommand yes", "requesttty force"} {
+		if !strings.Contains(string(original), expected) {
+			t.Fatalf("original config lacks %q: %s", expected, original)
+		}
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ssh -G: %v: %s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "remotecommand ") || strings.HasPrefix(line, "localcommand ") ||
+			line == "permitlocalcommand yes" || line == "requesttty force" {
+			t.Fatalf("selected session command survived the restricted plan: %s", line)
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("selected LocalCommand executed: %v", err)
+	}
+}
+
+func TestDirectProbeSuppressesSelectedForwardingAndSharing(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n"+
+		" LocalForward 127.0.0.1:18080 127.0.0.1:18081\n"+
+		" RemoteForward 127.0.0.1:18082 127.0.0.1:18083\n"+
+		" DynamicForward 127.0.0.1:18084\n"+
+		" ForwardAgent yes\n ForwardX11 yes\n ForwardX11Trusted yes\n"+
+		" ControlMaster auto\n ControlPath control-fixture\n ControlPersist yes\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original ssh -G: %v: %s", err, original)
+	}
+	for _, expected := range []string{"localforward ", "remoteforward ", "dynamicforward ", "forwardagent yes", "forwardx11 yes", "controlmaster auto", "controlpath control-fixture"} {
+		if !strings.Contains(string(original), expected) {
+			t.Fatalf("original config lacks %q: %s", expected, original)
+		}
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restricted ssh -G: %v: %s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "localforward ") || strings.HasPrefix(line, "remoteforward ") ||
+			strings.HasPrefix(line, "dynamicforward ") || strings.HasPrefix(line, "controlpath ") ||
+			line == "forwardagent yes" || line == "forwardx11 yes" || line == "controlmaster auto" || line == "controlpersist yes" {
+			t.Fatalf("selected forwarding or sharing survived the restricted plan: %s", line)
+		}
+	}
+}
+
+func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n Port 2222\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	args := append([]string{"-G"}, plan.Arguments()...)
+	output, err := exec.Command(ssh, args...).CombinedOutput() // -G prints config; no connection.
+	if err != nil {
+		t.Fatalf("ssh -G: %v: %s", err, output)
+	}
+	settings := string(output)
+	for _, required := range []string{"batchmode yes", "clearallforwardings yes", "controlmaster false", "forwardagent no", "stricthostkeychecking true", "requesttty false", "sessiontype none", "pubkeyauthentication false", "preferredauthentications publickey"} {
+		if !strings.Contains(settings, required) {
+			t.Errorf("effective OpenSSH config lacks %q", required)
+		}
+	}
+	for _, line := range strings.Split(settings, "\n") {
+		if strings.HasPrefix(line, "controlpath ") || strings.HasPrefix(line, "proxycommand ") || strings.HasPrefix(line, "proxyjump ") {
+			t.Errorf("effective config includes a shared or proxy route: %s", line)
+		}
+	}
+	if got := identityFileSettings(settings); !reflect.DeepEqual(got, []string{"none"}) {
+		t.Fatalf("implicit identity files remain available: %v", got)
+	}
+	for _, tt := range []struct {
+		name    string
+		create  bool
+		wantKey bool
+	}{
+		{"explicit existing key", true, true},
+		{"explicit missing key", false, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			key := filepath.Join(root, "client-key")
+			if tt.create {
+				if err := os.WriteFile(key, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := filepath.Join(root, "config")
+			writeFixture(t, config, "Host selected\n HostName example.test\n User person\n IdentityFile "+key+"\n")
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("ssh -G: %v: %s", err, output)
+			}
+			want := []string{"none"}
+			if tt.wantKey {
+				want = append(want, key)
+			}
+			if got := identityFileSettings(string(output)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("effective identity files = %v, want %v", got, want)
+			}
+			if !strings.Contains(string(output), "pubkeyauthentication true") {
+				t.Fatal("explicit public-key authentication was disabled")
+			}
+		})
+	}
+}
+
+func TestDirectProbeSuppressesSelectedAgentSettings(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n IdentitiesOnly no\n IdentityAgent "+filepath.Join(root, "agent.sock")+"\n AddKeysToAgent yes\n")
+	original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original ssh -G: %v: %s", err, original)
+	}
+	for _, setting := range []string{"identitiesonly no", "identityagent " + filepath.Join(root, "agent.sock"), "addkeystoagent true"} {
+		if !strings.Contains(string(original), setting) {
+			t.Fatalf("fixture did not activate %q", setting)
+		}
+	}
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restricted ssh -G: %v: %s", err, output)
+	}
+	for _, setting := range []string{"identitiesonly yes", "identityagent none", "addkeystoagent false"} {
+		if !strings.Contains(string(output), setting) {
+			t.Fatalf("restricted diagnostic lacks %q: %s", setting, output)
+		}
+	}
+}
+
+func TestDirectProbeRespectsIdentityFileNone(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	for _, mixed := range []bool{false, true} {
+		name := "none-only"
+		if mixed {
+			name = "none-and-explicit"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			config := filepath.Join(root, "config")
+			contents := "Host selected\n HostName example.test\n User person\n IdentityFile none\n"
+			want := []string{"none"}
+			if mixed {
+				key := filepath.Join(root, "client-key")
+				if err := os.WriteFile(key, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				contents += " IdentityFile " + key + "\n"
+				want = append(want, key)
+			}
+			writeFixture(t, config, contents)
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+			if err != nil {
+				t.Fatalf("original ssh -G: %v: %s", err, original)
+			}
+			if got := identityFileSettings(string(original)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("original identity files = %v, want %v", got, want)
+			}
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("restricted ssh -G: %v: %s", err, output)
+			}
+			if got := identityFileSettings(string(output)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("restricted identity files = %v, want %v", got, want)
+			}
+			auth := "pubkeyauthentication false"
+			if mixed {
+				auth = "pubkeyauthentication true"
+			}
+			if !strings.Contains(string(output), auth) || noAvailableExplicitIdentity(selection.IdentityFiles) == mixed {
+				t.Fatalf("wrong public-key availability for %s", name)
+			}
+		})
+	}
+}
+
+func identityFileSettings(settings string) []string {
+	var files []string
+	for _, line := range strings.Split(settings, "\n") {
+		if file, ok := strings.CutPrefix(line, "identityfile "); ok {
+			files = append(files, strings.TrimSuffix(file, "\r"))
+		}
+	}
+	return files
+}
