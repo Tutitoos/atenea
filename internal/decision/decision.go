@@ -248,7 +248,9 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 		intent = resolution.Intent
 		intentEvidence = IntentEvidence{Mode: mode, Source: "context"}
 	} else {
-		intent, intentEvidence = p.classifyIntent(ctx, text)
+		// Deterministic rules describe the user's current request. Laya may also
+		// consider the separately supplied context included in req.Text.
+		intent, intentEvidence = p.classifyIntent(ctx, text, req.Text)
 	}
 	agent := p.agentFor(intent, req.Files)
 	criterion := strings.TrimSpace(req.Criterion)
@@ -348,8 +350,8 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 	return plan, nil
 }
 
-func (p Planner) classifyIntent(ctx context.Context, text string) (Kind, IntentEvidence) {
-	rulesIntent := infer(text)
+func (p Planner) classifyIntent(ctx context.Context, requestText, classifierText string) (Kind, IntentEvidence) {
+	rulesIntent := infer(requestText)
 	mode := strings.ToLower(strings.TrimSpace(p.Config.Decision.Mode))
 	if mode == "" {
 		mode = "rules"
@@ -371,7 +373,7 @@ func (p Planner) classifyIntent(ctx context.Context, text string) (Kind, IntentE
 		evidence.FallbackReason = "Laya endpoint is not configured"
 		return rulesIntent, evidence
 	}
-	classification, err := classifier.Classify(ctx, text)
+	classification, err := classifier.Classify(ctx, classifierText)
 	if err != nil {
 		evidence.FallbackReason = "service request failed"
 		return rulesIntent, evidence

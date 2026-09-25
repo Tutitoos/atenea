@@ -38,6 +38,52 @@ func TestRulesModeDoesNotCallLaya(t *testing.T) {
 	}
 }
 
+func TestRulesModeUsesTheCurrentRequestWhenContextHasAnObjective(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		want Kind
+	}{
+		{name: "change", text: "Implement the fix now.", want: KindChange},
+		{name: "understand", text: "Explain the current search flow.", want: KindUnderstand},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := (Planner{Config: fixtureConfig("repo")}).Build(Request{
+				Text: test.text, Repository: "repo", BudgetUSD: 10,
+				Context: &IntentContext{Version: 1, Repository: "repo", ActiveObjective: "preserve tenant boundaries"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Intent != test.want || !plan.ContextUsed {
+				t.Fatalf("contextual plan intent/context = %s/%t, want %s/true", plan.Intent, plan.ContextUsed, test.want)
+			}
+		})
+	}
+}
+
+func TestObserveModeSendsContextToLayaButKeepsRulesOnTheCurrentRequest(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	cfg.Decision = config.DecisionSettings{Mode: "observe", MinimumConfidence: 0.8}
+	var classified string
+	plan, err := (Planner{Config: cfg, Classifier: intentClassifierFunc(func(_ context.Context, text string) (IntentClassification, error) {
+		classified = text
+		return IntentClassification{Intent: KindChange, Confidence: 0.99, Model: "multilingual"}, nil
+	})}).Build(Request{
+		Text: "Explain the current search flow.", Repository: "repo", BudgetUSD: 10,
+		Context: &IntentContext{Version: 1, Repository: "repo", ActiveObjective: "preserve tenant boundaries"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Intent != KindUnderstand || plan.IntentEvidence.Laya == nil || plan.IntentEvidence.Laya.Intent != KindChange {
+		t.Fatalf("plan intent/evidence = %s/%+v, want rules understand plus Laya proposal", plan.Intent, plan.IntentEvidence)
+	}
+	if !strings.Contains(classified, "preserve tenant boundaries") || !strings.Contains(classified, "Current user request:\nExplain the current search flow.") {
+		t.Fatalf("Laya classifier input omitted supplied context or current request: %q", classified)
+	}
+}
+
 func TestObserveModeRecordsLayaWithoutChangingThePlan(t *testing.T) {
 	cfg := fixtureConfig("repo")
 	cfg.Decision = config.DecisionSettings{Mode: "observe", MinimumConfidence: 0.8}
