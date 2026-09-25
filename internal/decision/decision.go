@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -536,7 +537,8 @@ func (p Planner) repositories(id string) ([]string, error) {
 // degrades to KindUnderstand -- the conservative end, which reads and does
 // not change anything.
 var (
-	changeWords = []string{
+	planPointReference = regexp.MustCompile(`(?i)\bp[0-9]+\b`)
+	changeWords        = []string{
 		"implementar", "implementa", "implement", "implements", "implementing",
 		"cambiar", "cambia", "change", "changes", "changing",
 		"fix", "fixes", "fixed", "fixing",
@@ -568,6 +570,24 @@ func infer(text string) Kind {
 	}
 	if containsAny(words, "not only", "not just") && containsAny(words, changeWords...) {
 		return KindChange
+	}
+	if hasConditionalChangeCommand(cleaned) {
+		return KindChange
+	}
+	if hasExplicitFollowupChange(cleaned) {
+		return KindChange
+	}
+	if isNecessityQuestion(cleaned) {
+		return KindPlan
+	}
+	if isStatusQuestion(cleaned) {
+		return KindSearch
+	}
+	if isPlanPointAmendment(cleaned, words) {
+		if hasChangeAfterPlanPoint(words) {
+			return KindChange
+		}
+		return KindPlan
 	}
 	if hasChangeAfterTransition(words) {
 		return KindChange
@@ -622,6 +642,172 @@ func infer(text string) Kind {
 	return KindUnderstand
 }
 
+// finalQuestionClause ignores earlier questions and sentences so "Is it done?
+// Fix it" is classified from its final command, while "And now? Have you
+// finished?" remains a status request. A final question mark is optional.
+func finalQuestionClause(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.TrimRight(text, " \t\r\n!¡.")
+	for {
+		i := strings.LastIndexAny(text, "?.;:\n")
+		if i < 0 {
+			break
+		}
+		tail := strings.TrimSpace(text[i+1:])
+		if tail == "" {
+			text = text[:i]
+			continue
+		}
+		courtesy := strings.TrimSpace(wordsOf(tail))
+		if courtesy == "" || courtesy == "gracias" || courtesy == "muchas gracias" || courtesy == "por favor" ||
+			courtesy == "please" || courtesy == "thanks" || courtesy == "thank you" {
+			text = text[:i]
+			continue
+		}
+		text = tail
+		break
+	}
+	return stripPolitePrefix(wordsOf(text))
+}
+
+func isNecessityQuestion(text string) bool {
+	if !strings.Contains(text, "?") {
+		return false
+	}
+	question := finalQuestionClause(text)
+	return startsWithIntent(question, "hay que", "no hay que")
+}
+
+// A completed-work question may mention a change without requesting one.
+func isStatusQuestion(text string) bool {
+	question := finalQuestionClause(text)
+	if isStatusLead(question) {
+		return true
+	}
+	if i := strings.LastIndex(text, "?"); i >= 0 {
+		previous := text[:i]
+		if boundary := strings.LastIndexAny(previous, "?.;:\n"); boundary >= 0 {
+			previous = previous[boundary+1:]
+		}
+		if !isStatusLead(stripPolitePrefix(wordsOf(previous))) {
+			return false
+		}
+		following := stripPolitePrefix(wordsOf(text[i+1:]))
+		return !startsWithIntent(following,
+			"corrige", "corrígelo", "arregla", "arréglalo", "implementa", "impleméntalo",
+			"aplica", "aplícalo", "cambia", "modifica", "actualiza", "edita", "añade",
+			"fix", "implement", "apply", "change", "modify", "update", "edit", "add")
+	}
+	return false
+}
+
+func isStatusLead(question string) bool {
+	if startsWithIntent(question, "hay que", "no hay que") {
+		return false
+	}
+	if startsWithIntent(question, "are there any", "is there any", "no hay", "hay", "queda", "quedan") {
+		return containsAny(question,
+			"comentario", "comentarios", "incidencia", "incidencias", "pendiente", "pendientes",
+			"tarea", "tareas", "error", "errores", "fallo", "fallos", "cambio", "cambios",
+			"que arreglar", "para arreglar", "que corregir", "para corregir",
+			"bug", "bugs", "issue", "issues", "error", "errors", "change", "changes", "task", "tasks",
+			"fix", "fixes", "work")
+	}
+	return startsWithIntent(question,
+		"has terminado de", "ya has terminado de", "han terminado de", "se ha terminado de",
+		"habéis terminado de", "habeis terminado de", "have you finished", "are you done",
+		"has it been fixed", "is it fixed")
+}
+
+func hasExplicitFollowupChange(text string) bool {
+	for _, boundary := range []string{",", " y ", " and "} {
+		if i := strings.Index(text, boundary); i >= 0 {
+			if !isStatusQuestion(text[:i]) {
+				continue
+			}
+			if strings.Contains(text[i+len(boundary):], "?") {
+				continue // Within a question, a present-tense verb may be descriptive.
+			}
+			following := wordsOf(text[i+len(boundary):])
+			if startsWithIntent(following,
+				"corrige", "corrígelo", "arregla", "arréglalo", "implementa", "impleméntalo",
+				"aplica", "aplícalo", "cambia", "modifica", "actualiza", "edita", "añade",
+				"fix", "implement", "apply", "change", "modify", "update", "edit", "add") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasConditionalChangeCommand(text string) bool {
+	const marker = "si no,"
+	if i := strings.Index(text, marker); i >= 0 {
+		command := wordsOf(strings.TrimSpace(text[i+len(marker):]))
+		return startsWithIntent(command,
+			"corrige", "corrígelo", "arregla", "arréglalo", "implementa", "aplica",
+			"cambia", "modifica", "actualiza", "edita", "añade")
+	}
+	return false
+}
+
+// Numbered P-sections are plan entries. The P-number reference avoids
+// interpreting an ordinary request to add a product phase as plan editing.
+func isPlanPointAmendment(text, words string) bool {
+	refs := planPointReference.FindAllStringIndex(text, -1)
+	if len(refs) == 0 {
+		return false
+	}
+	if !containsAny(words, "plan", "planes") && containsAny(words,
+		"al producto", "al sistema", "al código", "en el código", "al repositorio", //nolint:misspell // Spanish word for product.
+		"to the product", "to the system", "to the code", "in the code", "to the codebase", "to the repository") {
+		return false
+	}
+	if len(refs) < 2 && !containsAny(words, "un p", "el p", "al plan", "del plan") {
+		if !containsAny(words, "a p", "the p", "to the plan") {
+			return false
+		}
+	}
+	return containsAny(words,
+		"añadir un p", "añade un p", "agregar un p", "agrega un p", "insertar un p", "inserta un p",
+		"añadir el p", "añade el p", "agregar el p", "agrega el p", "insertar el p", "inserta el p",
+		"añadir p", "añade p", "agregar p", "agrega p", "insertar p", "inserta p",
+		"add p", "insert p", "add a p", "insert a p", "add the p", "insert the p")
+}
+
+func hasChangeAfterPlanPoint(words string) bool {
+	for _, command := range []string{
+		"y corrige", "y arregla", "y implementa", "y aplica", "y cambia", "y modifica",
+		"y actualiza", "y edita", "y añade", "y corrígelo", "y arréglalo", "y impleméntalo",
+		"y aplícalo", "y hazlo", "y ejecútalo",
+		"and fix", "and implement", "and apply", "and change", "and modify",
+		"and update", "and edit", "and add", "and do it", "and execute it",
+	} {
+		if i := strings.Index(words, " "+command+" "); i >= 0 {
+			following := wordsOf(words[i+len(command)+2:])
+			if isPlanPointTextEdit(command, following) {
+				continue
+			}
+			if !containsAny(following, "plan", "planes", "p", "punto", "puntos", "fase", "fases", "point", "points", "phase", "phases") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPlanPointTextEdit(command, following string) bool {
+	if command != "and update" && command != "and edit" && command != "y actualiza" && command != "y edita" {
+		return false
+	}
+	if containsAny(following, "code", "codebase", "código", "system", "sistema", "product", "producto") { //nolint:misspell // Spanish word for product.
+		return false
+	}
+	return startsWithIntent(following,
+		"it", "its wording", "its text", "its title", "its description", "the wording", "the text", "the title", "the description",
+		"lo", "su redacción", "su texto", "su título", "su descripción", "la redacción", "el texto", "el título", "la descripción")
+}
+
 func startsWithIntent(words string, prefixes ...string) bool {
 	for _, prefix := range prefixes {
 		if words == " "+prefix+" " || strings.HasPrefix(words, " "+prefix+" ") {
@@ -647,7 +833,8 @@ func hasChangeAfterTransition(words string) bool {
 
 // Future or modal discussion mentions a change without asking ATENEA to perform it now.
 func hasFutureChangeDiscussion(words string) bool {
-	if !containsAny(words, changeWords...) {
+	if !containsAny(words, changeWords...) && !containsAny(words,
+		"corrígelo", "arréglalo", "impleméntalo", "aplícalo", "hazlo", "ejecútalo") {
 		return false
 	}
 	if startsWithIntent(words, "should i", "should we", "could we", "would we", "debería", "deberias", "deberías", "deberíamos", "deberiamos") {
