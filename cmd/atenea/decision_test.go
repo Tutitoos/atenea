@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,5 +203,49 @@ func TestDecisionPresentationAndConfirmationGuards(t *testing.T) {
 	}
 	if got := effectNames([]contract.Effect{contract.EffectRead, contract.EffectWrite}); len(got) != 2 || got[0] != "read" {
 		t.Fatalf("effect names = %v", got)
+	}
+}
+
+func TestCmdDecideAcceptPlanAndRejectStaleReference(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	settingsPath := settingsFile(t)
+	body, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = []byte(strings.Replace(string(body), `path = "/srv/api"`, fmt.Sprintf("path = %q", root), 1) + "\n[model]\nbackend = \"claude\"\nbinary = \"claude\"\nexplore = \"sonnet\"\nplan = \"claude-opus-5\"\n")
+	if err := os.WriteFile(settingsPath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := cmdDecide(settingsPath, []string{"accept-plan", "test", "--decision-context", `{"version":1,"repository":"api","active_objective":"Improve validation","scope_files":["handler.go"]}`}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var ref decision.AcceptedPlanReference
+	if err := json.Unmarshal(out.Bytes(), &ref); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"hazlo", "--repo", "api", "--accepted-plan", ref.ID, "--accepted-revision", ref.Revision, "--budget", "5", "--json", "--traces", filepath.Join(t.TempDir(), "workflow.db")}
+	out.Reset()
+	if err := cmdDecide(settingsPath, args, &out); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	var plan decision.Plan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Resolution != decision.ResolutionResolved || plan.Intent != decision.KindChange || !plan.Valid {
+		t.Fatalf("plan: %+v", plan)
+	}
+	if err := os.WriteFile(filepath.Join(root, "handler.go"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := cmdDecide(settingsPath, args, &out); err == nil {
+		t.Fatal("stale CLI reference succeeded")
+	}
+	if !strings.Contains(out.String(), `"resolution": "needs_context"`) {
+		t.Fatalf("stale output: %s", out.String())
 	}
 }

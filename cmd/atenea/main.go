@@ -295,6 +295,12 @@ Flags:
   --max-tokens N   model token limit per assigned turn
   --confirm       require a TTY confirmation before --run
   --traces PATH   workflow state database
+  --decision-context JSON  caller-attested semantic context (never an effect grant)
+  --accepted-plan ID       locally accepted context; requires --repo and --accepted-revision
+  --accepted-revision SHA  exact receipt revision; cannot combine with --decision-context
+
+Accept a reviewed implementation objective locally (never executes or grants effects):
+  atenea decide accept-plan ID --decision-context JSON
 
 Lifecycle:
   atenea decide status COORDINATOR_ID [--traces PATH]

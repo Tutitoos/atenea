@@ -48,6 +48,7 @@ type IntentContext struct {
 	ActiveObjective      string   `json:"active_objective,omitempty"`
 	ScopeFiles           []string `json:"scope_files,omitempty"`
 	Constraints          []string `json:"constraints,omitempty"`
+	locallyVerified      bool
 }
 
 const (
@@ -186,7 +187,7 @@ func validateIntentContext(context *IntentContext) error {
 func needsAcceptedPlanContext(text string) bool {
 	words := stripPolitePrefix(wordsOf(text))
 	for _, phrase := range []string{
-		"hazlo", "hazla", "hazlos", "hazlas", "hazlo ya", "adelante", "procede", "continua", "continúa", "continúe", //nolint:misspell // Spanish forms are intentional.
+		"arreglalo", "arréglalo", "corrigelo", "corrígelo", "implementalo", "impleméntalo", "aplicalo", "aplícalo", "hazlo", "hazla", "hazlos", "hazlas", "hazlo ya", "adelante", "procede", "continua", "continúa", "continúe", //nolint:misspell // Spanish forms are intentional.
 		"do it", "do that", "go ahead", "continue", "proceed", "apply it", "implement it", "carry it out",
 		"execute the plan", "execute this plan", "run the plan", "run it", "ejecuta el plan", "ejecuta este plan",
 	} {
@@ -194,8 +195,17 @@ func needsAcceptedPlanContext(text string) bool {
 			return true
 		}
 	}
+	// Spanish demonstratives are as dependent on a prior objective as English
+	// "fix that"; a standing write grant cannot supply the missing referent.
+	for _, verb := range []string{"haz", "corrige", "arregla", "implementa", "aplica", "cambia", "modifica", "actualiza", "edita", "añade"} {
+		for _, referent := range []string{"esto", "eso", "aquello"} {
+			if startsWithIntent(words, verb+" "+referent) {
+				return true
+			}
+		}
+	}
 	return startsWithIntent(words,
-		"hazlo", "hazla", "hazlos", "hazlas", "adelante", "procede", "continua", "continúa", "continúe", //nolint:misspell // Spanish forms are intentional.
+		"arreglalo", "arréglalo", "corrigelo", "corrígelo", "implementalo", "impleméntalo", "aplicalo", "aplícalo", "hazlo", "hazla", "hazlos", "hazlas", "adelante", "procede", "continua", "continúa", "continúe", //nolint:misspell // Spanish forms are intentional.
 		"do it", "do that", "fix it", "fix that", "add it", "add that", "implement it", "implement that",
 		"change it", "change that", "modify it", "modify that", "update it", "update that", "edit it", "edit that",
 		"build it", "build that", "apply it", "apply that", "proceed with it", "continue with it", "execute the plan", "execute this plan",
@@ -215,7 +225,11 @@ func effectiveContextText(context *IntentContext, current string) string {
 	}
 	if id := strings.TrimSpace(context.AcceptedPlanID); id != "" {
 		parts = append(parts, "Plan reference: "+id+"@"+strings.TrimSpace(context.AcceptedPlanRevision))
-		parts = append(parts, "Caller attests that this accepted plan revision is current; ATENEA cannot verify it independently.")
+		if context.locallyVerified {
+			parts = append(parts, "ATENEA verified the local accepted revision and repository source identity at planning time; this does not authorize execution.")
+		} else {
+			parts = append(parts, "Caller attests that this accepted plan revision is current; ATENEA cannot verify it independently.")
+		}
 	}
 	if len(context.ScopeFiles) > 0 {
 		parts = append(parts, "Plan file focus (context only; this does not grant effects):\n- "+strings.Join(context.ScopeFiles, "\n- "))
