@@ -30,10 +30,15 @@ def score(report, first, second, adjudication=None):
         raise ValueError("both reviewers must cover every report case exactly once")
     if adjudication is not None and not set(adjudication).issubset(cases):
         raise ValueError("adjudication contains an unknown case")
-    by_split = defaultdict(Counter)
+    by_split = defaultdict(lambda: defaultdict(Counter))
     unresolved = []
     for case_id, row in cases.items():
-        metrics = by_split[row["split"]]
+        candidate_a = str(row.get("blinded_a", "")).strip()
+        candidate_b = str(row.get("blinded_b", "")).strip()
+        if not candidate_a or not candidate_b or candidate_a == candidate_b:
+            raise ValueError(f"report case {case_id!r} has no distinct blinded comparison pair")
+        comparison = " vs ".join(sorted((candidate_a, candidate_b)))
+        metrics = by_split[row["split"]][comparison]
         metrics["count"] += 1
         if first[case_id] == second[case_id]:
             choice = first[case_id]
@@ -57,7 +62,10 @@ def score(report, first, second, adjudication=None):
         "total": len(cases),
         "unresolved_count": len(unresolved),
         "unresolved_ids": unresolved,
-        "by_split": {split: dict(counts) for split, counts in sorted(by_split.items())},
+        "by_split": {
+            split: {comparison: dict(counts) for comparison, counts in sorted(comparisons.items())}
+            for split, comparisons in sorted(by_split.items())
+        },
     }
 
 

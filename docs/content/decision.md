@@ -195,6 +195,9 @@ actually supplied context; `context_count` and `context_labeled` expose those
 denominators. A valid `needs_context` plan has no workflow steps. It is an
 intentional outcome, not a service failure. Corpus, gold, and settings hashes
 identify the evaluated inputs without copying their text.
+False-change counts distinguish rules, raw Laya, gated, context rules,
+context Laya, and context-gated candidates. Raw Laya counts require an actual
+service response.
 `observe_duration_ms` includes planning work and the model call; it is not pure
 model latency; context rows also have `context_observe_duration_ms`. A missing
 response falls back to rules and counts as a service failure. A run against a
@@ -211,10 +214,13 @@ For blind review, give two independent reviewers separate copies of the
 request text, context, constraints, and paths. The packet includes the request,
 semantic context, scoped files, and two unmarked plan summaries: intent, agent,
 roles, model availability (not model names), selected tools, workflow steps,
-effects, estimated budget, validity, and file scope. Repository and accepted
-plan identifiers are replaced with generic labels. Each reviewer fills
+effects, estimated budget, validity, and file scope. Candidate and context-source
+identity are omitted; repository and accepted-plan identifiers are replaced
+with generic labels. Each reviewer fills
 `preferred_option` with `a`, `b`, `tie`, or `both_bad` and adds a short
-`reason`. Review whether the plan answers the request, selects appropriate
+`reason`. The scorer groups preferences by both split and the compared
+candidate pair, so context/no-context comparisons within one split remain
+separate. Review whether the plan answers the request, selects appropriate
 steps, preserves the user's limits, and stays within the supplied scope. Score
 the two completed packets; disagreements require a third adjudication packet
 containing just those IDs:

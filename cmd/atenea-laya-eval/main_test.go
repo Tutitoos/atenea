@@ -213,6 +213,7 @@ func TestScopedContextContinuationAndNeedsContextAreScoredWithoutFalseServiceFai
 	}
 	if got.Cases[0].RulesPlan.Resolution != decision.ResolutionNeedsContext ||
 		got.Cases[0].ContextPlan.Intent != decision.KindChange || !got.Cases[0].ContextPlan.Valid ||
+		!got.Cases[0].ContextPlan.ContextUsed ||
 		got.Cases[0].LayaDisposition != "skipped_needs_context" ||
 		got.Cases[0].ContextLayaDisposition != "skipped_context_resolved" ||
 		got.Cases[1].ContextPlan.Resolution != decision.ResolutionNeedsContext || len(got.Cases[1].ContextPlan.Steps) != 0 ||
@@ -232,8 +233,8 @@ func TestScopedContextContinuationAndNeedsContextAreScoredWithoutFalseServiceFai
 	}
 	if strings.Contains(string(packet), "test-model") || strings.Contains(string(packet), "claude-opus") ||
 		strings.Contains(string(packet), "plan-secret-47") || strings.Contains(string(packet), `"accepted_plan_revision":"r2"`) ||
-		strings.Contains(string(packet), `"repository":"current"`) {
-		t.Fatal("review packet contains classifier/model identity or accepted-plan identifier")
+		strings.Contains(string(packet), `"repository":"current"`) || strings.Contains(string(packet), `"context_used"`) {
+		t.Fatal("review packet contains classifier/model identity, context provenance, or accepted-plan identifier")
 	}
 }
 
@@ -282,6 +283,38 @@ func TestContextAugmentsLayaRequestAndContextMetricsUseOnlySuppliedRows(t *testi
 		metrics.ContextCorrect != 1 || metrics.ContextGatedCorrect != 1 || metrics.ContextLayaLabeled != 1 ||
 		metrics.ContextLayaCorrect != 1 || got.ServiceResponses != 3 || got.ContextServiceResponses != 1 {
 		t.Fatalf("context subset metrics = %+v, report=%+v", metrics, got)
+	}
+}
+
+func TestFalseChangeMetricsTrackBothLayaVariants(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"test-model","routing":{"model":"multilingual"},"answers":{"intent":{"type":"choice","choice":"change","answer_confidence":0.95}}}`))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cases := filepath.Join(dir, "cases.jsonl")
+	labels := filepath.Join(dir, "labels.jsonl")
+	caseRow := `{"id":"plan","split":"test","text":"Planifica el índice de búsqueda.","granted_effects":["write"],"context":{"version":1,"repository":"current","active_objective":"preserve tenant boundaries"}}` + "\n"
+	if err := os.WriteFile(cases, []byte(caseRow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(labels, []byte("{\"id\":\"plan\",\"expected\":\"plan\",\"expected_resolution\":\"resolved\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"--cases", cases, "--labels", labels, "--settings", testSettings(t),
+		"--endpoint", server.URL + "/v1/systemone", "--model", "multilingual"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var got report
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	metrics := got.BySplit["test"]
+	if metrics == nil || metrics.FalseChangeLaya != 1 || metrics.FalseChangeContextLaya != 1 ||
+		metrics.FalseChangeGated != 1 || metrics.FalseChangeContextGated != 1 || got.ServiceResponses != 2 || got.ContextServiceResponses != 1 {
+		t.Fatalf("false-change metrics = %+v, report=%+v", metrics, got)
 	}
 }
 

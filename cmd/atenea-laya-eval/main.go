@@ -120,6 +120,7 @@ type splitMetrics struct {
 	FalseChangeLaya         int            `json:"false_change_laya"`
 	FalseChangeGated        int            `json:"false_change_gated"`
 	FalseChangeContext      int            `json:"false_change_context"`
+	FalseChangeContextLaya  int            `json:"false_change_context_laya"`
 	FalseChangeContextGated int            `json:"false_change_context_gated"`
 	ConfusionRules          map[string]int `json:"confusion_rules"`
 	ConfusionLaya           map[string]int `json:"confusion_laya"`
@@ -527,6 +528,9 @@ func blindContext(context *decision.IntentContext) *decision.IntentContext {
 
 func reviewView(plan decision.Plan) reviewPlanView {
 	summary := view(plan)
+	// Context provenance belongs in the evaluator report, not the blinded
+	// packet. Its presence would identify the context-aware candidate.
+	summary.ContextUsed = false
 	for i, model := range plan.Models {
 		availability := "unavailable"
 		if model.Available {
@@ -662,6 +666,10 @@ func falseChange(plan planView, gold label) bool {
 	return goldOutcome(gold) != string(decision.KindChange) && plan.Resolution == decision.ResolutionResolved && plan.Intent == decision.KindChange
 }
 
+func falseChangeIntent(intent decision.Kind, gold label) bool {
+	return goldOutcome(gold) != string(decision.KindChange) && intent == decision.KindChange
+}
+
 func updateMetrics(splits map[string]*splitMetrics, row result, gold label, threshold float64) {
 	m := splits[row.Split]
 	if m == nil {
@@ -675,6 +683,9 @@ func updateMetrics(splits map[string]*splitMetrics, row result, gold label, thre
 	}
 	if correctPlan(row.GatedPlan, gold) {
 		m.GatedCorrect++
+	}
+	if row.LayaDisposition == "responded" && falseChangeIntent(row.Laya, gold) {
+		m.FalseChangeLaya++
 	}
 	if row.LayaDisposition == "responded" && expectedResolution(gold) == decision.ResolutionResolved {
 		m.LayaLabeled++
@@ -707,6 +718,9 @@ func updateMetrics(splits map[string]*splitMetrics, row result, gold label, thre
 	if row.HasContext {
 		m.ContextCount++
 		m.ContextLabeled++
+		if row.ContextLayaDisposition == "responded" && falseChangeIntent(row.ContextLaya, gold) {
+			m.FalseChangeContextLaya++
+		}
 		if correctPlan(row.ContextPlan, gold) {
 			m.ContextCorrect++
 		}

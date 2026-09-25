@@ -30,13 +30,32 @@ class ScoreReviewsTests(unittest.TestCase):
             {"two": "b"},
         )
         self.assertEqual(got["unresolved_count"], 0)
-        self.assertEqual(got["by_split"]["test"]["gated"], 2)
-        self.assertEqual(got["by_split"]["test"]["agreement"], 1)
-        self.assertEqual(got["by_split"]["test"]["adjudicated"], 1)
+        comparison = got["by_split"]["test"]["gated vs rules"]
+        self.assertEqual(comparison["gated"], 2)
+        self.assertEqual(comparison["agreement"], 1)
+        self.assertEqual(comparison["adjudicated"], 1)
 
     def test_missing_review_remains_unresolved(self):
         got = MODULE.score(self.report, {"one": "a", "two": "a"}, {"one": "a", "two": "b"})
         self.assertEqual(got["unresolved_ids"], ["two"])
+
+    def test_context_and_no_context_comparisons_remain_separate_within_a_split(self):
+        report = {
+            "count": 2,
+            "cases": [
+                {"id": "plain", "split": "test", "blinded_a": "gated", "blinded_b": "rules"},
+                {"id": "contextual", "split": "test", "blinded_a": "context_gated", "blinded_b": "gated"},
+            ],
+        }
+        got = MODULE.score(
+            report,
+            {"plain": "a", "contextual": "a"},
+            {"plain": "a", "contextual": "a"},
+        )
+        comparisons = got["by_split"]["test"]
+        self.assertEqual(set(comparisons), {"gated vs rules", "context_gated vs gated"})
+        self.assertEqual(comparisons["gated vs rules"]["gated"], 1)
+        self.assertEqual(comparisons["context_gated vs gated"]["context_gated"], 1)
 
     def test_partial_or_extra_adjudication_is_rejected(self):
         with self.assertRaises(ValueError):
