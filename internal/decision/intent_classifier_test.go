@@ -3,6 +3,8 @@ package decision
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -45,7 +47,7 @@ func TestObserveModeRecordsLayaWithoutChangingThePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Intent != KindChange || plan.IntentEvidence.Source != "rules" || plan.IntentEvidence.Laya == nil || plan.IntentEvidence.Laya.Intent != KindPlan {
+	if plan.Intent != KindPlan || plan.IntentEvidence.Source != "rules" || plan.IntentEvidence.Laya == nil || plan.IntentEvidence.Laya.Intent != KindPlan {
 		t.Fatalf("plan intent/evidence = %s/%+v", plan.Intent, plan.IntentEvidence)
 	}
 	if !strings.Contains(plan.Reasons[0].Message, "from the request text") || !strings.Contains(plan.Reasons[2].Message, "deterministic intent remained selected") {
@@ -70,6 +72,33 @@ func TestLayaModeSelectsAConfidentPlanWithoutGrantingEffects(t *testing.T) {
 	}
 }
 
+func TestAcceptedPlanContinuationTakesPrecedenceOverLaya(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	cfg.Decision = config.DecisionSettings{Mode: "laya", MinimumConfidence: 0.8}
+	calls := 0
+	plan, err := (Planner{Config: cfg, Classifier: intentClassifierFunc(func(context.Context, string) (IntentClassification, error) {
+		calls++
+		return IntentClassification{Intent: KindPlan, Confidence: 0.99, Model: "multilingual"}, nil
+	})}).BuildContext(t.Context(), Request{
+		Text: "hazlo", Repository: "repo", BudgetUSD: 10,
+		Context: &IntentContext{
+			Version: 1, Repository: "repo", AcceptedPlanID: "plan-123", AcceptedPlanRevision: "rev-1",
+			AcceptedPlanCurrent: true, ActiveObjective: "implement the requested feature",
+			ScopeFiles: []string{"internal/feature.go"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("Laya classified an accepted-plan continuation %d times", calls)
+	}
+	if plan.Intent != KindChange || plan.Resolution != ResolutionResolved || !plan.ContextUsed ||
+		plan.IntentEvidence.Mode != "laya" || plan.IntentEvidence.Source != "context" || plan.IntentEvidence.Laya != nil {
+		t.Fatalf("continuation intent/evidence = %s/%+v", plan.Intent, plan.IntentEvidence)
+	}
+}
+
 func TestLayaModeUsesRulesWhenConfidenceIsBelowTheConfiguredMinimum(t *testing.T) {
 	cfg := fixtureConfig("repo")
 	cfg.Decision = config.DecisionSettings{Mode: "laya", MinimumConfidence: 0.8}
@@ -79,7 +108,7 @@ func TestLayaModeUsesRulesWhenConfidenceIsBelowTheConfiguredMinimum(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Intent != KindChange || plan.IntentEvidence.Source != "rules" || plan.IntentEvidence.Laya == nil ||
+	if plan.Intent != KindPlan || plan.IntentEvidence.Source != "rules" || plan.IntentEvidence.Laya == nil ||
 		!strings.Contains(plan.IntentEvidence.FallbackReason, "below the configured minimum") {
 		t.Fatalf("intent/evidence = %s/%+v", plan.Intent, plan.IntentEvidence)
 	}
@@ -107,19 +136,32 @@ func TestLayaFailuresUseRulesAndRemainVisible(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.Intent != KindChange || plan.IntentEvidence.Source != "rules" || plan.IntentEvidence.FallbackReason == "" {
+			if plan.Intent != KindPlan || plan.IntentEvidence.Source != "rules" || plan.IntentEvidence.FallbackReason == "" {
 				t.Fatalf("intent/evidence = %s/%+v", plan.Intent, plan.IntentEvidence)
 			}
 		})
 	}
 }
 
-func TestIntentEvaluationCorpusIsBalancedAndMatchesTheRulesBaseline(t *testing.T) {
-	file, err := os.Open("testdata/intent-evaluation.jsonl")
+func TestIntentEvaluationCorpusStaysPinnedToItsMeasuredBaseline(t *testing.T) {
+	corpus, err := os.ReadFile("testdata/intent-evaluation.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	reportBytes, err := os.ReadFile("../../benchmarks/runs/laya-intent-2026-09-25/report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var measured struct {
+		CorpusSHA256 string `json:"corpus_sha256"`
+	}
+	if err := json.Unmarshal(reportBytes, &measured); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(corpus)
+	if measured.CorpusSHA256 != hex.EncodeToString(hash[:]) {
+		t.Fatalf("historical Laya report corpus SHA-256 = %s, fixture SHA-256 = %s", measured.CorpusSHA256, hex.EncodeToString(hash[:]))
+	}
 
 	type item struct {
 		Text        string `json:"text"`
@@ -129,14 +171,14 @@ func TestIntentEvaluationCorpusIsBalancedAndMatchesTheRulesBaseline(t *testing.T
 	}
 	counts := make(map[string]int)
 	splits := make(map[string]int)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(strings.NewReader(string(corpus)))
 	for scanner.Scan() {
 		var row item
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
 			t.Fatal(err)
 		}
-		if got := infer(row.Text); got != row.RulesIntent {
-			t.Errorf("rules baseline for %q = %s, corpus says %s", row.Text, got, row.RulesIntent)
+		if !valid(row.Expected) || !valid(row.RulesIntent) {
+			t.Errorf("corpus has an unsupported label for %q: expected=%s rules=%s", row.Text, row.Expected, row.RulesIntent)
 		}
 		counts[string(row.Expected)]++
 		splits[row.Split]++
@@ -151,5 +193,14 @@ func TestIntentEvaluationCorpusIsBalancedAndMatchesTheRulesBaseline(t *testing.T
 	}
 	if splits["calibration"] != 32 || splits["test"] != 16 || len(splits) != 2 {
 		t.Errorf("corpus split counts = %v, want 32 calibration and 16 test", splits)
+	}
+}
+
+func valid(kind Kind) bool {
+	switch kind {
+	case KindUnderstand, KindSearch, KindPlan, KindChange:
+		return true
+	default:
+		return false
 	}
 }

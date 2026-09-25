@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,83 @@ func TestCmdDecideRejectsMalformedFlagsAndTrailingArguments(t *testing.T) {
 				t.Fatalf("cmdDecide accepted %v", args)
 			}
 		})
+	}
+}
+
+func TestParseDecisionContextRequiresOneStrictVersionedObject(t *testing.T) {
+	valid := `{"version":1,"repository":"api","accepted_plan_id":"plan-2","accepted_plan_revision":"r4","accepted_plan_current":true,"active_objective":"add search","scope_files":["internal/search.go"]}`
+	context, err := parseDecisionContext(valid)
+	if err != nil || context == nil || context.Version != 1 || context.Repository != "api" {
+		t.Fatalf("parsed context = %+v, err=%v", context, err)
+	}
+	for _, raw := range []string{
+		`{"version":1} {"version":1}`,
+		`{"version":1,"unknown":true}`,
+		`null`,
+		`{"repository":"api"}`,
+	} {
+		if _, err := parseDecisionContext(raw); err == nil {
+			t.Errorf("parseDecisionContext(%q) succeeded; want strict JSON/version rejection", raw)
+		}
+	}
+}
+
+func TestCmdDecideRequiresContextForContinuationAndUsesContextRepository(t *testing.T) {
+	settingsPath := settingsFile(t)
+	body, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(body, []byte("\n[model]\nbackend = \"claude\"\nbinary = \"claude\"\nexplore = \"sonnet\"\nplan = \"claude-opus-5\"\n")...)
+	if err := os.WriteFile(settingsPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var unresolvedOut bytes.Buffer
+	err = cmdDecide(settingsPath, []string{
+		"hazlo", "--budget", "5", "--traces", filepath.Join(t.TempDir(), "unresolved.db"), "--json",
+	}, &unresolvedOut)
+	if err == nil {
+		t.Fatal("cmdDecide accepted a bare continuation")
+	}
+	var unresolved decision.Plan
+	if err := json.Unmarshal(unresolvedOut.Bytes(), &unresolved); err != nil {
+		t.Fatalf("unresolved JSON = %q, err=%v", unresolvedOut.String(), err)
+	}
+	if unresolved.Resolution != decision.ResolutionNeedsContext || unresolved.ResolutionReason != decision.ResolutionReasonMissingAcceptedPlan || len(unresolved.Workflow.Steps) != 0 {
+		t.Fatalf("unresolved plan = %+v", unresolved)
+	}
+
+	unverifiedContextJSON := `{"version":1,"repository":"api","accepted_plan_id":"plan-4","accepted_plan_revision":"r2","active_objective":"añadir búsqueda"}`
+	var unverifiedOut bytes.Buffer
+	err = cmdDecide(settingsPath, []string{
+		"hazlo", "--budget", "5", "--traces", filepath.Join(t.TempDir(), "unverified.db"), "--json", "--decision-context", unverifiedContextJSON,
+	}, &unverifiedOut)
+	if err == nil {
+		t.Fatal("cmdDecide accepted a continuation with an unverified plan revision")
+	}
+	var unverified decision.Plan
+	if err := json.Unmarshal(unverifiedOut.Bytes(), &unverified); err != nil {
+		t.Fatalf("unverified JSON = %q, err=%v", unverifiedOut.String(), err)
+	}
+	if unverified.ResolutionReason != decision.ResolutionReasonPlanFreshnessUnverified || len(unverified.Workflow.Steps) != 0 {
+		t.Fatalf("unverified decision = %+v", unverified)
+	}
+
+	contextJSON := `{"version":1,"repository":"api","accepted_plan_id":"plan-4","accepted_plan_revision":"r2","accepted_plan_current":true,"active_objective":"añadir búsqueda"}`
+	var resolvedOut bytes.Buffer
+	err = cmdDecide(settingsPath, []string{
+		"hazlo", "--budget", "5", "--traces", filepath.Join(t.TempDir(), "resolved.db"), "--json", "--decision-context", contextJSON,
+	}, &resolvedOut)
+	if err != nil {
+		t.Fatalf("cmdDecide contextual dry run: %v; output=%s", err, resolvedOut.String())
+	}
+	var resolved decision.Plan
+	if err := json.Unmarshal(resolvedOut.Bytes(), &resolved); err != nil {
+		t.Fatalf("resolved JSON = %q, err=%v", resolvedOut.String(), err)
+	}
+	if resolved.Resolution != decision.ResolutionResolved || !resolved.ContextUsed || resolved.Intent != decision.KindChange || len(resolved.Repositories) != 1 || resolved.Repositories[0] != "api" {
+		t.Fatalf("resolved plan = %+v", resolved)
 	}
 }
 

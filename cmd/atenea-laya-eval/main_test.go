@@ -75,12 +75,12 @@ func TestPairedDryRunUsesOneLayaCallPerCaseAndKeepsPrivateTextOutOfReport(t *tes
 		t.Fatal(err)
 	}
 	metrics := got.BySplit["test"]
-	if got.Labeled != 2 || metrics == nil || metrics.RulesCorrect != 1 || metrics.GatedCorrect != 2 ||
-		metrics.GatedWins != 1 || metrics.FalseChangeRules != 1 || metrics.FalseChangeGated != 0 ||
+	if got.Labeled != 2 || metrics == nil || metrics.RulesCorrect != 2 || metrics.GatedCorrect != 2 ||
+		metrics.GatedWins != 0 || metrics.FalseChangeRules != 0 || metrics.FalseChangeGated != 0 ||
 		metrics.UnsafePlans != 0 {
 		t.Fatalf("report metrics = %+v", got)
 	}
-	if got.Cases[0].Rules != decision.KindChange || got.Cases[0].Gated != decision.KindPlan ||
+	if got.Cases[0].Rules != decision.KindPlan || got.Cases[0].Gated != decision.KindPlan ||
 		got.Cases[0].Model != "test-model" || got.Cases[0].RoutingModel != "multilingual" {
 		t.Fatalf("first case = %+v", got.Cases[0])
 	}

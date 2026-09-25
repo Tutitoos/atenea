@@ -43,6 +43,7 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	var criterion string
 	var maxDuration string
 	var maxTokens int
+	var contextJSON string
 	flags := flag.NewFlagSet("decide", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository id (default: every declared repository)")
@@ -59,11 +60,16 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	flags.StringVar(&criterion, "criterion", "", "acceptance criterion for the complete commission")
 	flags.StringVar(&maxDuration, "max-duration", "", "maximum active duration, e.g. 30m")
 	flags.IntVar(&maxTokens, "max-tokens", 0, "maximum model tokens per assigned turn")
+	flags.StringVar(&contextJSON, "decision-context", "", "versioned JSON context for a previously accepted plan; context never grants effects")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
 	if flags.NArg() != 0 {
 		return contract.Fail(contract.FailureInvalidInput, "unexpected argument %q after the commission", flags.Arg(0))
+	}
+	decisionContext, err := parseDecisionContext(contextJSON)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "--decision-context: %v", err)
 	}
 	effects, err := allow.effects()
 	if err != nil {
@@ -102,7 +108,7 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	}
 	planner := decision.Planner{Config: cfg, Selector: atenea, Estimator: estimator, Ranker: ranker}
 	plan, err := planner.BuildContext(context.Background(), decision.Request{
-		Text: text, Criterion: criterion, Limits: limits, Repository: repository, Files: files.values, BudgetUSD: budget,
+		Text: text, Context: decisionContext, Criterion: criterion, Limits: limits, Repository: repository, Files: files.values, BudgetUSD: budget,
 		Effects: effects, StandingEffects: cfg.Orchestrator.StandingEffects, Prefer: prefer, Tool: tool,
 	})
 	if err != nil {
@@ -135,7 +141,11 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 			"--run requires --confirm for write/external effects or an explicit raw MCP tool")
 	}
 	if confirm {
-		if err := confirmTTY(out, "decide --run "+text, plan.Workflow.GrantUSD, effects); err != nil {
+		confirmationText := text
+		if plan.ContextUsed && strings.TrimSpace(plan.Workflow.Task) != "" {
+			confirmationText = plan.Workflow.Task
+		}
+		if err := confirmTTY(out, "decide --run "+confirmationText, plan.Workflow.GrantUSD, effects); err != nil {
 			return err
 		}
 	}
@@ -251,6 +261,29 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+func parseDecisionContext(raw string) (*decision.IntentContext, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var context decision.IntentContext
+	if err := decoder.Decode(&context); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("unexpected data after the context object")
+		}
+		return nil, fmt.Errorf("invalid data after the context object: %w", err)
+	}
+	if context.Version == 0 {
+		return nil, fmt.Errorf("version is required")
+	}
+	return &context, nil
 }
 
 func recordCoordinatorReviewCycle(ctx context.Context, store *coordination.Store, coordinatorID string, run workflow.Run) error {
@@ -427,6 +460,14 @@ func printDecisionJSON(out io.Writer, plan decision.Plan) error {
 
 func printDecisionPlan(out io.Writer, plan decision.Plan, trace bool) {
 	fmt.Fprintf(out, "intent      %s\n", plan.Intent)
+	resolution := orDash(string(plan.Resolution))
+	if plan.ResolutionReason != "" {
+		resolution += " (" + plan.ResolutionReason + ")"
+	}
+	fmt.Fprintf(out, "resolution  %s\n", resolution)
+	if plan.ContextUsed {
+		fmt.Fprintln(out, "context     supplied")
+	}
 	fmt.Fprintf(out, "coordinator %s\n", orDash(plan.Coordinator))
 	fmt.Fprintf(out, "specialists %s\n", orDash(strings.Join(plan.Specialists, ", ")))
 	fmt.Fprintf(out, "criterion   %s\n", orDash(plan.Criterion))
