@@ -622,6 +622,7 @@ func TestAToolIsAimableAtARepository(t *testing.T) {
 	exemptFromAimable := map[string]string{
 		"catalog.repositories": "answers 'which repositories exist' — the question you ask before you know the name",
 		"workspace.context":    "coordinates explicit targets and must never collapse to one repository argument",
+		"workflow.status":      "loads a persisted workflow by id and checks the stored repository against the session scope",
 	}
 
 	atenea := buildService(t, mcpSettings(t))
