@@ -133,3 +133,29 @@ func TestDeviceConflictDetectionDoesNotDependOnSessionOrder(t *testing.T) {
 		t.Fatalf("ordered conflict = %v, want DEVICE_BUSY", err)
 	}
 }
+
+func TestCandidateNestedSessionIdentityIsRequiredForOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		raw   string
+		valid bool
+	}{
+		{`{"structuredContent":{"data":{"sessions":[{"name":"flow","device":{"id":"device-a","name":"Fixture phone","platform":"ios"}}]}}}`, true},
+		{`{"structuredContent":{"data":{"sessions":[]}}}`, true},
+		{`{"structuredContent":{"data":{"sessions":[{"name":"flow","device":{"name":"Fixture phone"}}]}}}`, false},
+		{`{"structuredContent":{"data":{"sessions":[{"device":{"id":"device-a"}}]}}}`, false},
+		{`{"structuredContent":{"data":{"sessions":[{"name":"flow","device":{"id":42}}]}}}`, false},
+		{`{"structuredContent":{"data":{"sessions":[null]}}}`, false},
+	} {
+		var body map[string]any
+		if err := json.Unmarshal([]byte(tc.raw), &body); err != nil {
+			t.Fatal(err)
+		}
+		rows, ok := deviceSessionRows(body)
+		if ok != tc.valid {
+			t.Fatalf("session identity validity=%t for %s", ok, tc.raw)
+		}
+		if ok && len(rows) > 0 && (rows[0].name != "flow" || rows[0].device != "device-a" || rows[0].label != "Fixture phone" || rows[0].platform != "ios") {
+			t.Fatalf("incorrect identity parsed: %+v", rows)
+		}
+	}
+}

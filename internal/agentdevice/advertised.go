@@ -3,28 +3,35 @@ package agentdevice
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // AdvertisedSchema decorates only the verified upstream release. The returned
 // map is detached from the upstream bytes; callers must not mutate the latter.
 // A changed upstream schema is withheld until its contract is reviewed.
 func AdvertisedSchema(version, tool string, upstream json.RawMessage) (map[string]any, error) {
-	if tool != "open" && tool != "click" && tool != "fill" {
+	interaction := tool == "open" || tool == "click" || tool == "fill"
+	if !interaction && !IsCandidate(version) {
 		return nil, fmt.Errorf("agent-device %s has no advertised adaptation", tool)
 	}
-	known, err := schemas.ReadFile("testdata/" + tool + "-" + Version + ".json")
-	if err != nil || strings.TrimPrefix(version, "v") != Version || Fingerprint(upstream) != Fingerprint(known) {
-		return nil, fmt.Errorf("agent-device %s schema/version is unverified", tool)
+	if err := VerifySchema(version, tool, upstream); err != nil {
+		return nil, err
 	}
 	var out map[string]any
 	if err := json.Unmarshal(upstream, &out); err != nil {
 		return nil, err
 	}
 	required, _ := out["required"].([]any)
-	out["required"] = append(required, "session", "cwd")
 	properties := out["properties"].(map[string]any)
-	properties["session"].(map[string]any)["minLength"] = float64(1)
+	if IsCandidate(version) {
+		// This field is consumed by Atenea, after comparison with cmd.Dir.
+		// It is deliberately absent from the upstream wire arguments.
+		properties["cwd"] = map[string]any{"type": "string", "description": "Atenea workspace binding; must equal this backend's explicit working_directory. Consumed locally, not sent upstream."}
+	}
+	if interaction {
+		required = append(required, "session")
+		properties["session"].(map[string]any)["minLength"] = float64(1)
+	}
+	out["required"] = append(required, "cwd")
 	properties["cwd"].(map[string]any)["pattern"] = `^/`
 	properties["cwd"].(map[string]any)["description"] = "Explicit absolute working directory for this flow."
 	if tool == "open" {

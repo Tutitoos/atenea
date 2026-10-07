@@ -887,6 +887,10 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 		"negative timeout":       "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
 		"dotted id":              "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
 		"unknown expose":         "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
+		"cwd over http":          rawBlock("") + "working_directory = \"/project\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"relative cwd":           "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\nworking_directory = \"project\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"unclean cwd":            "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\nworking_directory = \"/project/../other\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"pointer cwd":            "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nworking_directory = \"/project\"\n",
 		"unknown raw instance":   rawBlock("") + "instance = \"per_repository\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
 		// A stdio raw block still has to carry the same budget as any other
 		// one; what is no longer refused is the transport itself, which
@@ -944,6 +948,35 @@ url = "http://127.0.0.1:1/mcp"
 instance = "per_chat"
 `)); err == nil {
 		t.Fatal("per_chat pointer was accepted")
+	}
+}
+
+func TestRawStdioWorkspaceSettingIsReadBackWithoutDefaulting(t *testing.T) {
+	block := `
+[[mcp_server]]
+id = "agent-device"
+command = ["node", "/qualified/package/bin/agent-device.mjs", "mcp"]
+working_directory = "/qualified/workspace"
+expose = "raw"
+tools = ["open"]
+effects = ["write"]
+`
+	cfg, err := config.Load(write(t, minimal+block))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].WorkingDirectory != "/qualified/workspace" {
+		t.Fatalf("workspace setting lost: %v", cfg.MCPServers)
+	}
+	if cfg.MCPServers[0].Probe().WorkingDirectory != "/qualified/workspace" {
+		t.Fatal("readiness probe lost workspace binding")
+	}
+	legacy, err := config.Load(write(t, minimal+strings.ReplaceAll(block, "working_directory = \"/qualified/workspace\"\n", "")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.MCPServers[0].WorkingDirectory != "" {
+		t.Fatal("implicit service cwd was labeled as explicit")
 	}
 }
 

@@ -55,16 +55,17 @@ import (
 // could come back and no tool could be called. It kept a process alive for its
 // web UI and that was all it could ever do.
 type stdioBackend struct {
-	version      atomic.Value
-	id           string
-	command      []string
-	env          map[string]string
-	timeout      time.Duration
-	allowed      []string
-	mode         ProtocolMode
-	activeModern bool
-	protocol     mcpcompat.RequestedObserved
-	discovery    mcpcompat.Discovery
+	version          atomic.Value
+	id               string
+	command          []string
+	env              map[string]string
+	workingDirectory string
+	timeout          time.Duration
+	allowed          []string
+	mode             ProtocolMode
+	activeModern     bool
+	protocol         mcpcompat.RequestedObserved
+	discovery        mcpcompat.Discovery
 
 	// mu guards the spawn and everything the spawn produces, and it is held
 	// for the whole of it -- the fork, the handshake's round trip and the
@@ -174,18 +175,23 @@ func newStdio(spec Spec) *stdioBackend {
 		timeout = 10 * time.Second
 	}
 	return &stdioBackend{
-		id:       spec.ID,
-		command:  slices.Clone(spec.Command),
-		env:      spec.Env,
-		timeout:  timeout,
-		allowed:  slices.Clone(spec.Allowed),
-		mode:     normalizedProtocolMode(spec.ProtocolMode),
-		protocol: mcpcompat.RequestedObserved{Requested: requestedEra(spec.ProtocolMode), Observed: mcpcompat.Unknown},
+		id:               spec.ID,
+		command:          slices.Clone(spec.Command),
+		env:              spec.Env,
+		workingDirectory: spec.WorkingDirectory,
+		timeout:          timeout,
+		allowed:          slices.Clone(spec.Allowed),
+		mode:             normalizedProtocolMode(spec.ProtocolMode),
+		protocol:         mcpcompat.RequestedObserved{Requested: requestedEra(spec.ProtocolMode), Observed: mcpcompat.Unknown},
 	}
 }
 
 func (b *stdioBackend) ID() string    { return b.id }
 func (b *stdioBackend) Where() string { return strings.Join(b.command, " ") }
+
+// WorkingDirectory is an explicit spawn binding, never the service's implicit
+// inherited cwd. spawn verifies it again before starting each child process.
+func (b *stdioBackend) WorkingDirectory() string { return b.workingDirectory }
 
 func (b *stdioBackend) Allows(tool string) bool { return slices.Contains(b.allowed, tool) }
 func (b *stdioBackend) Allowed() []string       { return slices.Clone(b.allowed) }
@@ -457,6 +463,9 @@ func (b *stdioBackend) spawn() (*process, error) {
 	// child's life to the first chat's context is how a shared server becomes
 	// a per-chat one again, invisibly.
 	cmd := exec.Command(b.command[0], b.command[1:]...)
+	if err := procgroup.BindWorkingDirectory(cmd, b.workingDirectory); err != nil {
+		return nil, b.fail(contract.FailureInvalidInput, "%v", err)
+	}
 	// Isolate rather than Contain for the same reason, and the two do not
 	// mix: Contain wires a Cancel that only a CommandContext may carry, and
 	// Start refuses a Cmd that has one otherwise. This backend drives the

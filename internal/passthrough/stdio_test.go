@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,7 +82,11 @@ func TestHelperProcess(t *testing.T) {
 				time.Sleep(d)
 			}
 			initialized = true
-			reply(msg.ID, map[string]any{"protocolVersion": "2025-06-18", "serverInfo": map[string]any{"name": "helper"}})
+			info := map[string]any{"name": "helper"}
+			if version := os.Getenv("HELPER_SERVER_VERSION"); version != "" {
+				info["version"] = version
+			}
+			reply(msg.ID, map[string]any{"protocolVersion": "2025-06-18", "serverInfo": info})
 			continue
 		case "notifications/initialized":
 			continue
@@ -128,6 +133,22 @@ func TestHelperProcess(t *testing.T) {
 				{"name": "index_repository", "description": "index", "inputSchema": map[string]any{"type": "object"}},
 			}})
 		case "tools/call":
+			if ledger := os.Getenv("HELPER_CALL_LEDGER"); ledger != "" {
+				file, err := os.OpenFile(ledger, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+				if err != nil {
+					panic(err)
+				}
+				_, _ = fmt.Fprintln(file, "tools/call")
+				_ = file.Close()
+			}
+			if os.Getenv("HELPER_REPORT_CWD") == "1" {
+				cwd, err := os.Getwd()
+				if err != nil {
+					panic(err)
+				}
+				reply(msg.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": cwd}}})
+				continue
+			}
 			// A slow tool, so a test can have several in flight at once and
 			// prove the answers do not cross.
 			if d, err := time.ParseDuration(fmt.Sprint(msg.Params.Arguments["sleep"])); err == nil {
@@ -173,6 +194,53 @@ func helper(t *testing.T, allowed []string, env map[string]string) passthrough.B
 	})
 	t.Cleanup(b.Close)
 	return b
+}
+
+func TestStdioWorkspaceIsTheActualChildCwd(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := passthrough.New(passthrough.Spec{
+		ID: "workspace", Command: []string{self, "-test.run=TestHelperProcess", "-test.v=false"},
+		Env:              map[string]string{"ATENEA_STDIO_HELPER": "1", "HELPER_REPORT_CWD": "1"},
+		WorkingDirectory: workspace, Allowed: []string{"search_code"},
+	})
+	t.Cleanup(b.Close)
+	if got := b.(interface{ WorkingDirectory() string }).WorkingDirectory(); got != workspace {
+		t.Fatal(got)
+	}
+	raw, err := b.Call(t.Context(), "search_code", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) != 1 || result.Content[0].Text != workspace {
+		t.Fatalf("actual child cwd: %s", raw)
+	}
+
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(workspace, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{link, filepath.Join(workspace, "missing"), "relative"} {
+		bad := passthrough.New(passthrough.Spec{ID: "workspace", Command: []string{self, "-test.run=TestHelperProcess"}, WorkingDirectory: dir, Allowed: []string{"search_code"}})
+		if _, err := bad.Tools(t.Context()); contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Fatalf("unsafe cwd %q: %v", dir, err)
+		}
+		bad.Close()
+	}
 }
 
 // A command declaration produces a stdio backend and a url one does not: the

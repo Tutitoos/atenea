@@ -1,0 +1,146 @@
+{
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Agent-device session name."
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "apple",
+        "android",
+        "harmonyos",
+        "vega",
+        "linux",
+        "web",
+        "ios",
+        "macos"
+      ],
+      "description": "Platform selector used to resolve a device."
+    },
+    "deviceTarget": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Device target form. Maps to the CLI --target flag."
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Alias for deviceTarget on commands without a UI target field. Interaction commands reserve target for the UI element."
+    },
+    "device": {
+      "type": "string",
+      "description": "Device name selector (a UDID belongs in udid, a serial in serial)."
+    },
+    "udid": {
+      "type": "string",
+      "description": "Apple device or simulator UDID; the selector that pins one device when several share a name."
+    },
+    "serial": {
+      "type": "string",
+      "description": "Android, HarmonyOS, or Vega VVD serial selector."
+    },
+    "androidDeviceAllowlist": {
+      "type": "string",
+      "description": "Android serial allowlist used for device resolution."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Remote tenant identifier."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Lease run identifier."
+    },
+    "leaseId": {
+      "type": "string",
+      "description": "Existing lease identifier."
+    },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug diagnostics."
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right",
+        "top",
+        "bottom"
+      ]
+    },
+    "amount": {
+      "type": "number",
+      "description": "Platform scroll amount."
+    },
+    "pixels": {
+      "type": "integer",
+      "description": "Pixel scroll amount.",
+      "minimum": 0
+    },
+    "until": {
+      "type": "string",
+      "description": "Repeat scroll passes until this selector is visible on screen, then stop. Not valid with the top/bottom edge directions, which carry their own stop condition."
+    },
+    "durationMs": {
+      "type": "integer",
+      "description": "Scroll duration in milliseconds when the backend supports pacing.",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "settle": {
+      "type": "boolean",
+      "description": "After the action, wait for the UI to go quiet and return the settled diff vs the pre-action tree in the same response. Best-effort; never fails the action."
+    },
+    "settleQuietMs": {
+      "type": "integer",
+      "description": "Settle: quiet window in milliseconds (default 500).",
+      "minimum": 0
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "description": "Settle: wait deadline in milliseconds (default 10000).",
+      "minimum": 1
+    },
+    "noRecord": {
+      "type": "boolean",
+      "description": "Do not record this action."
+    },
+    "mcpOutputFormat": {
+      "type": "string",
+      "enum": [
+        "optimized",
+        "json"
+      ],
+      "description": "MCP text content format. Defaults to optimized agent-friendly text; use json for JSON text. Structured content is always returned separately."
+    },
+    "includeCost": {
+      "type": "boolean",
+      "description": "Include per-command agent-cost (cost.wallClockMs, …) in structuredContent. Defaults to off; the default response shape is unchanged."
+    },
+    "responseLevel": {
+      "type": "string",
+      "enum": [
+        "digest",
+        "default",
+        "full"
+      ],
+      "description": "Response verbosity: token-cheap digest / default (today) / full. Defaults to default; the default response shape is unchanged."
+    }
+  },
+  "required": [
+    "direction"
+  ],
+  "additionalProperties": false
+}

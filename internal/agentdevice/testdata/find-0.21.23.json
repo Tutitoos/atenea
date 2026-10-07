@@ -1,0 +1,152 @@
+{
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Agent-device session name."
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "apple",
+        "android",
+        "harmonyos",
+        "vega",
+        "linux",
+        "web",
+        "ios",
+        "macos"
+      ],
+      "description": "Platform selector used to resolve a device."
+    },
+    "deviceTarget": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Device target form. Maps to the CLI --target flag."
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Alias for deviceTarget on commands without a UI target field. Interaction commands reserve target for the UI element."
+    },
+    "device": {
+      "type": "string",
+      "description": "Device name selector (a UDID belongs in udid, a serial in serial)."
+    },
+    "udid": {
+      "type": "string",
+      "description": "Apple device or simulator UDID; the selector that pins one device when several share a name."
+    },
+    "serial": {
+      "type": "string",
+      "description": "Android, HarmonyOS, or Vega VVD serial selector."
+    },
+    "androidDeviceAllowlist": {
+      "type": "string",
+      "description": "Android serial allowlist used for device resolution."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Remote tenant identifier."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Lease run identifier."
+    },
+    "leaseId": {
+      "type": "string",
+      "description": "Existing lease identifier."
+    },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug diagnostics."
+    },
+    "locator": {
+      "type": "string",
+      "enum": [
+        "any",
+        "text",
+        "label",
+        "value",
+        "role",
+        "id"
+      ]
+    },
+    "query": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "click",
+        "focus",
+        "exists",
+        "list",
+        "getText",
+        "getAttrs",
+        "wait",
+        "fill",
+        "type"
+      ]
+    },
+    "value": {
+      "type": "string"
+    },
+    "timeoutMs": {
+      "type": "integer"
+    },
+    "first": {
+      "type": "boolean"
+    },
+    "last": {
+      "type": "boolean"
+    },
+    "depth": {
+      "type": "integer"
+    },
+    "raw": {
+      "type": "boolean"
+    },
+    "noRecord": {
+      "type": "boolean",
+      "description": "Do not record this action."
+    },
+    "record": {
+      "type": "boolean",
+      "description": "Force-record this out-of-band observation into a repair-armed heal (mutually exclusive with noRecord). Authored replay steps are recorded automatically and never need this. On find, valid only for a read-only action."
+    },
+    "mcpOutputFormat": {
+      "type": "string",
+      "enum": [
+        "optimized",
+        "json"
+      ],
+      "description": "MCP text content format. Defaults to optimized agent-friendly text; use json for JSON text. Structured content is always returned separately."
+    },
+    "includeCost": {
+      "type": "boolean",
+      "description": "Include per-command agent-cost (cost.wallClockMs, …) in structuredContent. Defaults to off; the default response shape is unchanged."
+    },
+    "responseLevel": {
+      "type": "string",
+      "enum": [
+        "digest",
+        "default",
+        "full"
+      ],
+      "description": "Response verbosity: token-cheap digest / default (today) / full. Defaults to default; the default response shape is unchanged."
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false
+}

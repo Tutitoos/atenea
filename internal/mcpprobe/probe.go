@@ -69,11 +69,12 @@ var prober = &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 // Server is one endpoint to check. Exactly one of URL or Command is set;
 // which one is set is what picks the transport.
 type Server struct {
-	ID      string
-	URL     string
-	Command []string
-	Env     map[string]string
-	Timeout time.Duration
+	ID               string
+	URL              string
+	Command          []string
+	Env              map[string]string
+	WorkingDirectory string
+	Timeout          time.Duration
 	// ProtocolMode defaults to legacy. Auto may fall back only after an
 	// explicit compatibility response; an ambiguous timeout never changes
 	// protocol eras.
@@ -434,6 +435,9 @@ func identify(raw json.RawMessage, era mcpcompat.Era) (string, string) {
 
 func probeStdio(ctx context.Context, s Server, modern bool) (probeObservation, error) {
 	cmd := exec.CommandContext(ctx, s.Command[0], s.Command[1:]...)
+	if err := procgroup.BindWorkingDirectory(cmd, s.WorkingDirectory); err != nil {
+		return probeObservation{}, err
+	}
 	// An MCP server routinely spawns helpers of its own -- language servers,
 	// indexers -- and killing only the process Atenea started leaves those
 	// holding the stderr pipe they inherited. Wait would then block until the

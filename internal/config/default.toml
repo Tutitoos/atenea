@@ -4491,6 +4491,11 @@ reads_subject = true
 # `execute_shell_command` beside `find_symbol`, and no schema says which is
 # which. A raw backend is also kept out of `atenea wrap`, since pointing a
 # client straight at it would route around both.
+# For a raw stdio command, optional working_directory = "/canonical/workspace"
+# binds the child cwd. It requires an absolute clean existing directory without
+# symlink aliases, checked before probes and raw spawns. A request cannot override
+# it; HTTP and pointer declarations refuse this setting. agent-device 0.21.23
+# requires an explicit binding. Omission preserves inherited cwd for other MCPs.
 # ---------------------------------------------------------------------------
 # [[mcp_server]]
 # id = "semgrep"

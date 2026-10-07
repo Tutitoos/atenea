@@ -1,0 +1,187 @@
+{
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Agent-device session name."
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "apple",
+        "android",
+        "harmonyos",
+        "vega",
+        "linux",
+        "web",
+        "ios",
+        "macos"
+      ],
+      "description": "Platform selector used to resolve a device."
+    },
+    "deviceTarget": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Device target form. Maps to the CLI --target flag."
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Alias for deviceTarget on commands without a UI target field. Interaction commands reserve target for the UI element."
+    },
+    "device": {
+      "type": "string",
+      "description": "Device name selector (a UDID belongs in udid, a serial in serial)."
+    },
+    "udid": {
+      "type": "string",
+      "description": "Apple device or simulator UDID; the selector that pins one device when several share a name."
+    },
+    "serial": {
+      "type": "string",
+      "description": "Android, HarmonyOS, or Vega VVD serial selector."
+    },
+    "androidDeviceAllowlist": {
+      "type": "string",
+      "description": "Android serial allowlist used for device resolution."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Remote tenant identifier."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Lease run identifier."
+    },
+    "leaseId": {
+      "type": "string",
+      "description": "Existing lease identifier."
+    },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug diagnostics."
+    },
+    "app": {
+      "type": "string",
+      "description": "App name, bundle id, package, or URL."
+    },
+    "url": {
+      "type": "string",
+      "description": "Optional URL passed with an app shell."
+    },
+    "surface": {
+      "type": "string",
+      "enum": [
+        "app",
+        "frontmost-app",
+        "desktop",
+        "menubar"
+      ],
+      "description": "macOS presentation surface to open: the app itself, the frontmost app, the desktop, or the menu bar."
+    },
+    "activity": {
+      "type": "string",
+      "description": "Android activity name."
+    },
+    "launchConsole": {
+      "type": "string",
+      "description": "Launch console mode."
+    },
+    "launchArgs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Launch arguments forwarded verbatim to the platform launch command."
+    },
+    "relaunch": {
+      "type": "boolean",
+      "description": "Force relaunch."
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "description": "Startup budget in milliseconds. Bounds the Simulator boot wait, so a never-booted Simulator can finish its first-boot migration; omit for the default startup behavior.",
+      "minimum": 1
+    },
+    "waitMs": {
+      "type": "integer",
+      "description": "Block this open for up to n milliseconds (100-120000) while another session holds the device, then fail with DEVICE_IN_USE naming that session. Only session contention is waited for: a device claim held by another workspace is refused at once with its recovery command. A device that never frees, or is taken again while this open waits, costs the full budget, which extends this command's timeout envelope rather than eating into it.",
+      "minimum": 100,
+      "maximum": 120000
+    },
+    "foreground": {
+      "type": "boolean",
+      "description": "Include an initial interactive snapshot in a fresh open response. With no app argument, discover the sole running app on the sole booted iOS simulator; ambiguous environments fail closed."
+    },
+    "saveScript": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Overwrite an existing --save-script target instead of refusing (alias: --overwrite)."
+    },
+    "testIme": {
+      "type": "boolean",
+      "description": "Activate the headless Android test IME for deterministic Unicode text entry (default on for emulators; opt-in on real devices)."
+    },
+    "noRecord": {
+      "type": "boolean",
+      "description": "Do not record this action."
+    },
+    "metroHost": {
+      "type": "string",
+      "description": "Session-scoped Metro/debug host hint applied to the opened app."
+    },
+    "metroPort": {
+      "type": "integer",
+      "description": "Session-scoped Metro/debug port hint applied to the opened app. On an emulator/simulator the host defaults to the loopback alias (Android 10.0.2.2, iOS 127.0.0.1) when --metro-host is omitted; physical devices still require an explicit --metro-host.",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "bundleUrl": {
+      "type": "string",
+      "description": "Session-scoped bundle URL hint applied to the opened app."
+    },
+    "launchUrl": {
+      "type": "string",
+      "description": "Session-scoped launch URL hint applied to the opened app."
+    },
+    "mcpOutputFormat": {
+      "type": "string",
+      "enum": [
+        "optimized",
+        "json"
+      ],
+      "description": "MCP text content format. Defaults to optimized agent-friendly text; use json for JSON text. Structured content is always returned separately."
+    },
+    "includeCost": {
+      "type": "boolean",
+      "description": "Include per-command agent-cost (cost.wallClockMs, …) in structuredContent. Defaults to off; the default response shape is unchanged."
+    },
+    "responseLevel": {
+      "type": "string",
+      "enum": [
+        "digest",
+        "default",
+        "full"
+      ],
+      "description": "Response verbosity: token-cheap digest / default (today) / full. Defaults to default; the default response shape is unchanged."
+    }
+  },
+  "additionalProperties": false
+}

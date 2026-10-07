@@ -1,6 +1,8 @@
 package mcpprobe_test
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -168,6 +170,46 @@ func TestServerDescribesItsSelectedTransportAndProbeAllPreservesOrder(t *testing
 }
 
 // --- stdio ---------------------------------------------------------------
+
+func TestProbeWorkspaceHelper(t *testing.T) {
+	if os.Getenv("ATENEA_PROBE_CWD_HELPER") != "1" {
+		t.Skip("not a helper process")
+	}
+	if !bufio.NewScanner(os.Stdin).Scan() {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"protocolVersion": "2025-06-18", "serverInfo": map[string]any{"name": cwd, "version": "fixture"}}})
+}
+
+func TestReadinessUsesTheSameBoundChildWorkspace(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := mcpprobe.Server{ID: "bound", Command: []string{self, "-test.run=TestProbeWorkspaceHelper", "-test.v=false"}, Env: map[string]string{"ATENEA_PROBE_CWD_HELPER": "1"}, WorkingDirectory: workspace}
+	result := mcpprobe.Probe(t.Context(), s)
+	if !result.OK || result.Name != workspace {
+		t.Fatalf("actual probe cwd: %+v", result)
+	}
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(workspace, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{link, filepath.Join(workspace, "missing"), "relative"} {
+		s.WorkingDirectory = bad
+		if result := mcpprobe.Probe(t.Context(), s); result.OK || result.Err == nil || !strings.Contains(result.Err.Error(), "working_directory") {
+			t.Fatalf("unsafe probe workspace %q: %+v", bad, result)
+		}
+	}
+}
 
 func TestAStdioServerAnswersOverThePipe(t *testing.T) {
 	got := mcpprobe.Probe(t.Context(), mcpprobe.Server{
