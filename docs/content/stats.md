@@ -15,6 +15,8 @@ atenea stats --month --repo current
 atenea stats --since 2h --tool search --used
 atenea stats --since 2026-09-01T00:00:00+02:00 --json
 atenea stats --today --used --watch
+atenea stats --context
+atenea stats --context --since 24h --json
 ```
 
 ## Periods and output
@@ -30,6 +32,44 @@ time zone. Calls belong to the period in which they started.
 continues into the next day, week or month. It requires a terminal; Ctrl+C restores
 the cursor and original screen. Use `--used` or provider/tool filters to keep a
 large catalog manageable. `--watch` and `--json` cannot be combined.
+
+## Recent request context
+
+`--context` is an opt-in, database-only view for a trailing window of at most
+168 hours. It defaults to the last 168 hours; `--since` can narrow it, and
+`--json` returns the same bounded fields as the terminal view. Other period,
+filter, watch, and diagnostic flags are unavailable in this view. A missing
+database is reported as unavailable without creating one. The view does not
+contact the service or a provider. Its window is `[since, until)`, so an event
+starting exactly at `until` belongs to the next window. Completed counts also
+require completion strictly before `until`; widen the end of the same window to
+include an event that completed exactly at that boundary.
+
+The view separates completed **tool requests** from completed implementation
+**attempts**. One request may generate zero, one, or several attempts. These
+low-level counts do not identify unique people, conversations, or user journeys.
+Origins are `normal`, `synthetic`, or `unknown`. They are metadata asserted by
+the calling client. `normal` does **not** prove a human request, and these
+counts do not constitute a validated sample for the Laya evaluation in issue
+#165. Client and profile are fixed categories; unrecognized
+values are `other`. Client version is reduced to a numeric major version or
+`other`/`unknown`. No raw metadata, prompts, arguments, file paths, event IDs,
+receipts, or diagnostic reasons appear in this output.
+
+At most 20 dimension rows appear, sorted by recorded request volume, with
+remaining requests and attempts in `overflow`. JSON has the same cap. The view
+reports active requests separately, missing request and attempt context, omitted
+historical rollups, unknown-origin requests and attempts, historical dropped
+recording operations, and recovered interruptions at each accounting level. A partial
+flag means observed counts are incomplete or their attribution is uncertain.
+`history_available` means an existing database was readable; it does not
+establish that the recorder is running now. `last_recorded` is the latest stored
+event across retained history and may fall outside the query window. Zero
+recorded calls in a window do not prove zero user activity.
+Rollup days that straddle the window or lack a trustworthy completion bound are
+omitted. Older databases may have no context metadata. The default `atenea
+stats` view remains the place for outcome rates and exact P95; this context
+view does not calculate or display percentiles.
 
 `--repo`, `--provider`, and `--tool` filter repository ID, provider ID and a tool
 name substring respectively. Provider IDs on requests identify the entry point

@@ -34,6 +34,7 @@ Read recorded activity without probing tools. Defaults to all retained history.
   --tool TEXT         filter tool names by substring
   --used              omit tools with no activity in this period
   --errors            paginated request failures and retained cause counts
+  --context           bounded client/profile/origin/version activity, trailing 168h
   --limit N           errors per page, 1..500 (default 50)
   --cursor TOKEN      next page; freezes the original time window
   --error-code CODE   exact diagnostic code (requires --errors)
@@ -55,6 +56,7 @@ type statsOptions struct {
 	today, week, month, used, json, watch      bool
 	since, repo, provider, tool, color         string
 	errors                                     bool
+	contextView                                bool
 	limit                                      int
 	cursor, errorCode, client, profile, origin string
 }
@@ -76,6 +78,7 @@ func parseStats(args []string) (statsOptions, error) {
 	f.BoolVar(&o.watch, "watch", false, "")
 	f.StringVar(&o.color, "color", "auto", "")
 	f.BoolVar(&o.errors, "errors", false, "")
+	f.BoolVar(&o.contextView, "context", false, "")
 	f.IntVar(&o.limit, "limit", 50, "")
 	f.StringVar(&o.cursor, "cursor", "", "")
 	f.StringVar(&o.errorCode, "error-code", "", "")
@@ -89,10 +92,13 @@ func parseStats(args []string) (statsOptions, error) {
 		return o, contract.Fail(contract.FailureInvalidInput, "stats takes flags only")
 	}
 	count := 0
+	limitSet := false
 	f.Visit(func(v *flag.Flag) {
 		switch v.Name {
 		case "today", "week", "month", "since":
 			count++
+		case "limit":
+			limitSet = true
 		}
 	})
 	if count > 1 {
@@ -112,6 +118,9 @@ func parseStats(args []string) (statsOptions, error) {
 	}
 	if o.errors && o.watch {
 		return o, contract.Fail(contract.FailureInvalidInput, "--errors does not support --watch; use the returned cursor")
+	}
+	if o.contextView && (o.errors || o.watch || o.today || o.week || o.month || o.used || limitSet || o.repo != "" || o.provider != "" || o.tool != "" || o.cursor != "" || o.errorCode != "" || o.client != "" || o.profile != "" || o.origin != "") {
+		return o, contract.Fail(contract.FailureInvalidInput, "--context supports only --since, --json and --color")
 	}
 	return o, nil
 }
@@ -194,6 +203,26 @@ func cmdStats(settingsPath string, args []string, out io.Writer) error {
 		}
 		return renderStatsErrors(out, page)
 	}
+	if o.contextView {
+		q, e := o.query(time.Now())
+		if e != nil {
+			return e
+		}
+		if q.Since.IsZero() {
+			q.Since = q.Until.Add(-168 * time.Hour)
+		}
+		if !q.Since.Before(q.Until) || q.Until.Sub(q.Since) > 168*time.Hour {
+			return contract.Fail(contract.FailureInvalidInput, "--context window must be positive and at most 168 hours")
+		}
+		page, e := core.StatsContextFromDisk(ctx, cfg, q)
+		if e != nil {
+			return e
+		}
+		if o.json {
+			return json.NewEncoder(out).Encode(page)
+		}
+		return renderStatsContext(out, page)
+	}
 	fetch := func(q toolstats.Query) (toolstats.Snapshot, error) {
 		if status, ok := core.Asked(); ok && status.Settings == cfg.Source {
 			s, e := core.AskedStats(q)
@@ -246,6 +275,41 @@ func cmdStats(settingsPath string, args []string, out io.Writer) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+func renderStatsContext(out io.Writer, page toolstats.ContextBreakdown) error {
+	if _, err := fmt.Fprintf(out, "ATENEA STATS CONTEXT  %s → %s\nHistórico legible=%t solicitudes=%d intentos=%d activas=%d  parcial=%t\n", page.Since.Local().Format(time.RFC3339), page.Until.Local().Format(time.RFC3339), page.HistoryAvailable, page.Requests, page.Attempts, page.ActiveRequests, page.Partial); err != nil {
+		return err
+	}
+	if page.RecordingStarted != nil {
+		if _, err := fmt.Fprintf(out, "Registro desde: %s\n", page.RecordingStarted.Local().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if page.LastRecorded != nil {
+		if _, err := fmt.Fprintf(out, "Último evento registrado: %s\n", page.LastRecorded.Local().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	for _, r := range page.Rows {
+		if _, err := fmt.Fprintf(out, "%d solicitudes  %d intentos  cliente=%s perfil=%s origen=%s versión=%s\n", r.Requests, r.Attempts, r.Client, r.Profile, r.Origin, r.Version); err != nil {
+			return err
+		}
+	}
+	if page.Overflow.Requests > 0 || page.Overflow.Attempts > 0 {
+		if _, err := fmt.Fprintf(out, "Resto: %d solicitudes, %d intentos\n", page.Overflow.Requests, page.Overflow.Attempts); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(out, "Sin contexto: solicitudes=%d intentos=%d; origen desconocido: solicitudes=%d intentos=%d; rollups omitidos: solicitudes=%d intentos=%d; grabaciones perdidas=%d; interrupciones: solicitudes=%d intentos=%d\nLas solicitudes son llamadas de herramientas, no personas ni recorridos únicos. P95: consultar la vista normal.\n", page.MissingContext, page.MissingAttemptContext, page.UnknownOriginRequests, page.UnknownOriginAttempts, page.OmittedRollupRequests, page.OmittedRollupAttempts, page.DroppedRecordings, page.RecoveredRequests, page.RecoveredAttempts); err != nil {
+		return err
+	}
+	for _, note := range page.Notes {
+		if _, err := fmt.Fprintf(out, "Aviso: %s\n", note); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // statsWidth obtains the output width with a stable redirected-output fallback.
