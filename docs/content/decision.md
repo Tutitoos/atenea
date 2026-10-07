@@ -15,6 +15,50 @@ persists nor launches the workflow. The managed `atenea-plan-mode` Codex skill
 uses this surface automatically only while the active collaboration mode is
 Plan.
 
+## Bounded decision explanation
+
+`atenea decide` prints an `explanation v1` summary before its full text plan.
+`atenea decide --json` and MCP `decision.plan` return the same `explanation`
+object beside the existing complete plan. This is a projection of the already
+computed plan; it performs no model call, provider probe, storage write, or
+workflow execution. The MCP boundary remains `dry_run = true` and
+`execution_authorized = false`.
+
+The object uses closed codes for intent, source (`rules`, `context`, `laya`),
+classifier mode and result, resolution and abstention reason, context use,
+readiness, fixed readiness reasons, budget, declared effects, and capability
+selection. `unknown` means the plan does not establish that fact;
+`candidates_only` means there are
+registered candidates but no implementation was selected. An `unavailable`
+choice is distinct from an unselected choice.
+`provider = unknown` on a selected choice means the plan has only a configurable
+implementation ID, not typed provider identity. `fallback = unknown` means the
+plan did not preserve evidence of provider fallback. It must not be interpreted as
+proof that no fallback happened. `observed_only` means Laya proposed an intent
+while rules remained selected. `observation_failed` means an `observe` call did
+not produce a usable proposal; rules were still selected by policy.
+`bypassed_by_context` means an accepted-plan continuation was resolved from
+context without calling Laya. `fallback_to_rules` describes a classifier
+fallback in `laya` mode, not provider fallback. The fixed
+`readiness_reasons` identify only causes directly visible in the plan;
+`reasons_complete = false` on an invalid plan warns that compile, policy, tool,
+or other causes may also apply. `needs_context` has unknown readiness and
+budget rather than pretending an abstention compiled a plan.
+
+The explanation includes at most 12 capability choices and five distinct
+known effects. `capabilities_omitted` and `effects_omitted` identify incomplete
+projection, including unknown effect values. `capabilities_total` gives the
+number of choices in the full plan, while the `capabilities` array contains
+the first 12 at most. `repository_ordinal` is a one-based index into the full
+plan's repository order; zero means no unique match. It distinguishes two
+choices for the same capability without copying repository names. Unknown
+capability identifiers become `unknown`; free-form reasons, request/context text,
+criteria, file paths, and diagnostics are never copied into this object. The
+**complete plan beside it** still contains caller-supplied and diagnostic
+content and requires normal privacy handling. The explanation reports
+planning evidence and declared effects, not executed effects, real provider
+availability, or authorization to run a workflow.
+
 For a private evaluation pilot, the operator may create a directory owned by
 the ATENEA user with mode `0700` and set `[decision].capture_dir` to its absolute
 path in the global settings file. Restart the central ATENEA service after

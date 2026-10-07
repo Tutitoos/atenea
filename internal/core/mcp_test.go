@@ -375,6 +375,10 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	if structured["dry_run"] != true || structured["execution_authorized"] != false {
 		t.Fatalf("execution boundary = %v", structured)
 	}
+	explanation := structured["explanation"].(map[string]any)
+	if explanation["version"] != float64(1) || explanation["intent"] != "plan" || explanation["resolution"] != "resolved" {
+		t.Fatalf("decision explanation = %v", explanation)
+	}
 	if structured["intent"] != "plan" || structured["valid"] != true {
 		t.Fatalf("decision = %v", structured)
 	}
