@@ -482,10 +482,26 @@ func filterStepIDs(ids []string, allowed map[string]bool) []string {
 func printDecisionJSON(out io.Writer, plan decision.Plan) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(plan)
+	return encoder.Encode(struct {
+		decision.Plan
+		Explanation decision.Explanation `json:"explanation"`
+	}{Plan: plan, Explanation: decision.Explain(plan)})
 }
 
 func printDecisionPlan(out io.Writer, plan decision.Plan, trace bool) {
+	explanation := decision.Explain(plan)
+	fmt.Fprintf(out, "explanation v%d intent=%s source=%s mode=%s classifier=%s resolution=%s reason=%s context=%s readiness=%s budget=%s\n",
+		explanation.Version, explanation.Intent, explanation.IntentSource, explanation.ClassifierMode,
+		explanation.ClassifierResult, explanation.Resolution, explanation.ResolutionCode,
+		explanation.Context, explanation.Readiness, explanation.Budget)
+	fmt.Fprintf(out, "  readiness_reasons=%s reasons_complete=%t effects=%s omitted=%t capabilities_total=%d capabilities_omitted=%t\n",
+		strings.Join(explanation.ReadinessReasons, ","), explanation.ReasonsComplete,
+		strings.Join(explanation.Effects, ","), explanation.EffectsOmitted,
+		explanation.CapabilitiesTotal, explanation.CapabilitiesOmitted)
+	for _, item := range explanation.Capabilities {
+		fmt.Fprintf(out, "  repository_ordinal=%d capability=%s selection=%s provider=%s fallback=%s\n",
+			item.RepositoryOrdinal, item.Capability, item.Selection, item.Provider, item.Fallback)
+	}
 	fmt.Fprintf(out, "intent      %s\n", plan.Intent)
 	resolution := orDash(string(plan.Resolution))
 	if plan.ResolutionReason != "" {

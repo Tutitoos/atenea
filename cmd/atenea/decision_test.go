@@ -194,6 +194,14 @@ func TestDecisionPresentationAndConfirmationGuards(t *testing.T) {
 	if err := printDecisionJSON(&jsonOut, plan); err != nil || !strings.Contains(jsonOut.String(), `"intent": "plan"`) {
 		t.Fatalf("decision json = %q, err=%v", jsonOut.String(), err)
 	}
+	var rendered map[string]any
+	if err := json.Unmarshal(jsonOut.Bytes(), &rendered); err != nil {
+		t.Fatal(err)
+	}
+	explanation := rendered["explanation"].(map[string]any)
+	if explanation["version"] != float64(1) || explanation["intent"] != "plan" || !strings.Contains(out.String(), "explanation v1 intent=plan") {
+		t.Fatalf("explanation differs across CLI formats: %v / %s", explanation, out.String())
+	}
 
 	if requiresDecisionConfirmation(decision.Plan{}, "") {
 		t.Fatal("empty plan should not require confirmation")
@@ -203,6 +211,38 @@ func TestDecisionPresentationAndConfirmationGuards(t *testing.T) {
 	}
 	if got := effectNames([]contract.Effect{contract.EffectRead, contract.EffectWrite}); len(got) != 2 || got[0] != "read" {
 		t.Fatalf("effect names = %v", got)
+	}
+}
+
+func TestDecisionTextExplanationDistinguishesRepositoriesAndTruncation(t *testing.T) {
+	plan := decision.Plan{Repositories: []string{"private-one", "private-two"}, Capabilities: []decision.CapabilityChoice{
+		{ID: "code.search", Repository: "private-one", Chosen: "codex.private-adapter"},
+		{ID: "code.search", Repository: "private-two", Unavailable: true},
+	}}
+	for i := 2; i < 14; i++ {
+		plan.Capabilities = append(plan.Capabilities, decision.CapabilityChoice{ID: "code.search", Repository: "private-one"})
+	}
+	var out bytes.Buffer
+	printDecisionPlan(&out, plan, false)
+	text := out.String()
+	if !strings.Contains(text, "capabilities_total=14 capabilities_omitted=true") ||
+		!strings.Contains(text, "repository_ordinal=1 capability=code.search selection=selected provider=unknown") ||
+		!strings.Contains(text, "repository_ordinal=2 capability=code.search selection=unavailable provider=none") {
+		t.Fatalf("text explanation lacks repository or truncation facts: %s", text)
+	}
+	var jsonOut bytes.Buffer
+	if err := printDecisionJSON(&jsonOut, plan); err != nil {
+		t.Fatal(err)
+	}
+	var rendered struct {
+		Explanation decision.Explanation `json:"explanation"`
+	}
+	if err := json.Unmarshal(jsonOut.Bytes(), &rendered); err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Explanation.CapabilitiesTotal != 14 || len(rendered.Explanation.Capabilities) != 12 ||
+		rendered.Explanation.Capabilities[0].RepositoryOrdinal != 1 || rendered.Explanation.Capabilities[1].RepositoryOrdinal != 2 {
+		t.Fatalf("text/JSON explanation mismatch: %+v", rendered.Explanation)
 	}
 }
 
