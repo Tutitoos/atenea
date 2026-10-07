@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -229,32 +230,86 @@ func TestTheWorkflowToolsDeclareTheRepositoryArgument(t *testing.T) {
 	listed := result(t, c.call("tools/list", map[string]any{}), "tools/list")
 	tools, _ := listed["tools"].([]any)
 
+	want := map[string][]any{
+		"workflow.create": {"file", "repository"},
+		"workflow.launch": {"id", "repository"},
+		"workflow.cancel": {"id", "repository"},
+		"workflow.resume": {"id", "repository"},
+		"workflow.answer": {"id", "ordinal", "digest", "decision", "repository"},
+		"workflow.status": {"id"},
+	}
 	seen := 0
 	for _, raw := range tools {
 		tool, _ := raw.(map[string]any)
 		name, _ := tool["name"].(string)
-		if name != "workflow.create" && name != "workflow.launch" {
+		expected, ok := want[name]
+		if !ok {
 			continue
 		}
 		seen++
 		schema, _ := tool["inputSchema"].(map[string]any)
 		properties, _ := schema["properties"].(map[string]any)
-		if _, ok := properties["repository"]; !ok {
-			t.Errorf("%s declares no repository argument: %v", name, properties)
+		_, hasRepository := properties["repository"]
+		if wantRepository := name != "workflow.status"; hasRepository != wantRepository {
+			t.Errorf("%s repository argument present = %t, want %t", name, hasRepository, wantRepository)
+		}
+		if _, ok := properties["route_prefer"]; ok {
+			t.Errorf("%s declares a provider-routing selector for a workflow", name)
 		}
 		required, _ := schema["required"].([]any)
-		found := false
-		for _, item := range required {
-			if fmt.Sprint(item) == "repository" {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%s does not require a repository on a machine with two: %v", name, required)
+		if !reflect.DeepEqual(required, expected) {
+			t.Errorf("%s required = %v, want %v", name, required, expected)
 		}
 	}
-	if seen != 2 {
-		t.Fatalf("workflow tools on the list = %d, want 2", seen)
+	if seen != len(want) {
+		t.Fatalf("workflow tools on the list = %d, want %d", seen, len(want))
+	}
+}
+
+func TestPublishedToolRequiredFieldsAreUnique(t *testing.T) {
+	for _, extraRepositories := range []int{0, 1} {
+		t.Run(fmt.Sprintf("repositories=%d", extraRepositories+1), func(t *testing.T) {
+			settings, _ := writingPlanFixture(t, extraRepositories)
+			atenea := buildService(t, settings)
+			defer serve(t, atenea)()
+			c := dial(t)
+			result(t, c.handshake("omp"), "initialize")
+			for range 2 {
+				listed := result(t, c.call("tools/list", map[string]any{}), "tools/list")
+				tools, _ := listed["tools"].([]any)
+				if len(tools) == 0 {
+					t.Fatal("no tools advertised")
+				}
+				for _, raw := range tools {
+					tool, _ := raw.(map[string]any)
+					assertUniqueRequiredFields(t, tool["inputSchema"], fmt.Sprint(tool["name"]))
+				}
+			}
+		})
+	}
+}
+
+func assertUniqueRequiredFields(t *testing.T, value any, path string) {
+	t.Helper()
+	switch value := value.(type) {
+	case map[string]any:
+		if required, ok := value["required"].([]any); ok {
+			seen := make(map[string]bool, len(required))
+			for _, item := range required {
+				name := fmt.Sprint(item)
+				if seen[name] {
+					t.Errorf("%s.required repeats %q: %v", path, name, required)
+				}
+				seen[name] = true
+			}
+		}
+		for key, child := range value {
+			assertUniqueRequiredFields(t, child, path+"."+key)
+		}
+	case []any:
+		for index, child := range value {
+			assertUniqueRequiredFields(t, child, fmt.Sprintf("%s[%d]", path, index))
+		}
 	}
 }
 

@@ -5,11 +5,15 @@
 package decision
 
 import (
+	"context"
 	"fmt"
+	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -37,6 +41,8 @@ const (
 // Request is the input to the decision layer.
 type Request struct {
 	Text            string
+	Context         *IntentContext
+	AcceptedPlan    *AcceptedPlanReference
 	Criterion       string
 	Limits          contract.Limits
 	Repository      string
@@ -46,6 +52,32 @@ type Request struct {
 	StandingEffects []contract.Effect
 	Prefer          string
 	Tool            string
+}
+
+// IntentClassifier proposes one of ATENEA's closed set of planning intents.
+// Its result can affect the workflow shape, but never grants effects or
+// authorizes execution.
+type IntentClassifier interface {
+	Classify(context.Context, string) (IntentClassification, error)
+}
+
+// IntentClassification is the typed result returned by a model-backed
+// classifier. Confidence is Laya's calibrated answer_confidence value.
+type IntentClassification struct {
+	Intent        Kind    `json:"intent"`
+	Confidence    float64 `json:"confidence"`
+	Model         string  `json:"model,omitempty"`
+	RoutingModel  string  `json:"routing_model,omitempty"`
+	RoutingReason string  `json:"routing_reason,omitempty"`
+}
+
+// IntentEvidence records the classifier mode, selected source, model proposal,
+// and any deterministic fallback used to build this plan.
+type IntentEvidence struct {
+	Mode           string                `json:"mode"`
+	Source         string                `json:"source"`
+	Laya           *IntentClassification `json:"laya,omitempty"`
+	FallbackReason string                `json:"fallback_reason,omitempty"`
 }
 
 // ModelChoice describes the model role selected for one agent type.
@@ -94,22 +126,26 @@ type Reason struct {
 // returned, so a caller can trust that its agent names, edges, permissions and
 // budget are structurally valid.
 type Plan struct {
-	Text         string             `json:"text"`
-	Criterion    string             `json:"criterion"`
-	Limits       contract.Limits    `json:"limits"`
-	Coordinator  string             `json:"coordinator"`
-	Specialists  []string           `json:"specialists"`
-	Intent       Kind               `json:"intent"`
-	Repositories []string           `json:"repositories"`
-	Effects      []contract.Effect  `json:"effects"`
-	Agent        string             `json:"agent"`
-	Models       []ModelChoice      `json:"models"`
-	Tools        []ToolChoice       `json:"tools"`
-	Capabilities []CapabilityChoice `json:"capabilities"`
-	Budget       BudgetSummary      `json:"budget"`
-	Workflow     workflow.Graph     `json:"workflow"`
-	Valid        bool               `json:"valid"`
-	Reasons      []Reason           `json:"reasons"`
+	Text             string             `json:"text"`
+	Resolution       ResolutionStatus   `json:"resolution"`
+	ResolutionReason string             `json:"resolution_reason,omitempty"`
+	ContextUsed      bool               `json:"context_used,omitempty"`
+	Criterion        string             `json:"criterion"`
+	Limits           contract.Limits    `json:"limits"`
+	Coordinator      string             `json:"coordinator"`
+	Specialists      []string           `json:"specialists"`
+	Intent           Kind               `json:"intent"`
+	IntentEvidence   IntentEvidence     `json:"intent_evidence"`
+	Repositories     []string           `json:"repositories"`
+	Effects          []contract.Effect  `json:"effects"`
+	Agent            string             `json:"agent"`
+	Models           []ModelChoice      `json:"models"`
+	Tools            []ToolChoice       `json:"tools"`
+	Capabilities     []CapabilityChoice `json:"capabilities"`
+	Budget           BudgetSummary      `json:"budget"`
+	Workflow         workflow.Graph     `json:"workflow"`
+	Valid            bool               `json:"valid"`
+	Reasons          []Reason           `json:"reasons"`
 }
 
 // BudgetSummary is the preflight accounting for the compiled workflow.
@@ -132,14 +168,22 @@ type Selector interface {
 // selector. Without a selector it still produces a useful static catalog
 // plan, which is what makes `--dry-run` safe on an offline machine.
 type Planner struct {
-	Config    config.Config
-	Selector  Selector
-	Estimator BudgetEstimator
-	Ranker    ModelRanker
+	Config        config.Config
+	Selector      Selector
+	Estimator     BudgetEstimator
+	Ranker        ModelRanker
+	Classifier    IntentClassifier
+	AcceptedPlans *AcceptedPlanStore
 }
 
 // Build creates and validates one decision plan.
 func (p Planner) Build(req Request) (Plan, error) {
+	return p.BuildContext(context.Background(), req)
+}
+
+// BuildContext creates a decision plan while bounding model-backed intent
+// classification to the lifetime of the caller's request.
+func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
 		return Plan{}, contract.Fail(contract.FailureInvalidInput, "decision: text is required")
@@ -158,30 +202,125 @@ func (p Planner) Build(req Request) (Plan, error) {
 		return Plan{}, contract.Fail(contract.FailureInvalidInput, "decision: max tokens requires a positive max duration")
 	}
 
+	if req.AcceptedPlan != nil {
+		var root string
+		for _, repo := range p.Config.Repositories {
+			if repo.ID == req.Repository {
+				root = repo.Path
+				break
+			}
+		}
+		store := AcceptedPlanStore{}
+		if p.AcceptedPlans != nil {
+			store = *p.AcceptedPlans
+		}
+		var err error
+		if req.Context != nil || root == "" {
+			err = fmt.Errorf("accepted_plan requires an explicit declared repository and cannot be combined with context")
+		} else {
+			req.Context, err = store.Resolve(ctx, *req.AcceptedPlan, req.Repository, root)
+		}
+		if err != nil {
+			// Missing or stale context is a successful abstention, not a planner failure.
+			return Plan{Text: text, Resolution: ResolutionNeedsContext, ResolutionReason: "unverified_accepted_plan", //nolint:nilerr // Report the error as non-executable needs_context, like inline context resolution.
+				Workflow: workflow.Graph{Task: text}, Reasons: []Reason{{Stage: "context", Message: err.Error()}}}, nil
+		}
+	}
+	resolution := resolveIntent(req.Text, req.Context, req.Repository)
+	effectiveText, contextFiles := resolution.Text, resolution.ScopeFiles
+	if resolution.Status == ResolutionNeedsContext {
+		return Plan{
+			Text:             text,
+			Resolution:       ResolutionNeedsContext,
+			ResolutionReason: resolution.ReasonCode,
+			Intent:           "",
+			Workflow:         workflow.Graph{Task: text},
+			Reasons:          []Reason{{Stage: "intent", Message: resolution.Reason}},
+		}, nil
+	}
+	if resolution.Repository != "" {
+		req.Repository = resolution.Repository
+	}
+	req.Text = effectiveText
+	if len(contextFiles) > 0 {
+		if len(req.Files) == 0 {
+			req.Files = contextFiles
+		} else {
+			req.Files = intersectFiles(req.Files, contextFiles)
+			if len(req.Files) == 0 {
+				return Plan{
+					Text:             text,
+					Resolution:       ResolutionNeedsContext,
+					ResolutionReason: ResolutionReasonScopeMismatch,
+					Workflow:         workflow.Graph{Task: text},
+					Reasons:          []Reason{{Stage: "scope", Message: "the requested files do not overlap the accepted plan scope"}},
+				}, nil
+			}
+		}
+	}
+
 	repos, err := p.repositories(req.Repository)
 	if err != nil {
 		return Plan{}, err
 	}
-	intent := infer(text)
+	var intent Kind
+	var intentEvidence IntentEvidence
+	if needsAcceptedPlanContext(text) {
+		mode := strings.ToLower(strings.TrimSpace(p.Config.Decision.Mode))
+		if mode == "" {
+			mode = "rules"
+		}
+		// The accepted-plan continuation resolves the current action already;
+		// a classifier must not reinterpret "do it" without that authority.
+		intent = resolution.Intent
+		intentEvidence = IntentEvidence{Mode: mode, Source: "context"}
+	} else {
+		// Deterministic rules describe the user's current request. Laya may also
+		// consider the separately supplied context included in req.Text.
+		intent, intentEvidence = p.classifyIntent(ctx, text, req.Text)
+	}
 	agent := p.agentFor(intent, req.Files)
 	criterion := strings.TrimSpace(req.Criterion)
 	if criterion == "" {
 		criterion = "all requested repositories have an evidence-backed answer and every claimed change is verified"
 	}
 	plan := Plan{
-		Text:         text,
-		Criterion:    criterion,
-		Limits:       req.Limits,
-		Coordinator:  "atenea-coordinator",
-		Specialists:  specialistRoles(agent, intent, p.Config),
-		Intent:       intent,
-		Repositories: repos,
-		Effects:      mergeEffects(req.StandingEffects, req.Effects),
-		Agent:        agent,
+		Text:           text,
+		Resolution:     ResolutionResolved,
+		ContextUsed:    resolution.ContextUsed,
+		Criterion:      criterion,
+		Limits:         req.Limits,
+		Coordinator:    "atenea-coordinator",
+		Specialists:    specialistRoles(agent, intent, p.Config),
+		Intent:         intent,
+		IntentEvidence: intentEvidence,
+		Repositories:   repos,
+		Effects:        mergeEffects(req.StandingEffects, req.Effects),
+		Agent:          agent,
 		Reasons: []Reason{
-			{Stage: "intent", Message: fmt.Sprintf("classified as %s from the request text", intent)},
+			{Stage: "intent", Message: intentReason(intent, intentEvidence)},
 			{Stage: "policy", Message: "user constraints and declared effects are applied before provider choice"},
 		},
+	}
+	if intentEvidence.Laya != nil {
+		observation := intentEvidence.Laya
+		model := observation.Model
+		if model == "" {
+			model = "unknown model"
+		}
+		message := fmt.Sprintf("Laya proposed %s with answer confidence %.2f using %s", observation.Intent, observation.Confidence, model)
+		if observation.RoutingModel != "" {
+			message += " (routed to " + observation.RoutingModel + ")"
+		}
+		if intentEvidence.Source == "context" {
+			message += "; the accepted-plan context remained selected"
+		} else if intentEvidence.Source != "laya" {
+			message += "; the deterministic intent remained selected"
+		}
+		plan.Reasons = append(plan.Reasons, Reason{Stage: "intent", Message: message})
+	}
+	if intentEvidence.FallbackReason != "" {
+		plan.Reasons = append(plan.Reasons, Reason{Stage: "intent", Message: "Laya was not selected: " + intentEvidence.FallbackReason})
 	}
 	plan.Models = p.modelsFor(agent, intent, firstRepository(repos), slices.Contains(plan.Effects, contract.EffectWrite))
 	plan.Tools = p.toolsFor(agent, intent, req.Tool)
@@ -236,6 +375,75 @@ func (p Planner) Build(req Request) (Plan, error) {
 	plan.Reasons = append(plan.Reasons, Reason{Stage: "workflow",
 		Message: fmt.Sprintf("compiled %d step(s) into %d wave(s)", len(compiled.Graph.Steps), waveCount(compiled.Graph))})
 	return plan, nil
+}
+
+func (p Planner) classifyIntent(ctx context.Context, requestText, classifierText string) (Kind, IntentEvidence) {
+	rulesIntent := infer(requestText)
+	mode := strings.ToLower(strings.TrimSpace(p.Config.Decision.Mode))
+	if mode == "" {
+		mode = "rules"
+	}
+	evidence := IntentEvidence{Mode: mode, Source: "rules"}
+	if mode == "rules" {
+		return rulesIntent, evidence
+	}
+	if mode != "observe" && mode != "laya" {
+		evidence.FallbackReason = "unsupported classifier mode"
+		return rulesIntent, evidence
+	}
+
+	classifier := p.Classifier
+	if classifier == nil && p.Config.Decision.LayaEndpoint != "" {
+		classifier = NewLayaClassifier(p.Config.Decision)
+	}
+	if classifier == nil {
+		evidence.FallbackReason = "Laya endpoint is not configured"
+		return rulesIntent, evidence
+	}
+	classification, err := classifier.Classify(ctx, classifierText)
+	if err != nil {
+		evidence.FallbackReason = "service request failed"
+		return rulesIntent, evidence
+	}
+	if !validIntentClassification(classification) {
+		evidence.FallbackReason = "response did not contain a supported intent and confidence"
+		return rulesIntent, evidence
+	}
+	evidence.Laya = &classification
+	if mode == "observe" {
+		return rulesIntent, evidence
+	}
+	minimum := p.Config.Decision.MinimumConfidence
+	if minimum <= 0 || minimum > 1 || math.IsNaN(minimum) {
+		minimum = 0.8
+	}
+	if classification.Confidence < minimum {
+		evidence.FallbackReason = fmt.Sprintf("answer confidence %.2f is below the configured minimum %.2f", classification.Confidence, minimum)
+		return rulesIntent, evidence
+	}
+	evidence.Source = "laya"
+	return classification.Intent, evidence
+}
+
+func validIntentClassification(classification IntentClassification) bool {
+	switch classification.Intent {
+	case KindUnderstand, KindSearch, KindPlan, KindChange:
+	default:
+		return false
+	}
+	return !math.IsNaN(classification.Confidence) && !math.IsInf(classification.Confidence, 0) &&
+		classification.Confidence >= 0 && classification.Confidence <= 1
+}
+
+func intentReason(intent Kind, evidence IntentEvidence) string {
+	switch evidence.Source {
+	case "laya":
+		return fmt.Sprintf("classified as %s by Laya at answer confidence %.2f", intent, evidence.Laya.Confidence)
+	case "context":
+		return fmt.Sprintf("resolved as %s from the accepted-plan continuation context", intent)
+	default:
+		return fmt.Sprintf("classified as %s from the request text", intent)
+	}
 }
 
 func (p Planner) stampRoutes(plan *Plan, agent string, kind Kind) {
@@ -329,13 +537,17 @@ func (p Planner) repositories(id string) ([]string, error) {
 // degrades to KindUnderstand -- the conservative end, which reads and does
 // not change anything.
 var (
-	changeWords = []string{
+	planPointReference = regexp.MustCompile(`(?i)\bp[0-9]+\b`)
+	changeWords        = []string{
 		"implementar", "implementa", "implement", "implements", "implementing",
 		"cambiar", "cambia", "change", "changes", "changing",
 		"fix", "fixes", "fixed", "fixing",
 		"refactorizar", "refactoriza", "refactor", "refactors", "refactoring",
 		"construir", "construye", "build", "builds", "building",
 		"añadir", "añade", "add", "adds", "adding",
+		"migrar", "migra", "migrate", "migrates", "migrating",
+		"corregir", "corrige", "arreglar", "arregla", "editar", "edita",
+		"modificar", "modifica", "actualizar", "actualiza",
 	}
 	planWords = []string{
 		"planificar", "planifica", "plan", "plans", "planning",
@@ -350,9 +562,73 @@ var (
 )
 
 func infer(text string) Kind {
-	words := wordsOf(text)
-	if containsAny(words, changeWords...) {
+	cleaned := strings.ToLower(stripQuotedText(text))
+	cleaned = removeNegatedChangePhrases(cleaned)
+	words := wordsOf(cleaned)
+	if hasFutureChangeDiscussion(words) {
+		return KindPlan
+	}
+	if containsAny(words, "not only", "not just") && containsAny(words, changeWords...) {
 		return KindChange
+	}
+	if hasConditionalChangeCommand(cleaned) {
+		return KindChange
+	}
+	if hasExplicitFollowupChange(cleaned) {
+		return KindChange
+	}
+	if isNecessityQuestion(cleaned) {
+		return KindPlan
+	}
+	if isStatusQuestion(cleaned) {
+		return KindSearch
+	}
+	if isPlanPointAmendment(cleaned, words) {
+		if hasChangeAfterPlanPoint(words) {
+			return KindChange
+		}
+		return KindPlan
+	}
+	if hasChangeAfterTransition(words) {
+		return KindChange
+	}
+	if startsWithIntent(words, "understand", "explain", "summarize", "summarise", "describe", "tell me what", "dime qué", "explica", "resume", "resúmeme", "describe") { //nolint:misspell // British spelling is intentional.
+		return KindUnderstand
+	}
+	if startsWithIntent(words, "please", "can you", "could you", "would you", "por favor", "vale", "puedes", "podrías", "podrias", "solo", "only", "just") {
+		return infer(strings.TrimSpace(stripPolitePrefix(words)))
+	}
+	// Questions about a course of action are planning, including accentless
+	// Spanish input. Keep this before the change vocabulary.
+	if startsWithIntent(words, "cómo podemos", "como podemos", "cómo lo hacemos", "como lo hacemos", "cómo hacemos", "como hacemos", "qué hacemos", "que hacemos", "ahora qué hacemos", "ahora que hacemos", "qué hay que hacer", "que hay que hacer", "ahora qué hay que hacer", "ahora que hay que hacer") {
+		return KindPlan
+	}
+	// Status verification retrieves evidence; the mention of a PR or a change
+	// does not ask for a modification. Avoid treating all reviews as searches.
+	if startsWithIntent(words, "revisa si", "revisa que", "comprueba si", "comprueba que", "verifica si", "verifica que", "consulta el estado", "consulta las", "consulta los") {
+		for _, verb := range []string{"corrige", "arregla", "implementa", "aplica", "cambia", "modifica", "actualiza", "edita", "añade"} {
+			// "si no cambia" can be an indicative status question. A
+			// conditional command needs an explicit clause boundary.
+			normalized := strings.Join(strings.Fields(cleaned), " ") + " "
+			conditional := false
+			for _, boundary := range []string{"; si no, ", ". si no, ", ", si no, "} {
+				conditional = conditional || strings.Contains(normalized, boundary+verb+" ")
+			}
+			if conditional {
+				return KindChange
+			}
+		}
+		return KindSearch
+	}
+	if containsAny(words, "how would", "how could", "how can we", "how do i", "how to", "design how", "diseña cómo", "cómo arreglar", "cómo corregir", "cómo modificar", "como arreglar", "como corregir", "como modificar", "tell me how you would", "outline how") ||
+		startsWithIntent(words, "tell me how to") {
+		return KindPlan
+	}
+	if startsWithIntent(words, "plan", "planifica", "planificar", "diseña", "diseñar", "design", "outline", "propose", "propón", "proponer", "prepare a plan", "preparar un plan") {
+		return KindPlan
+	}
+	if startsWithIntent(words, "find", "search", "locate", "where", "buscar", "busca", "localiza", "dónde", "donde", "look up", "investiga") {
+		return KindSearch
 	}
 	if containsAny(words, planWords...) {
 		return KindPlan
@@ -360,7 +636,288 @@ func infer(text string) Kind {
 	if containsAny(words, searchWords...) {
 		return KindSearch
 	}
+	if containsAny(words, changeWords...) {
+		return KindChange
+	}
 	return KindUnderstand
+}
+
+// finalQuestionClause ignores earlier questions and sentences so "Is it done?
+// Fix it" is classified from its final command, while "And now? Have you
+// finished?" remains a status request. A final question mark is optional.
+func finalQuestionClause(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.TrimRight(text, " \t\r\n!¡.")
+	for {
+		i := strings.LastIndexAny(text, "?.;:\n")
+		if i < 0 {
+			break
+		}
+		tail := strings.TrimSpace(text[i+1:])
+		if tail == "" {
+			text = text[:i]
+			continue
+		}
+		courtesy := strings.TrimSpace(wordsOf(tail))
+		if courtesy == "" || courtesy == "gracias" || courtesy == "muchas gracias" || courtesy == "por favor" ||
+			courtesy == "please" || courtesy == "thanks" || courtesy == "thank you" {
+			text = text[:i]
+			continue
+		}
+		text = tail
+		break
+	}
+	return stripPolitePrefix(wordsOf(text))
+}
+
+func isNecessityQuestion(text string) bool {
+	if !strings.Contains(text, "?") {
+		return false
+	}
+	question := finalQuestionClause(text)
+	return startsWithIntent(question, "hay que", "no hay que")
+}
+
+// A completed-work question may mention a change without requesting one.
+func isStatusQuestion(text string) bool {
+	question := finalQuestionClause(text)
+	if isStatusLead(question) {
+		return true
+	}
+	if i := strings.LastIndex(text, "?"); i >= 0 {
+		previous := text[:i]
+		if boundary := strings.LastIndexAny(previous, "?.;:\n"); boundary >= 0 {
+			previous = previous[boundary+1:]
+		}
+		if !isStatusLead(stripPolitePrefix(wordsOf(previous))) {
+			return false
+		}
+		following := stripPolitePrefix(wordsOf(text[i+1:]))
+		return !startsWithIntent(following,
+			"corrige", "corrígelo", "arregla", "arréglalo", "implementa", "impleméntalo",
+			"aplica", "aplícalo", "cambia", "modifica", "actualiza", "edita", "añade",
+			"fix", "implement", "apply", "change", "modify", "update", "edit", "add")
+	}
+	return false
+}
+
+func isStatusLead(question string) bool {
+	if startsWithIntent(question, "hay que", "no hay que") {
+		return false
+	}
+	if startsWithIntent(question, "are there any", "is there any", "no hay", "hay", "queda", "quedan") {
+		return containsAny(question,
+			"comentario", "comentarios", "incidencia", "incidencias", "pendiente", "pendientes",
+			"tarea", "tareas", "error", "errores", "fallo", "fallos", "cambio", "cambios",
+			"que arreglar", "para arreglar", "que corregir", "para corregir",
+			"bug", "bugs", "issue", "issues", "error", "errors", "change", "changes", "task", "tasks",
+			"fix", "fixes", "work")
+	}
+	return startsWithIntent(question,
+		"has terminado de", "ya has terminado de", "han terminado de", "se ha terminado de",
+		"habéis terminado de", "habeis terminado de", "have you finished", "are you done",
+		"has it been fixed", "is it fixed")
+}
+
+func hasExplicitFollowupChange(text string) bool {
+	for _, boundary := range []string{",", " y ", " and "} {
+		if i := strings.Index(text, boundary); i >= 0 {
+			if !isStatusQuestion(text[:i]) {
+				continue
+			}
+			if strings.Contains(text[i+len(boundary):], "?") {
+				continue // Within a question, a present-tense verb may be descriptive.
+			}
+			following := wordsOf(text[i+len(boundary):])
+			if startsWithIntent(following,
+				"corrige", "corrígelo", "arregla", "arréglalo", "implementa", "impleméntalo",
+				"aplica", "aplícalo", "cambia", "modifica", "actualiza", "edita", "añade",
+				"fix", "implement", "apply", "change", "modify", "update", "edit", "add") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasConditionalChangeCommand(text string) bool {
+	const marker = "si no,"
+	if i := strings.Index(text, marker); i >= 0 {
+		command := wordsOf(strings.TrimSpace(text[i+len(marker):]))
+		return startsWithIntent(command,
+			"corrige", "corrígelo", "arregla", "arréglalo", "implementa", "aplica",
+			"cambia", "modifica", "actualiza", "edita", "añade")
+	}
+	return false
+}
+
+// Numbered P-sections are plan entries. The P-number reference avoids
+// interpreting an ordinary request to add a product phase as plan editing.
+func isPlanPointAmendment(text, words string) bool {
+	refs := planPointReference.FindAllStringIndex(text, -1)
+	if len(refs) == 0 {
+		return false
+	}
+	if !containsAny(words, "plan", "planes") && containsAny(words,
+		"al producto", "al sistema", "al código", "en el código", "al repositorio", //nolint:misspell // Spanish word for product.
+		"to the product", "to the system", "to the code", "in the code", "to the codebase", "to the repository") {
+		return false
+	}
+	if len(refs) < 2 && !containsAny(words, "un p", "el p", "al plan", "del plan") {
+		if !containsAny(words, "a p", "the p", "to the plan") {
+			return false
+		}
+	}
+	return containsAny(words,
+		"añadir un p", "añade un p", "agregar un p", "agrega un p", "insertar un p", "inserta un p",
+		"añadir el p", "añade el p", "agregar el p", "agrega el p", "insertar el p", "inserta el p",
+		"añadir p", "añade p", "agregar p", "agrega p", "insertar p", "inserta p",
+		"add p", "insert p", "add a p", "insert a p", "add the p", "insert the p")
+}
+
+func hasChangeAfterPlanPoint(words string) bool {
+	for _, command := range []string{
+		"y corrige", "y arregla", "y implementa", "y aplica", "y cambia", "y modifica",
+		"y actualiza", "y edita", "y añade", "y corrígelo", "y arréglalo", "y impleméntalo",
+		"y aplícalo", "y hazlo", "y ejecútalo",
+		"and fix", "and implement", "and apply", "and change", "and modify",
+		"and update", "and edit", "and add", "and do it", "and execute it",
+	} {
+		if i := strings.Index(words, " "+command+" "); i >= 0 {
+			following := wordsOf(words[i+len(command)+2:])
+			if isPlanPointTextEdit(command, following) {
+				continue
+			}
+			if !containsAny(following, "plan", "planes", "p", "punto", "puntos", "fase", "fases", "point", "points", "phase", "phases") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPlanPointTextEdit(command, following string) bool {
+	if command != "and update" && command != "and edit" && command != "y actualiza" && command != "y edita" {
+		return false
+	}
+	if containsAny(following, "code", "codebase", "código", "system", "sistema", "product", "producto") { //nolint:misspell // Spanish word for product.
+		return false
+	}
+	return startsWithIntent(following,
+		"it", "its wording", "its text", "its title", "its description", "the wording", "the text", "the title", "the description",
+		"lo", "su redacción", "su texto", "su título", "su descripción", "la redacción", "el texto", "el título", "la descripción")
+}
+
+func startsWithIntent(words string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if words == " "+prefix+" " || strings.HasPrefix(words, " "+prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasChangeAfterTransition(words string) bool {
+	for _, transition := range []string{" then ", " and then ", " after that ", " followed by ", " luego ", " después ", " despues ", " a continuación "} {
+		if i := strings.Index(words, transition); i >= 0 {
+			// Classify the requested second phase rather than searching for a
+			// change verb anywhere in it. For example, "explain how to fix"
+			// asks for guidance, while "fix it" asks for a change.
+			if infer(strings.TrimSpace(words[i+len(transition):])) == KindChange {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Future or modal discussion mentions a change without asking ATENEA to perform it now.
+func hasFutureChangeDiscussion(words string) bool {
+	if !containsAny(words, changeWords...) && !containsAny(words,
+		"corrígelo", "arréglalo", "impleméntalo", "aplícalo", "hazlo", "ejecútalo") {
+		return false
+	}
+	if startsWithIntent(words, "should i", "should we", "could we", "would we", "debería", "deberias", "deberías", "deberíamos", "deberiamos") {
+		return true
+	}
+	if !containsAny(words,
+		"next week", "next month", "tomorrow", "later", "later on", "eventually", "in the future", "down the road", "someday",
+		"we will", "we ll", "we should", "we might", "we may", "we could", "i will", "i ll", "they will", "you will", "going to",
+		"mañana", "más adelante", "en el futuro", "a futuro", "la semana que viene", "el mes que viene", "habría que",
+	) {
+		return false
+	}
+	return !containsAny(words, "now", "right now", "today", "immediately", "ahora", "ahora mismo", "hoy", "ya", "inmediatamente")
+}
+
+func stripPolitePrefix(words string) string {
+	for {
+		stripped := false
+		for _, prefix := range []string{"please", "can you", "could you", "would you", "por favor", "vale", "puedes", "podrías", "podrias", "solo", "only", "just"} {
+			if strings.HasPrefix(words, " "+prefix+" ") {
+				words = " " + strings.TrimSpace(strings.TrimPrefix(words, " "+prefix+" ")) + " "
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			return words
+		}
+	}
+}
+
+func removeNegatedChangePhrases(text string) string {
+	for _, phrase := range []string{
+		"do not make changes", "don't make changes", "don’t make changes", "do not change", "don't change", "don’t change",
+		"do not implement", "don't implement", "don’t implement", "do not edit", "don't edit", "don’t edit",
+		"do not fix", "don't fix", "don’t fix", "do not migrate", "don't migrate", "don’t migrate",
+		"do not modify", "don't modify", "don’t modify", "do not refactor", "don't refactor", "don’t refactor",
+		"do not apply", "don't apply", "don’t apply", "no hagas cambios", "no cambies", "no cambie", "no implementar",
+		"no implementes", "no edites", "no editar", "no modifiques", "no modificar", "no apliques", "no aplicar", //nolint:misspell // Spanish conjugations are intentional.
+		"no corrijas", "no arregles", "no actualices",
+	} {
+		text = strings.ReplaceAll(text, phrase, strings.Repeat(" ", utf8.RuneCountInString(phrase)))
+	}
+	return text
+}
+
+func stripQuotedText(text string) string {
+	var out strings.Builder
+	var quote rune
+	runes := []rune(text)
+	for i, r := range runes {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				out.WriteByte(' ')
+			} else {
+				out.WriteByte(' ')
+			}
+			continue
+		}
+		if (r == '\'' || r == '’') && i > 0 && i+1 < len(runes) && unicode.IsLetter(runes[i-1]) && unicode.IsLetter(runes[i+1]) {
+			out.WriteRune(r)
+			continue
+		}
+		if r == '"' || r == '`' || r == '“' || r == '‘' || r == '\'' {
+			switch r {
+			case '“':
+				quote = '”'
+			case '‘':
+				quote = '’'
+			default:
+				quote = r
+			}
+			out.WriteByte(' ')
+			continue
+		}
+		if r == '”' || r == '’' {
+			out.WriteByte(' ')
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // wordsOf reduces a commission to its words, lowercased, separated by single

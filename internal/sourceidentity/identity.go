@@ -62,6 +62,15 @@ func Discover(ctx context.Context, root string) (Identity, error) {
 		}
 		identity.Head = strings.TrimSpace(head)
 		part(h, "head", identity.Head)
+		// Porcelain records status categories, not staged blob identities. Two
+		// different index versions can both be MM with identical working bytes.
+		// Read from the Git top level so nested configured roots also observe
+		// staged changes elsewhere in the same worktree.
+		index, err := gitOutput(ctx, gitRoot, "ls-files", "--stage", "-z")
+		if err != nil {
+			return Identity{}, err
+		}
+		part(h, "index", index)
 		part(h, "status", status)
 		paths := dirtyPaths([]byte(status))
 		sort.Strings(paths)

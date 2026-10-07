@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/decision"
 	"github.com/Tutitoos/atenea/internal/workflow"
 )
 
@@ -331,7 +334,13 @@ func TestToolsListIsTheShippedCatalogue(t *testing.T) {
 }
 
 func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
-	atenea := buildService(t, decisionPlanSettings(t))
+	captureDir := filepath.Join(t.TempDir(), "capture")
+	if err := os.Mkdir(captureDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATENEA_DECISION_CAPTURE_DIR", "")
+	settings := decisionPlanSettings(t) + fmt.Sprintf("\n[decision]\ncapture_dir = %q\n", captureDir)
+	atenea := buildService(t, settings)
 	defer serve(t, atenea)()
 
 	c := dial(t)
@@ -347,6 +356,11 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	}
 	if advertised == nil || !strings.Contains(advertised["description"].(string), "WITHOUT executing") {
 		t.Fatalf("decision.plan was not advertised as a dry run: %v", advertised)
+	}
+	inputSchema := advertised["inputSchema"].(map[string]any)
+	properties := inputSchema["properties"].(map[string]any)
+	if _, ok := properties["context"].(map[string]any); !ok {
+		t.Fatalf("decision.plan schema does not advertise typed context: %v", inputSchema)
 	}
 
 	got := result(t, c.call("tools/call", map[string]any{
@@ -386,6 +400,169 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("decision.plan persisted %d workflow(s)", len(runs))
+	}
+	captured, err := os.ReadFile(filepath.Join(captureDir, "candidates.private.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate struct {
+		Source      string `json:"source"`
+		Intent      string `json:"intent"`
+		ReviewState string `json:"review_state"`
+	}
+	if err := json.Unmarshal(captured, &candidate); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Source != "mcp.decision.plan" || candidate.Intent != "plan" || candidate.ReviewState != "automatic_unreviewed" {
+		t.Fatalf("capture provenance = %+v", candidate)
+	}
+	if err := os.Chmod(captureDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	withoutStorage := result(t, c.call("tools/call", map[string]any{
+		"name":      "decision.plan",
+		"arguments": map[string]any{"objective": "planificar el flujo de autenticación", "repository": "work", "budget_usd": 10},
+	}), "decision.plan without capture storage")
+	if withoutStorage["structuredContent"].(map[string]any)["dry_run"] != true {
+		t.Fatal("capture storage failure changed the plan response")
+	}
+}
+
+func TestDecisionPlanResolvesContinuationContextWithoutLeavingDryRun(t *testing.T) {
+	settings := decisionPlanSettings(t) + "\n[[repository]]\nid = \"other\"\npath = \"/tmp\"\n"
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	var schema map[string]any
+	for _, raw := range listed["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if tool["name"] == "decision.plan" {
+			schema = tool["inputSchema"].(map[string]any)
+			break
+		}
+	}
+	alternatives, hasAlternatives := schema["anyOf"].([]any)
+	if schema == nil || !hasAlternatives || len(alternatives) != 2 {
+		t.Fatalf("multi-repository decision.plan schema cannot express repository from context: %v", schema)
+	}
+	required, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatalf("schema required fields = %v", schema["required"])
+	}
+	for _, rawRequired := range required {
+		if rawRequired == "repository" {
+			t.Fatalf("multi-repository schema requires a duplicate repository despite context support: %v", required)
+		}
+	}
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective":  "hazlo",
+			"budget_usd": 10,
+			"context": map[string]any{
+				"version": 1, "repository": "work", "accepted_plan_id": "plan-2", "accepted_plan_revision": "r1", "accepted_plan_current": true,
+				"active_objective": "mejorar la búsqueda", "scope_files": []any{"internal/search.go"},
+			},
+		},
+	}), "decision.plan contextual continuation")
+	structured := got["structuredContent"].(map[string]any)
+	if structured["intent"] != "change" || structured["resolution"] != "resolved" || structured["context_used"] != true {
+		t.Fatalf("contextual decision = %v", structured)
+	}
+	if structured["dry_run"] != true || structured["execution_authorized"] != false {
+		t.Fatalf("context changed the execution boundary: %v", structured)
+	}
+	repositories := structured["repositories"].([]any)
+	if len(repositories) != 1 || repositories[0] != "work" {
+		t.Fatalf("repositories = %v, want context-bound work repository", repositories)
+	}
+
+	missing := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective": "hazlo", "budget_usd": 10,
+			"context": map[string]any{"version": 1, "repository": "work", "active_objective": "mejorar la búsqueda"},
+		},
+	}), "decision.plan missing accepted plan")
+	missingPlan := missing["structuredContent"].(map[string]any)
+	if missingPlan["resolution"] != "needs_context" || missingPlan["resolution_reason"] != "missing_accepted_plan" || missingPlan["valid"] != false {
+		t.Fatalf("incomplete continuation = %v", missingPlan)
+	}
+	missingGraph := missingPlan["workflow"].(map[string]any)
+	if steps, _ := missingGraph["Steps"].([]any); len(steps) != 0 {
+		t.Fatalf("incomplete continuation has executable workflow steps: %v", steps)
+	}
+	unverified := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective": "hazlo", "budget_usd": 10,
+			"context": map[string]any{
+				"version": 1, "repository": "work", "accepted_plan_id": "plan-2", "accepted_plan_revision": "r1",
+				"active_objective": "mejorar la búsqueda", "accepted_plan_current": false,
+			},
+		},
+	}), "decision.plan unverified accepted plan")
+	unverifiedPlan := unverified["structuredContent"].(map[string]any)
+	if unverifiedPlan["resolution"] != "needs_context" || unverifiedPlan["resolution_reason"] != "plan_freshness_unverified" || unverifiedPlan["valid"] != false {
+		t.Fatalf("unverified continuation = %v", unverifiedPlan)
+	}
+	unverifiedGraph := unverifiedPlan["workflow"].(map[string]any)
+	if steps, _ := unverifiedGraph["Steps"].([]any); len(steps) != 0 {
+		t.Fatalf("unverified continuation has executable workflow steps: %v", steps)
+	}
+	store, err := workflow.Open(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	runs, err := store.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("contextual decision.plan persisted %d workflow(s)", len(runs))
+	}
+}
+
+func TestDecisionPlanObservesLayaWithoutChangingItsDryRunIntent(t *testing.T) {
+	laya := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/systemone" {
+			t.Errorf("Laya path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"laya-multilingual","answers":{"intent":{"type":"choice","choice":"plan","confidence":0.99,"answer_confidence":0.93}},"routing":{"model":"multilingual","reason":"Spanish and English text"}}`))
+	}))
+	defer laya.Close()
+	settings := decisionPlanSettings(t) + fmt.Sprintf(`
+
+[decision]
+mode = "observe"
+laya_endpoint = %q
+minimum_confidence = 0.8
+`, laya.URL+"/v1/systemone")
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective":  "Do not make changes yet. Tell me how you would add Laya.",
+			"repository": "work",
+			"budget_usd": 10,
+		},
+	}), "decision.plan")
+	structured := got["structuredContent"].(map[string]any)
+	evidence := structured["intent_evidence"].(map[string]any)
+	layaResult := evidence["laya"].(map[string]any)
+	if structured["intent"] != "plan" || evidence["mode"] != "observe" || evidence["source"] != "rules" || layaResult["intent"] != "plan" {
+		t.Fatalf("intent/evidence = %v/%v", structured["intent"], evidence)
+	}
+	if structured["dry_run"] != true || structured["execution_authorized"] != false {
+		t.Fatalf("decision.plan boundary = %v", structured)
 	}
 }
 
@@ -476,6 +653,7 @@ func TestAToolIsAimableAtARepository(t *testing.T) {
 	exemptFromAimable := map[string]string{
 		"catalog.repositories": "answers 'which repositories exist' — the question you ask before you know the name",
 		"workspace.context":    "coordinates explicit targets and must never collapse to one repository argument",
+		"workflow.status":      "loads a persisted workflow by id and checks the stored repository against the session scope",
 	}
 
 	atenea := buildService(t, mcpSettings(t))
@@ -1334,5 +1512,35 @@ func TestSensitiveWorkflowStaysWaitingThroughMCP(t *testing.T) {
 	gate, _ := gates[0].(map[string]any)
 	if gate["decision"] != "waiting" {
 		t.Fatalf("sensitive workflow gate was answered through MCP: %v", gate)
+	}
+}
+
+func TestDecisionPlanVerifiesLocalAcceptedReference(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	atenea := buildService(t, decisionPlanSettings(t))
+	defer serve(t, atenea)()
+	repo := atenea.Settings().Repositories[0]
+	ref, err := (decision.AcceptedPlanStore{}).Accept(t.Context(), "test", repo.Path,
+		decision.IntentContext{Version: 1, Repository: repo.ID, ActiveObjective: "Improve validation", ScopeFiles: []string{"main.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	call := func() map[string]any {
+		return result(t, c.call("tools/call", map[string]any{"name": "decision.plan", "arguments": map[string]any{
+			"objective": "hazlo", "repository": repo.ID, "accepted_plan": ref, "budget_usd": 10,
+		}}), "accepted reference")["structuredContent"].(map[string]any)
+	}
+	got := call()
+	if got["resolution"] != "resolved" || got["intent"] != "change" || got["valid"] != true || got["execution_authorized"] != false || got["dry_run"] != true {
+		t.Fatalf("accepted dry run: %v", got)
+	}
+	if err := os.WriteFile(filepath.Join(repo.Path, "main.go"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got = call()
+	if got["resolution"] != "needs_context" || got["valid"] != false {
+		t.Fatalf("stale accepted dry run: %v", got)
 	}
 }

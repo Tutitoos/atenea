@@ -2,13 +2,84 @@ package core_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+func TestStatusAttributesRedAndKeepsObservationStatesDistinct(t *testing.T) {
+	atenea := build(t, catalog)
+	unknown := atenea.Status()
+	if unknown.Light != core.LightAmber || len(unknown.RedCauses) != 0 {
+		t.Fatalf("unprobed status = %s causes=%+v, want amber without red causes", unknown.Light, unknown.RedCauses)
+	}
+	var graph core.ImplementationStatus
+	for _, impl := range unknown.Capabilities[0].Implementations {
+		if impl.ID == "graph.search" {
+			graph = impl
+		}
+	}
+	if graph.Health.State != contract.HealthUnknown || graph.State != "unknown" ||
+		graph.LastChecked != nil || !graph.Health.ObservedAt.IsZero() || graph.HealthExpired {
+		t.Fatalf("never checked implementation = %+v", graph)
+	}
+
+	fresh := time.Now().UTC().Add(-time.Minute)
+	for _, id := range []string{"ripgrep", "fixture.search", "graph.search"} {
+		if err := atenea.Registry().SetHealth("api", id, contract.Health{
+			State: contract.HealthDown, Reason: "api_key=private-value provider unavailable", Raw: "Bearer private-value", ObservedAt: fresh,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	down := atenea.Status()
+	if down.Light != core.LightRed || len(down.RedCauses) != 3 {
+		t.Fatalf("down status = %s causes=%+v", down.Light, down.RedCauses)
+	}
+	for _, cause := range down.RedCauses {
+		if cause.Capability != "code.search" || cause.Repository != "api" || cause.State != "down" ||
+			cause.ObservedAt == nil || !cause.ObservedAt.Equal(fresh) {
+			t.Errorf("current down cause = %+v", cause)
+		}
+		if strings.Contains(cause.Reason, "private-value") || strings.Contains(cause.Reason, "api_key") ||
+			cause.Reason != "A runtime observation reports this implementation unavailable." {
+			t.Errorf("cause reason is not controlled: %q", cause.Reason)
+		}
+	}
+	for _, impl := range down.Capabilities[0].Implementations {
+		if impl.State != "down" || impl.LastChecked == nil || !impl.LastChecked.Equal(fresh) {
+			t.Errorf("current implementation freshness = %+v", impl)
+		}
+	}
+	encoded, err := json.Marshal(down)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "private-value") {
+		t.Fatalf("status JSON exposed provider diagnostic credential: %s", encoded)
+	}
+
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	if err := atenea.Registry().SetHealth("api", "graph.search", contract.Health{
+		State: contract.HealthDown, Reason: "old failure", ObservedAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expired := atenea.Status()
+	if expired.Light == core.LightRed || len(expired.RedCauses) != 0 {
+		t.Fatalf("expired observation still raised red: %s %+v", expired.Light, expired.RedCauses)
+	}
+	for _, impl := range expired.Capabilities[0].Implementations {
+		if impl.ID == "graph.search" && (!impl.HealthExpired || impl.State != "unknown" || impl.LastChecked == nil || !impl.LastChecked.Equal(old)) {
+			t.Errorf("expired implementation = %+v", impl)
+		}
+	}
+}
 
 // An unmanaged catalog has nothing for the status screen to say about
 // processes. The section is the newest one on this screen, and it has to

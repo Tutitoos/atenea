@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  github-delivery-skill:
-    name: GitHub delivery skill
+  floowgithub-policy:
+    name: FloowGitHub policy
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,10 +25,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Validate skill behavior
-        run: |
-          python3 scripts/validate-agent-skill.py
-          python3 -m unittest discover -s .agents/skills/atenea-github-delivery/tests -p 'test_*.py'
+      - name: Validate project policy
+        run: python3 scripts/validate-floowgithub-policy.py
 
   omp-integration:
     name: OMP / isolated real integration

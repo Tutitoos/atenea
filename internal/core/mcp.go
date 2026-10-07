@@ -614,15 +614,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	if v.core.knowledgeSurfaceEnabled() {
 		tools = append(tools, v.knowledgeContextTool())
 	}
-	for _, tool := range v.workflowTools() {
-		// Aimed like every capability: the agents a graph spawns run at a
-		// repository context level, and a workflow that silently picked one
-		// would put the answer somewhere the caller never named.
-		if schema, ok := tool["inputSchema"].(map[string]any); ok {
-			tool["inputSchema"] = v.aimable(schema)
-		}
-		tools = append(tools, tool)
-	}
+	tools = append(tools, v.workflowTools()...)
 	for _, capability := range capabilities {
 		if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
 			continue
@@ -790,7 +782,11 @@ func (v *conversation) aimedAt(schema map[string]any) map[string]any {
 				required = append(required, fmt.Sprint(item))
 			}
 		}
-		out["required"] = append(slices.Clone(required), repositoryArg)
+		required = slices.Clone(required)
+		if !slices.Contains(required, repositoryArg) {
+			required = append(required, repositoryArg)
+		}
+		out["required"] = required
 	}
 	return out
 }

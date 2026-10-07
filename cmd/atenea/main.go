@@ -295,6 +295,12 @@ Flags:
   --max-tokens N   model token limit per assigned turn
   --confirm       require a TTY confirmation before --run
   --traces PATH   workflow state database
+  --decision-context JSON  caller-attested semantic context (never an effect grant)
+  --accepted-plan ID       locally accepted context; requires --repo and --accepted-revision
+  --accepted-revision SHA  exact receipt revision; cannot combine with --decision-context
+
+Accept a reviewed implementation objective locally (never executes or grants effects):
+  atenea decide accept-plan ID --decision-context JSON
 
 Lifecycle:
   atenea decide status COORDINATOR_ID [--traces PATH]
@@ -1289,6 +1295,23 @@ func printStatus(out io.Writer, status core.Status) error {
 			len(status.Missing), strings.Join(status.Missing, ", "))
 	}
 	fmt.Fprintf(out, "funnel    %s\n", status.Funnel)
+	if status.Light == core.LightRed {
+		fmt.Fprintln(out, "red causes")
+		const maxCauses = 5
+		for i, cause := range status.RedCauses {
+			if i == maxCauses {
+				fmt.Fprintf(out, "  ... %d more; see capabilities below\n", len(status.RedCauses)-maxCauses)
+				break
+			}
+			if cause.Kind == "orchestrator" {
+				fmt.Fprintf(out, "  orchestrator: %s\n", cause.Reason)
+				continue
+			}
+			fmt.Fprintf(out, "  %s / %s repo=%s state=%s checked=%s source=%s  %s\n",
+				cause.Capability, cause.Implementation, orDash(cause.Repository),
+				cause.State, checkedAt(cause.ObservedAt), cause.Evidence, cause.Reason)
+		}
+	}
 	printIncidentLine(out, status.Incidents)
 	if summary := status.Recovered.Summary(); summary != "" {
 		fmt.Fprintf(out, "recovered %s\n", summary)
@@ -1339,8 +1362,16 @@ func printStatus(out io.Writer, status core.Status) error {
 			fmt.Fprintf(out, "      (declared, not offered: no attached runner)\n")
 		}
 		for _, impl := range capability.Implementations {
-			line := fmt.Sprintf("      %-6s %-24s provider=%-18s health=%s",
-				impl.Light, impl.ID, impl.Provider, impl.Health.State)
+			observed := "time unknown"
+			if !impl.Health.ObservedAt.IsZero() {
+				observed = "observed"
+			}
+			if impl.HealthExpired {
+				observed = "expired observation"
+			}
+			line := fmt.Sprintf("      %-6s %-24s provider=%-18s health=%s repo=%s checked=%s (%s; source=%s)",
+				impl.Light, impl.ID, impl.Provider, impl.Health.State,
+				orDash(impl.Repository), checkedAt(timePtr(impl.Health.ObservedAt)), observed, impl.HealthSource)
 			if impl.Health.Reason != "" {
 				line += "  (" + impl.Health.Reason + ")"
 			}
@@ -1359,6 +1390,20 @@ func printStatus(out io.Writer, status core.Status) error {
 			orDash(strings.Join(repo.Indexes, ",")))
 	}
 	return nil
+}
+
+func timePtr(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	return &at
+}
+
+func checkedAt(at *time.Time) string {
+	if at == nil || at.IsZero() {
+		return "unknown"
+	}
+	return at.UTC().Format(time.RFC3339)
 }
 
 // printChats shows who is connected right now.

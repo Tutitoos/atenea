@@ -21,6 +21,9 @@ import (
 // a caller can inspect model, tool, provider, permission and workflow choices
 // before anything spends money or starts a process.
 func cmdDecide(settingsPath string, args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "accept-plan" {
+		return cmdAcceptDecisionPlan(settingsPath, args[1:], out)
+	}
 	if len(args) > 0 && isDecideControl(args[0]) {
 		return cmdDecideControl(settingsPath, args, out)
 	}
@@ -43,6 +46,8 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	var criterion string
 	var maxDuration string
 	var maxTokens int
+	var contextJSON string
+	var acceptedID, acceptedRevision string
 	flags := flag.NewFlagSet("decide", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository id (default: every declared repository)")
@@ -59,11 +64,25 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	flags.StringVar(&criterion, "criterion", "", "acceptance criterion for the complete commission")
 	flags.StringVar(&maxDuration, "max-duration", "", "maximum active duration, e.g. 30m")
 	flags.IntVar(&maxTokens, "max-tokens", 0, "maximum model tokens per assigned turn")
+	flags.StringVar(&acceptedID, "accepted-plan", "", "local accepted plan id; requires --accepted-revision and --repo")
+	flags.StringVar(&acceptedRevision, "accepted-revision", "", "exact local accepted plan revision")
+	flags.StringVar(&contextJSON, "decision-context", "", "versioned JSON context for a previously accepted plan; context never grants effects")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
 	if flags.NArg() != 0 {
 		return contract.Fail(contract.FailureInvalidInput, "unexpected argument %q after the commission", flags.Arg(0))
+	}
+	var accepted *decision.AcceptedPlanReference
+	if acceptedID != "" || acceptedRevision != "" {
+		if acceptedID == "" || acceptedRevision == "" || repository == "" || contextJSON != "" {
+			return contract.Fail(contract.FailureInvalidInput, "accepted plan requires id, revision and repo; cannot combine with decision-context")
+		}
+		accepted = &decision.AcceptedPlanReference{ID: acceptedID, Revision: acceptedRevision}
+	}
+	decisionContext, err := parseDecisionContext(contextJSON)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "--decision-context: %v", err)
 	}
 	effects, err := allow.effects()
 	if err != nil {
@@ -101,8 +120,8 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 		ranker = decision.AdaptiveModelRanker{History: &workflowDecisionHistory{store: store}}
 	}
 	planner := decision.Planner{Config: cfg, Selector: atenea, Estimator: estimator, Ranker: ranker}
-	plan, err := planner.Build(decision.Request{
-		Text: text, Criterion: criterion, Limits: limits, Repository: repository, Files: files.values, BudgetUSD: budget,
+	plan, err := planner.BuildContext(context.Background(), decision.Request{
+		Text: text, Context: decisionContext, AcceptedPlan: accepted, Criterion: criterion, Limits: limits, Repository: repository, Files: files.values, BudgetUSD: budget,
 		Effects: effects, StandingEffects: cfg.Orchestrator.StandingEffects, Prefer: prefer, Tool: tool,
 	})
 	if err != nil {
@@ -135,8 +154,26 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 			"--run requires --confirm for write/external effects or an explicit raw MCP tool")
 	}
 	if confirm {
-		if err := confirmTTY(out, "decide --run "+text, plan.Workflow.GrantUSD, effects); err != nil {
+		confirmationText := text
+		if plan.ContextUsed && strings.TrimSpace(plan.Workflow.Task) != "" {
+			confirmationText = plan.Workflow.Task
+		}
+		if err := confirmTTY(out, "decide --run "+confirmationText, plan.Workflow.GrantUSD, effects); err != nil {
 			return err
+		}
+	}
+	// Confirmation and planning may take time. Recheck the receipt immediately
+	// before starting execution; ordinary workflow execution gates still apply.
+	if accepted != nil {
+		var root string
+		for _, repo := range cfg.Repositories {
+			if repo.ID == repository {
+				root = repo.Path
+				break
+			}
+		}
+		if _, err := (decision.AcceptedPlanStore{}).Resolve(context.Background(), *accepted, repository, root); err != nil {
+			return contract.Fail(contract.FailureInvalidInput, "accepted plan is no longer current: %v", err)
 		}
 	}
 	ctx, stop := interruptible()
@@ -251,6 +288,29 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+func parseDecisionContext(raw string) (*decision.IntentContext, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var context decision.IntentContext
+	if err := decoder.Decode(&context); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("unexpected data after the context object")
+		}
+		return nil, fmt.Errorf("invalid data after the context object: %w", err)
+	}
+	if context.Version == 0 {
+		return nil, fmt.Errorf("version is required")
+	}
+	return &context, nil
 }
 
 func recordCoordinatorReviewCycle(ctx context.Context, store *coordination.Store, coordinatorID string, run workflow.Run) error {
@@ -427,6 +487,14 @@ func printDecisionJSON(out io.Writer, plan decision.Plan) error {
 
 func printDecisionPlan(out io.Writer, plan decision.Plan, trace bool) {
 	fmt.Fprintf(out, "intent      %s\n", plan.Intent)
+	resolution := orDash(string(plan.Resolution))
+	if plan.ResolutionReason != "" {
+		resolution += " (" + plan.ResolutionReason + ")"
+	}
+	fmt.Fprintf(out, "resolution  %s\n", resolution)
+	if plan.ContextUsed {
+		fmt.Fprintln(out, "context     supplied")
+	}
 	fmt.Fprintf(out, "coordinator %s\n", orDash(plan.Coordinator))
 	fmt.Fprintf(out, "specialists %s\n", orDash(strings.Join(plan.Specialists, ", ")))
 	fmt.Fprintf(out, "criterion   %s\n", orDash(plan.Criterion))

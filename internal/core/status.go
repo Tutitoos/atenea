@@ -119,10 +119,13 @@ type Status struct {
 	// than patching it, so an older file silently misses whatever later
 	// releases added -- and the first symptom is a funnel with no fallback,
 	// which reads as bad luck rather than as a stale file.
-	Missing      []string
-	Uptime       string
-	Stopping     bool
-	Light        Light
+	Missing  []string
+	Uptime   string
+	Stopping bool
+	Light    Light
+	// RedCauses attributes only conditions that actually raised the global
+	// light to red. Presenters bound their short summaries.
+	RedCauses    []StatusCause
 	Funnel       string
 	Orchestrator OrchestratorStatus
 	Capabilities []CapabilityStatus
@@ -299,11 +302,68 @@ type CapabilityStatus struct {
 type ImplementationStatus struct {
 	ID              string
 	Provider        string
+	Repository      string
+	State           string
+	LastChecked     *time.Time
 	Light           Light
 	Health          contract.Health
 	HealthSource    string
 	HealthExpired   bool
 	HealthExpiresAt *time.Time
+}
+
+// StatusCause identifies a condition that raised the global light to red.
+// Reason is a controlled diagnostic class, never provider text.
+type StatusCause struct {
+	Kind           string
+	Capability     string
+	Implementation string
+	Repository     string
+	State          string
+	Evidence       string
+	Reason         string
+	ObservedAt     *time.Time
+}
+
+func implementationCause(capability string, impl ImplementationStatus) StatusCause {
+	cause := StatusCause{
+		Kind: "capability unavailable", Capability: capability,
+		Implementation: impl.ID, Repository: impl.Repository,
+		State: impl.Health.State.String(), Evidence: impl.HealthSource,
+	}
+	switch impl.HealthSource {
+	case "measurements":
+		cause.Reason = "Measurements report this implementation unavailable."
+	case "runtime observation":
+		cause.Reason = "A runtime observation reports this implementation unavailable."
+	default:
+		cause.Reason = "Configuration declares this implementation unavailable."
+	}
+	if !impl.Health.ObservedAt.IsZero() {
+		at := impl.Health.ObservedAt
+		cause.ObservedAt = &at
+	}
+	return cause
+}
+
+// recordedSelected mirrors the branch conditions in metrics.Reconcile without
+// comparing complete Health values: reconciliation may preserve the declared
+// score on an alive promotion, while the observation still supplies state,
+// repository and timestamp.
+func recordedSelected(declared, recorded contract.Health) bool {
+	if recorded.State == contract.HealthAlive {
+		return declared.State == contract.HealthUnknown
+	}
+	return recorded.State.Rank() > declared.State.Rank()
+}
+
+func reconcileStatusHealth(current, incoming contract.Health, incomingSource, incomingRepository, source, repository string) (contract.Health, string, string) {
+	selected := recordedSelected(current, incoming)
+	current = metrics.Reconcile(current, incoming)
+	if selected {
+		return current, incomingSource, incomingRepository
+	}
+	return current, source, repository
 }
 
 // RepositoryStatus is one unit of work.
@@ -577,6 +637,7 @@ func (c *Core) Status() Status {
 		usable := 0
 		for _, impl := range impls {
 			source := "configuration"
+			repository := ""
 			total++
 			// Two probes reach this line and neither is the declaration: what
 			// the metrics base has on disk, and what a call in this process
@@ -587,16 +648,16 @@ func (c *Core) Status() Status {
 				if observed.Reason != "" {
 					observed.Reason = "on " + where + ": " + observed.Reason
 				}
-				impl.Health = metrics.Reconcile(impl.Health, observed)
-				source = "runtime observation"
+				impl.Health, source, repository = reconcileStatusHealth(impl.Health, observed,
+					"runtime observation", where, source, repository)
 			}
 			if v, ok := recorded[impl.ID]; ok {
 				health := v.Health
 				if located && health.Reason != "" {
 					health.Reason = "on " + v.Repository + ": " + health.Reason
 				}
-				impl.Health = metrics.Reconcile(impl.Health, health)
-				source = "measurements and runtime observations"
+				impl.Health, source, repository = reconcileStatusHealth(impl.Health, health,
+					"measurements", v.Repository, source, repository)
 			}
 			expired := impl.Health.Stale(time.Now(), c.settings.Selector.HealthStaleAfter)
 			var expires *time.Time
@@ -608,6 +669,10 @@ func (c *Core) Status() Status {
 				impl.Health.State = contract.HealthUnknown
 				impl.Health.Reason = "Expired observation; awaiting a new probe. " + impl.Health.Reason
 			}
+			// Runtime and configured diagnostics share the public status contract.
+			// Sanitize at this boundary so CLI, MCP and dashboard consumers agree.
+			impl.Health.Reason = contract.RedactRaw(impl.Health.Reason)
+			impl.Health.Raw = contract.RedactRaw(impl.Health.Raw)
 			light := lightFor(impl.Health.State)
 			if impl.Health.Usable() {
 				usable++
@@ -615,6 +680,9 @@ func (c *Core) Status() Status {
 			entry.Implementations = append(entry.Implementations, ImplementationStatus{
 				ID:           impl.ID,
 				Provider:     impl.Provider,
+				Repository:   repository,
+				State:        impl.Health.State.String(),
+				LastChecked:  observedTime(impl.Health.ObservedAt),
 				Light:        light,
 				Health:       impl.Health,
 				HealthSource: source, HealthExpired: expired, HealthExpiresAt: expires,
@@ -630,6 +698,9 @@ func (c *Core) Status() Status {
 		// runner) is not an outage and must not poison the whole screen.
 		if entry.Offered && usable == 0 {
 			status.Light = LightRed
+			for _, impl := range entry.Implementations {
+				status.RedCauses = append(status.RedCauses, implementationCause(entry.ID, impl))
+			}
 		}
 		status.Capabilities = append(status.Capabilities, entry)
 	}
@@ -664,6 +735,12 @@ func (c *Core) Status() Status {
 
 	status.Orchestrator = c.orchestratorStatus()
 	status.Light = worst(status.Light, status.Orchestrator.Light)
+	if status.Orchestrator.Light == LightRed {
+		status.RedCauses = append(status.RedCauses, StatusCause{
+			Kind: "orchestrator", State: "no served implementations",
+			Reason: "No attached runner serves a declared implementation.",
+		})
+	}
 
 	status.Maintenance = c.maintenance()
 	for _, lane := range status.Maintenance {
@@ -710,6 +787,13 @@ func (c *Core) Status() Status {
 		status.Light = worst(status.Light, LightAmber)
 	}
 	return status
+}
+
+func observedTime(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	return &at
 }
 
 // maintenance reports what each background lane has been doing.
