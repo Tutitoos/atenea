@@ -151,10 +151,14 @@ set `mode = "observe"`; `mode = "laya"` opts into using predictions above the
 configured `minimum_confidence`. Configure Laya's local HTTP endpoint and
 timeout in this block. The full protocol, privacy boundary and evaluation
 instructions are in [Decision router]({{< relref "decision" >}}).
+`capture_dir` optionally writes unreviewed, automatically redacted
+`decision.plan` candidates to a private directory outside Git. Its empty
+default leaves capture off; see the privacy requirements in Decision router.
 
 ```toml
 [decision]
 mode = "rules" # rules, observe, or laya
+capture_dir = "" # absolute private directory for opt-in evaluation capture
 laya_endpoint = "" # POST endpoint ending in /v1/systemone
 laya_model = "" # optional checkpoint pin: english, multilingual, typed-decisions
 laya_api_key_env = "" # environment variable name; never put the token here

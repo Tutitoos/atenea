@@ -15,6 +15,28 @@ persists nor launches the workflow. The managed `atenea-plan-mode` Codex skill
 uses this surface automatically only while the active collaboration mode is
 Plan.
 
+For a private evaluation pilot, the operator may create a directory owned by
+the ATENEA user with mode `0700` and set `[decision].capture_dir` to its absolute
+path in the global settings file. Restart the central ATENEA service after
+changing this setting; MCP clients relay their requests to that service.
+`ATENEA_DECISION_CAPTURE_DIR` is an alternative for the service process when
+`capture_dir` is empty. Only validated
+`decision.plan` calls are recorded; the feature is off when both settings are
+empty. `candidates.private.jsonl`, `capture.lock`, and
+the deduplication key `capture.key` are created with mode `0600`. Records
+include the MCP source, UTC capture time,
+repository, automatically redacted objective, inferred intent, and build
+revision when available. Exact duplicates are collapsed. Storage errors leave
+the returned plan unchanged and are logged without request text.
+
+These records are **unreviewed candidates**, not verified user requests or a
+representative sample. Automatic redaction catches common emails, URLs, paths,
+IPs, and secret assignments but cannot guarantee removal of names or every
+secret. Keep the directory outside Git, restrict access, perform a human
+privacy and legitimacy review before using any case, then freeze sampling and
+labels separately. This capture does not change `decision.mode`, selected
+rules, permissions, or workflow execution.
+
 ## Intent classification with Laya
 
 The `[decision]` settings block controls intent classification. The default

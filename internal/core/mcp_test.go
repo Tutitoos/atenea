@@ -334,7 +334,13 @@ func TestToolsListIsTheShippedCatalogue(t *testing.T) {
 }
 
 func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
-	atenea := buildService(t, decisionPlanSettings(t))
+	captureDir := filepath.Join(t.TempDir(), "capture")
+	if err := os.Mkdir(captureDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATENEA_DECISION_CAPTURE_DIR", "")
+	settings := decisionPlanSettings(t) + fmt.Sprintf("\n[decision]\ncapture_dir = %q\n", captureDir)
+	atenea := buildService(t, settings)
 	defer serve(t, atenea)()
 
 	c := dial(t)
@@ -394,6 +400,31 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("decision.plan persisted %d workflow(s)", len(runs))
+	}
+	captured, err := os.ReadFile(filepath.Join(captureDir, "candidates.private.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate struct {
+		Source      string `json:"source"`
+		Intent      string `json:"intent"`
+		ReviewState string `json:"review_state"`
+	}
+	if err := json.Unmarshal(captured, &candidate); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Source != "mcp.decision.plan" || candidate.Intent != "plan" || candidate.ReviewState != "automatic_unreviewed" {
+		t.Fatalf("capture provenance = %+v", candidate)
+	}
+	if err := os.Chmod(captureDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	withoutStorage := result(t, c.call("tools/call", map[string]any{
+		"name":      "decision.plan",
+		"arguments": map[string]any{"objective": "planificar el flujo de autenticación", "repository": "work", "budget_usd": 10},
+	}), "decision.plan without capture storage")
+	if withoutStorage["structuredContent"].(map[string]any)["dry_run"] != true {
+		t.Fatal("capture storage failure changed the plan response")
 	}
 }
 

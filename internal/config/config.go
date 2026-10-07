@@ -133,6 +133,7 @@ type Knowledge struct {
 // classifier remains the default and does not contact the configured endpoint.
 type DecisionSettings struct {
 	Mode              string
+	CaptureDir        string
 	LayaEndpoint      string
 	LayaModel         string
 	LayaAPIKeyEnv     string
@@ -1419,6 +1420,7 @@ type fileKnowledge struct {
 
 type fileDecision struct {
 	Mode              string   `toml:"mode"`
+	CaptureDir        string   `toml:"capture_dir"`
 	LayaEndpoint      string   `toml:"laya_endpoint"`
 	LayaModel         string   `toml:"laya_model"`
 	LayaAPIKeyEnv     string   `toml:"laya_api_key_env"`
@@ -3507,6 +3509,7 @@ func (c fileCore) build(source string) (Core, error) {
 func (d fileDecision) build(source string) (DecisionSettings, error) {
 	out := DecisionSettings{
 		Mode:              strings.ToLower(strings.TrimSpace(d.Mode)),
+		CaptureDir:        strings.TrimSpace(d.CaptureDir),
 		LayaEndpoint:      strings.TrimSpace(d.LayaEndpoint),
 		LayaModel:         strings.ToLower(strings.TrimSpace(d.LayaModel)),
 		LayaAPIKeyEnv:     strings.TrimSpace(d.LayaAPIKeyEnv),
@@ -3522,6 +3525,9 @@ func (d fileDecision) build(source string) (DecisionSettings, error) {
 	}
 	if out.Mode != "rules" && out.Mode != "observe" && out.Mode != "laya" {
 		return fail("mode %q must be rules, observe or laya", out.Mode)
+	}
+	if out.CaptureDir != "" && !filepath.IsAbs(out.CaptureDir) {
+		return fail("capture_dir must be an absolute path")
 	}
 	if out.LayaModel != "" && out.LayaModel != "english" && out.LayaModel != "multilingual" && out.LayaModel != "typed-decisions" {
 		return fail("laya_model must be english, multilingual or typed-decisions")

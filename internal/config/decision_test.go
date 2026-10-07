@@ -7,8 +7,18 @@ func TestDecisionSettingsDefaultToLocalRulesWithoutAService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Mode != "rules" || settings.LayaEndpoint != "" || settings.Timeout <= 0 || settings.MinimumConfidence != 0.8 {
+	if settings.Mode != "rules" || settings.CaptureDir != "" || settings.LayaEndpoint != "" || settings.Timeout <= 0 || settings.MinimumConfidence != 0.8 {
 		t.Fatalf("decision settings = %+v", settings)
+	}
+}
+
+func TestDecisionCaptureRequiresAbsolutePrivateDestinationAtUse(t *testing.T) {
+	if _, err := (fileDecision{CaptureDir: "relative/cases"}).build("test settings"); err == nil {
+		t.Fatal("relative capture destination accepted")
+	}
+	settings, err := (fileDecision{CaptureDir: "/private/atenea-cases"}).build("test settings")
+	if err != nil || settings.CaptureDir != "/private/atenea-cases" {
+		t.Fatalf("capture settings = %+v, %v", settings, err)
 	}
 }
 

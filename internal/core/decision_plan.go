@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/decision"
+	"github.com/Tutitoos/atenea/internal/decisioncapture"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -144,6 +147,13 @@ func (v *conversation) decisionPlan(ctx context.Context, args map[string]any) (a
 	})
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	}
+	captureDir := v.core.settings.Decision.CaptureDir
+	if captureDir == "" {
+		captureDir = os.Getenv(decisioncapture.EnvDir)
+	}
+	if err := decisioncapture.CaptureIn(captureDir, "mcp.decision.plan", repository, objective, string(plan.Intent)); err != nil {
+		slog.Warn("decision capture unavailable", "reason", err)
 	}
 	raw, err := json.Marshal(plan)
 	if err != nil {
