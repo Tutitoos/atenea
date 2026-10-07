@@ -17,9 +17,10 @@ Plan.
 
 For a private evaluation pilot, the operator may create a directory owned by
 the ATENEA user with mode `0700` and set `[decision].capture_dir` to its absolute
-path in the global settings file. New MCP processes started by different
-clients read this same setting. `ATENEA_DECISION_CAPTURE_DIR` is an alternative
-for a single process when `capture_dir` is empty. Only validated
+path in the global settings file. Restart the central ATENEA service after
+changing this setting; MCP clients relay their requests to that service.
+`ATENEA_DECISION_CAPTURE_DIR` is an alternative for the service process when
+`capture_dir` is empty. Only validated
 `decision.plan` calls are recorded; the feature is off when both settings are
 empty. `candidates.private.jsonl`, `capture.lock`, and
 the deduplication key `capture.key` are created with mode `0600`. Records
