@@ -49,3 +49,38 @@ safe integer handling and encoded non-header-safe string values.
 The compatibility tests cover local Unix-socket core dispatch, streamable HTTP,
 stdio, probes and passthrough backends. They do not claim that every external
 desktop client or remote MCP server has been functionally validated.
+
+## Agent-device interaction contract
+
+For the pinned `agent-device` `0.20.10` release, Atenea advertises a detached,
+stricter schema for `raw.agent-device.open`, `click` and `fill`. The upstream
+schema is retained intact for version and fingerprint checks. If the release or
+one of those schemas changes, Atenea withholds the affected tool from
+`tools/list` until its contract is reviewed; a direct call is refused as
+`compatibility_unverified` before device dispatch.
+
+Supply an explicit nonempty `session` and absolute `cwd` for all three tools.
+`open` also needs a nonempty `udid`, `serial` or `device`. For `click` and
+`fill`, use a discriminated `target` object: `{"kind":"ref","ref":"@e12"}`,
+`{"kind":"selector","selector":"role=button"}` or
+`{"kind":"point","x":10,"y":20}`. `fill` additionally requires `text`;
+do not put private text in diagnostics. A reference is `@e` followed by digits,
+optionally followed by `~s` and up to 16 generation digits, for example
+`@e12~s4`. The pinned form pairs a ref with the `refsGeneration` from the
+snapshot or find response that issued it. The selector must contain `=`. The
+upstream variants and permitted fields otherwise remain unchanged.
+
+Each advertised `open` selector branch contains the complete verified
+upstream field set, including `session`, `cwd`, `app` and `url`. This lets clients
+that project one `anyOf` branch retain all valid options. Each branch still
+requires `session`, `cwd` and its own nonempty selector; unknown fields remain
+rejected. The upstream schema bytes and fingerprint are unchanged.
+
+JSON Schema can describe these argument shapes. It cannot prove that a
+reference is fresh, that a named session belongs to the current flow, that a
+device is free, or that the action completed after a transport failure. Atenea
+checks ownership and live session state before dispatch. If a mutating result
+is uncertain, inspect the session and a fresh snapshot before deciding whether
+another action is needed. Use `atenea.command` with `name=device.sessions` or
+`name=device.help` for recovery. The local contract tests do not certify
+Android or iOS client behavior; each needs separate real-client acceptance.

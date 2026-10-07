@@ -25,12 +25,17 @@ func Fingerprint(raw json.RawMessage) string {
 	return hex.EncodeToString(sum[:])
 }
 
-var refPattern = regexp.MustCompile(`^@e[0-9]+$`)
+// The optional generation is emitted by agent-device 0.20.10 for mutation refs.
+// Sixteen digits cover JavaScript's safe integer range without accepting an
+// unbounded suffix; the device still decides whether the generation is fresh.
+const refPatternSource = `^@e[0-9]+(?:~s[0-9]{1,16})?$`
+
+var refPattern = regexp.MustCompile(refPatternSource)
 
 // Validate applies only rules qualified against the observed release/schema.
 // It never changes arguments or the upstream schema.
 func Validate(version, tool string, schema json.RawMessage, args map[string]any) error {
-	if tool != "wait" && tool != "click" {
+	if tool != "wait" && tool != "click" && tool != "open" && tool != "fill" {
 		return nil
 	}
 	known, _ := schemas.ReadFile("testdata/" + tool + "-" + Version + ".json")
@@ -41,7 +46,8 @@ func Validate(version, tool string, schema json.RawMessage, args map[string]any)
 	if err := validatePinnedSchema(schema, args); err != nil {
 		return invalid(err.Error())
 	}
-	if tool == "wait" {
+	switch tool {
+	case "wait":
 		condition, count := "", 0
 		for _, key := range []string{"durationMs", "text", "ref", "selector", "stable"} {
 			if _, exists := args[key]; exists {
@@ -79,16 +85,16 @@ func Validate(version, tool string, schema json.RawMessage, args map[string]any)
 				}
 			}
 		}
-	} else {
+	case "click", "fill":
 		target, ok := args["target"].(map[string]any)
 		if !ok {
-			return invalid("click requires a discriminated target object")
+			return invalid(tool + " requires a discriminated target object")
 		}
 		switch target["kind"] {
 		case "ref":
 			ref, _ := target["ref"].(string)
 			if !refPattern.MatchString(ref) {
-				return invalid("target.ref must use @eN from the current session snapshot")
+				return invalid("target.ref must use @eN or @eN~sN from the current session snapshot")
 			}
 		case "selector":
 			selector, _ := target["selector"].(string)
@@ -106,13 +112,38 @@ func Validate(version, tool string, schema json.RawMessage, args map[string]any)
 			return invalid("target.kind must be ref, selector or point")
 		}
 	}
+	if tool == "open" || tool == "click" || tool == "fill" {
+		if session, _ := args["session"].(string); session == "" {
+			return invalid("session must be explicit and nonempty")
+		}
+		if cwd, _ := args["cwd"].(string); !strings.HasPrefix(cwd, "/") {
+			return invalid("cwd must be an explicit absolute path")
+		}
+		if tool == "open" {
+			selected := false
+			for _, key := range []string{"udid", "serial", "device"} {
+				if s, _ := args[key].(string); s != "" {
+					selected = true
+				}
+			}
+			if !selected {
+				return invalid("open requires an explicit udid, serial or device")
+			}
+		}
+	}
 	return nil
 }
 
 // Help provides corrected examples without rewriting raw tool descriptions.
 func Help(tool string) string {
 	if tool == "click" {
-		return `Example: {"session":"my-task","target":{"kind":"ref","ref":"@e12"}}. Use a fresh snapshot of that session; never retry an uncertain click automatically.`
+		return `Example: {"session":"my-task","cwd":"/absolute/project","target":{"kind":"ref","ref":"@e12"}}. Use a fresh snapshot of that session; never retry an uncertain click automatically.`
+	}
+	if tool == "open" {
+		return `Example: {"session":"my-task","cwd":"/absolute/project","udid":"explicit-device-id","app":"example.app"}. Choose a free device and a dedicated session.`
+	}
+	if tool == "fill" {
+		return `Example: {"session":"my-task","cwd":"/absolute/project","target":{"kind":"ref","ref":"@e12"},"text":"value"}. Use a fresh snapshot; do not include private text in diagnostics.`
 	}
 	return `Examples: {"session":"my-task","kind":"duration","durationMs":1000} or {"session":"my-task","kind":"stable","stable":true,"quietMs":500}. List sessions with atenea.command name=device.sessions. Keep session, cwd and device explicit; do not take another task's session.`
 }

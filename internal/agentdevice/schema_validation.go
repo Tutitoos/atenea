@@ -5,11 +5,24 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 )
 
-// validateSchema covers the vocabulary of the pinned click/wait schemas. The
+// validateSchema covers the vocabulary of the pinned interaction schemas. The
 // fingerprint gate runs first, so a new upstream vocabulary cannot be guessed.
 func validateSchema(schema map[string]any, value any, path string) error {
+	if choices, ok := schema["anyOf"].([]any); ok {
+		matched := false
+		for _, choice := range choices {
+			if validateSchema(choice.(map[string]any), value, path) == nil {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%s must match an allowed variant", path)
+		}
+	}
 	if choices, ok := schema["oneOf"].([]any); ok {
 		matches := 0
 		for _, choice := range choices {
@@ -36,6 +49,26 @@ func validateSchema(schema map[string]any, value any, path string) error {
 			return fmt.Errorf("%s is outside the supported values", path)
 		}
 	}
+	if fields, exists := schema["required"]; exists {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s must be an object", path)
+		}
+		var required []string
+		switch fields := fields.(type) {
+		case []any:
+			for _, field := range fields {
+				required = append(required, field.(string))
+			}
+		case []string:
+			required = fields
+		}
+		for _, key := range required {
+			if _, ok := object[key]; !ok {
+				return fmt.Errorf("%s.%s is required", path, key)
+			}
+		}
+	}
 	switch schema["type"] {
 	case "object":
 		object, ok := value.(map[string]any)
@@ -43,17 +76,11 @@ func validateSchema(schema map[string]any, value any, path string) error {
 			return fmt.Errorf("%s must be an object", path)
 		}
 		properties, _ := schema["properties"].(map[string]any)
-		required, _ := schema["required"].([]any)
-		for _, key := range required {
-			if _, ok := object[key.(string)]; !ok {
-				return fmt.Errorf("%s.%s is required", path, key)
-			}
-		}
 		for key, child := range object {
 			property, known := properties[key]
 			if !known {
 				if schema["additionalProperties"] == false {
-					return fmt.Errorf("%s.%s is not supported", path, key)
+					return fmt.Errorf("%s has an unsupported field", path)
 				}
 				continue
 			}
@@ -62,8 +89,27 @@ func validateSchema(schema map[string]any, value any, path string) error {
 			}
 		}
 	case "string":
-		if _, ok := value.(string); !ok {
+		stringValue, ok := value.(string)
+		if !ok {
 			return fmt.Errorf("%s must be a string", path)
+		}
+		if minimum, ok := schema["minLength"].(float64); ok && float64(len([]rune(stringValue))) < minimum {
+			return fmt.Errorf("%s is too short", path)
+		}
+		if pattern, ok := schema["pattern"].(string); ok && !regexp.MustCompile(pattern).MatchString(stringValue) {
+			return fmt.Errorf("%s does not match the required pattern", path)
+		}
+	case "array":
+		values, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("%s must be an array", path)
+		}
+		if item, ok := schema["items"].(map[string]any); ok {
+			for _, value := range values {
+				if err := validateSchema(item, value, path+"[]"); err != nil {
+					return err
+				}
+			}
 		}
 	case "boolean":
 		if _, ok := value.(bool); !ok {
@@ -76,6 +122,9 @@ func validateSchema(schema map[string]any, value any, path string) error {
 		}
 		if minimum, ok := schema["minimum"].(float64); ok && number < minimum {
 			return fmt.Errorf("%s must be at least %g", path, minimum)
+		}
+		if maximum, ok := schema["maximum"].(float64); ok && number > maximum {
+			return fmt.Errorf("%s must be at most %g", path, maximum)
 		}
 	}
 	return nil

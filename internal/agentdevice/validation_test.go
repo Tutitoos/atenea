@@ -10,12 +10,17 @@ func TestPinnedValidationRejectsMalformedCalls(t *testing.T) {
 		{"wait", `{}`}, {"wait", `{"durationMs":1,"stable":true}`},
 		{"wait", `{"kind":"text","durationMs":1}`}, {"wait", `{"durationMs":-1}`},
 		{"wait", `{"stable":false}`}, {"wait", `{"text":""}`}, {"wait", `{"ref":"e12"}`},
+		{"wait", `{"ref":"@e12~s"}`},
 		{"click", `{"target":"e12"}`}, {"click", `{"target":{"kind":"ref","ref":"e12"}}`},
 		{"click", `{"target":{"kind":"selector","selector":"e12"}}`},
 		{"click", `{"target":{"kind":"point","x":1}}`},
 	} {
 		var args map[string]any
 		_ = json.Unmarshal([]byte(tc.raw), &args)
+		if tc.tool == "click" {
+			args["session"] = "task"
+			args["cwd"] = "/fixture"
+		}
 		schema, _ := schemas.ReadFile("testdata/" + tc.tool + "-" + Version + ".json")
 		if err := Validate(Version, tc.tool, schema, args); err == nil {
 			t.Fatalf("accepted %s %s", tc.tool, tc.raw)
@@ -26,13 +31,18 @@ func TestPinnedValidationRejectsMalformedCalls(t *testing.T) {
 func TestPinnedValidationPreservesValidVariants(t *testing.T) {
 	for _, tc := range []struct{ tool, raw string }{
 		{"wait", `{"durationMs":0}`}, {"wait", `{"kind":"stable","stable":true,"quietMs":500}`},
-		{"wait", `{"text":"Ready"}`}, {"wait", `{"ref":"@e12"}`}, {"wait", `{"selector":"role=button"}`},
+		{"wait", `{"text":"Ready"}`}, {"wait", `{"ref":"@e12"}`}, {"wait", `{"ref":"@e12~s4"}`}, {"wait", `{"selector":"role=button"}`},
 		{"click", `{"target":{"kind":"ref","ref":"@e12"}}`},
+		{"click", `{"target":{"kind":"ref","ref":"@e12~s4"}}`},
 		{"click", `{"target":{"kind":"selector","selector":"role=button"}}`},
 		{"click", `{"target":{"kind":"point","x":1,"y":2}}`},
 	} {
 		var args map[string]any
 		_ = json.Unmarshal([]byte(tc.raw), &args)
+		if tc.tool == "click" {
+			args["session"] = "task"
+			args["cwd"] = "/fixture"
+		}
 		schema, _ := schemas.ReadFile("testdata/" + tc.tool + "-" + Version + ".json")
 		before, _ := json.Marshal(args)
 		if err := Validate(Version, tc.tool, schema, args); err != nil {

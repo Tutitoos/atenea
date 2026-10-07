@@ -10,7 +10,7 @@ import (
 )
 
 func (v *conversation) validateDeviceCall(ctx context.Context, backend rawBackend, tool string, args map[string]any) error {
-	if tool == "click" || tool == "wait" {
+	if tool == "open" || tool == "click" || tool == "fill" || tool == "wait" {
 		tools, err := backend.Tools(ctx)
 		if err != nil {
 			return err
