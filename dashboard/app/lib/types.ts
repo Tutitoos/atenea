@@ -157,7 +157,18 @@ export interface WorkflowDetail {
 export interface Overview {
   at?: string;
   range?: string;
-  snapshot?: { light?: State; uptime_ms?: number; active_sessions?: number; active_runs?: number };
+  snapshot?: {
+    light?: State;
+    redCauses?: Array<{
+      kind?: string; capability?: string; implementation?: string; repository?: string;
+      state?: string; evidence?: string; reason?: string; observedAt?: string; expired?: boolean;
+    }>;
+    capabilities?: Array<{ id?: string; implementations?: Array<{
+      id?: string; repository?: string; state?: string; lastChecked?: string;
+      healthSource?: string; healthExpired?: boolean;
+    }> }>;
+    uptime_ms?: number; active_sessions?: number; active_runs?: number;
+  };
   sessions?: number | Session[] | { total?: number; active?: number };
   runs?: number | { total?: number; active?: number };
   stats?: Record<string, unknown> & { success_rate?: number; duration_ms?: number; tokens?: number; cost?: number };

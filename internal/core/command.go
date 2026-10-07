@@ -305,6 +305,27 @@ func commandMarkdown(response CommandResponse) string {
 	case Status:
 		fmt.Fprintf(&b, "- **Luz:** `%s`\n- **Versión:** `%s`\n- **Rol:** `%s`\n- **Repositorios:** %d\n- **Capacidades:** %d\n",
 			data.Light.String(), data.Version, data.Role, len(data.Repositories), len(data.Capabilities))
+		if data.Light == LightRed {
+			b.WriteString("\n### Causas del estado rojo\n")
+			const maxCauses = 5
+			for i, cause := range data.RedCauses {
+				if i == maxCauses {
+					fmt.Fprintf(&b, "- %d causas más en los datos estructurados.\n", len(data.RedCauses)-maxCauses)
+					break
+				}
+				if cause.Kind == "orchestrator" {
+					fmt.Fprintf(&b, "- Orquestador: %s\n", md(cause.Reason))
+					continue
+				}
+				checked := "desconocida"
+				if cause.ObservedAt != nil && !cause.ObservedAt.IsZero() {
+					checked = cause.ObservedAt.UTC().Format(time.RFC3339)
+				}
+				fmt.Fprintf(&b, "- `%s` / `%s` · repositorio `%s` · estado `%s` · comprobación %s · fuente `%s`: %s\n",
+					md(cause.Capability), md(cause.Implementation), md(cause.Repository),
+					md(cause.State), checked, md(cause.Evidence), md(cause.Reason))
+			}
+		}
 		if len(data.Orchestrator.ClientFloor) > 0 {
 			fmt.Fprintf(&b, "- **Permisos de cliente:** `%s`\n", strings.Join(data.Orchestrator.ClientFloor, "`, `"))
 		}
