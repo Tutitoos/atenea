@@ -91,6 +91,119 @@ func TestResolveStaticFirstValuesAndConditionalIncludes(t *testing.T) {
 	}
 }
 
+func TestResolveStaticSystemDefaultsForRestrictedProbe(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	user := filepath.Join(root, "user", "config")
+	system := filepath.Join(root, "system", "ssh_config")
+	writeFixture(t, user, "Host selected\n HostName selected.example.test\n User person\n Ciphers chacha20-poly1305@openssh.com\n")
+	writeFixture(t, system, "Include "+filepath.Join(root, "system", "conf.d", "*")+"\nHost *\n SendEnv LANG LC_*\n SendEnv -LC_SECRET\n HashKnownHosts yes\n GSSAPIAuthentication yes\n GSSAPIDelegateCredentials no\n Ciphers aes128-ctr\n KexAlgorithms curve25519-sha256\n MACs hmac-sha2-256\n")
+	writeFixture(t, filepath.Join(root, "system", "conf.d", "10-defaults.conf"), "Host *\n SendEnv TERM\n")
+	selected, err := ResolveStatic(user, system, "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Ciphers != "chacha20-poly1305@openssh.com" || selected.KexAlgorithms != "curve25519-sha256" || selected.MACs != "hmac-sha2-256" {
+		t.Fatalf("wrong negotiation policy: %+v", selected)
+	}
+	plan, err := PrepareDirectProbe(user, system, selected, directPinFixture("selected.example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restricted ssh -G: %v: %s", err, output)
+	}
+	for _, expected := range []string{"ciphers chacha20-poly1305@openssh.com", "kexalgorithms curve25519-sha256", "macs hmac-sha2-256"} {
+		if !strings.Contains(string(output), expected+"\n") {
+			t.Fatalf("restricted config lost %q: %s", expected, output)
+		}
+	}
+	if strings.Contains(string(output), "sendenv ") {
+		t.Fatal("restricted no-session probe retained SendEnv")
+	}
+	if strings.Contains(string(output), "gssapiauthentication yes") || strings.Contains(string(output), "hashknownhosts yes") {
+		t.Fatal("restricted probe retained suppressed system defaults")
+	}
+	if err := plan.Revalidate(); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, system, "Host *\n Ciphers aes128-ctr\n KexAlgorithms curve25519-sha256\n MACs hmac-sha2-512\n")
+	if err := plan.Revalidate(); !errors.Is(err, ErrChanged) {
+		t.Fatalf("changed system policy revalidated: %v", err)
+	}
+}
+
+func TestResolveStaticRejectsUnsafeSystemOptions(t *testing.T) {
+	root := t.TempDir()
+	user := filepath.Join(root, "config")
+	system := filepath.Join(root, "ssh_config")
+	writeFixture(t, user, "Host selected\n HostName selected.example.test\n")
+	for _, option := range []string{
+		"SendEnv", "SendEnv -", "SendEnv LC_GOOD bad/name",
+		"Ciphers aes128-ctr,", "KexAlgorithms +", "MACs hmac-sha2-256;helper",
+		"HashKnownHosts maybe", "GSSAPIAuthentication maybe",
+		"KnownHostsCommand /tmp/helper",
+	} {
+		t.Run(option, func(t *testing.T) {
+			writeFixture(t, system, "Host *\n "+option+"\n")
+			selection, err := ResolveStatic(user, system, "selected")
+			if !errors.Is(err, ErrUnresolved) || selection.Snapshot != "" {
+				t.Fatalf("unsafe system option resolved: %+v, %v", selection, err)
+			}
+		})
+	}
+	marker := filepath.Join(root, "helper-was-run")
+	writeFixture(t, system, "Host *\n ProxyCommand "+sideEffectCommand(t, marker)+"\n")
+	selection, err := ResolveStatic(user, system, "selected")
+	if err != nil {
+		t.Fatalf("proxy route should be recorded for review: %v", err)
+	}
+	if _, err := PrepareDirectProbe(user, system, selection, directPinFixture("selected.example.test")); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("arbitrary system proxy route reached direct probe: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("system proxy helper executed: %v", err)
+	}
+}
+
+func TestResolveStaticPreservesAlgorithmListModifiers(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName selected.example.test\n Ciphers -aes128-ctr\n KexAlgorithms ^curve25519-sha256\n MACs +hmac-sha2-256\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Ciphers != "-aes128-ctr" || selection.KexAlgorithms != "^curve25519-sha256" || selection.MACs != "+hmac-sha2-256" {
+		t.Fatalf("list modifiers changed: %+v", selection)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("selected.example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restricted ssh -G: %v: %s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.HasPrefix(line, "ciphers ") && strings.Contains(","+strings.TrimPrefix(line, "ciphers ")+",", ",aes128-ctr,") {
+			t.Fatalf("removed cipher survived: %s", line)
+		}
+		if strings.HasPrefix(line, "kexalgorithms ") && !strings.HasPrefix(line, "kexalgorithms curve25519-sha256,") {
+			t.Fatalf("preferred KEX did not lead the list: %s", line)
+		}
+	}
+}
+
 func TestUserRelativeIncludeUsesOpenSSHHomeRoot(t *testing.T) {
 	ssh, err := exec.LookPath("ssh")
 	if err != nil {

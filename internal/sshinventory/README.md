@@ -39,8 +39,18 @@ conditions deliberately reports unresolved state rather than running them.
 `IdentityFile` entries accumulate. The proxy command is returned as text and
 is never run by resolution. A `ProxyCommand` containing `#`, quotes or escapes
 is unresolved because OpenSSH can treat its entire suffix as command text;
-stripping it could falsely classify an active route as disabled. If no active
-`User` option is set, resolution uses the local account name as OpenSSH does;
+stripping it could falsely classify an active route as disabled.
+`Ciphers`, `KexAlgorithms` and `MACs` options are resolved with the same
+first-value rule and passed to the restricted direct probe or to the relevant
+hop of a single-jump probe. Their list syntax is bounded before it reaches a
+private config or argument. `SendEnv` patterns are validated but omitted:
+these probes request no remote session, so they cannot send environment
+variables. Other active system options, including executable known-host
+helpers, remain unresolved unless explicitly supported. Common Linux
+`HashKnownHosts` and GSSAPI booleans are validated and suppressed because the
+probe cannot add keys and requests only public-key authentication.
+
+If no active `User` option is set, resolution uses the local account name as OpenSSH does;
 on Windows it drops a local computer prefix, retains a domain prefix and uses
 OpenSSH's lowercase account spelling. Native `ssh -G` fixtures check both
 forms. An unavailable or unsafe local name fails closed. Resolution requires
@@ -107,6 +117,9 @@ the selected host, port and absolute identity files; its account must be safe
 to render in the private config. The destination uses its own selected identity
 files. Dynamic key paths, multiple hops,
 arbitrary `ProxyCommand` text and Windows jump execution remain unsupported.
+The route also refuses a destination `HostName` that matches the gateway alias,
+case-insensitively: the outer OpenSSH client reads the private gateway config,
+and that match would apply gateway host/key/algorithm settings to the target.
 The private configuration prevents selected remote/local commands, agent use,
 PTY and unrelated forwarding from running. The gateway's `-W` TCP forwarding
 is the only forwarding needed for this route. The caller still owns separate

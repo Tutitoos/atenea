@@ -145,6 +145,7 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	if selection.HostKeyAlias != "" {
 		args = append(args, "-o", "HostKeyAlias="+selection.HostKeyAlias)
 	}
+	args = appendSelectedAlgorithms(args, selection)
 	if !hasExplicitIdentity {
 		args = append(args, "-o", "PubkeyAuthentication=no")
 	}
@@ -161,6 +162,19 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	selection.IdentityFiles = append([]string(nil), selection.IdentityFiles...)
 	selection.Sources = append([]Diagnostic(nil), selection.Sources...)
 	return &ProbePlan{args: args, root: root, rootInfo: rootInfo, userConfig: userConfig, systemConfig: systemConfig, selection: selection}, nil
+}
+
+func appendSelectedAlgorithms(args []string, selection Selection) []string {
+	for _, option := range []struct{ name, value string }{
+		{"Ciphers", selection.Ciphers},
+		{"KexAlgorithms", selection.KexAlgorithms},
+		{"MACs", selection.MACs},
+	} {
+		if option.value != "" {
+			args = append(args, "-o", option.name+"="+option.value)
+		}
+	}
+	return args
 }
 
 // validateDirectPinSnapshot keeps the low-level probe from accepting wildcard

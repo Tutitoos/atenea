@@ -174,6 +174,107 @@ func TestPrepareSingleJumpProbeUsesPrivateGatewayConfiguration(t *testing.T) {
 	}
 }
 
+func TestSingleJumpPreservesPerHopSystemAlgorithms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("single-jump execution is not yet supported on Windows")
+	}
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	user, _, _, _ := jumpFixture(t)
+	system := filepath.Join(t.TempDir(), "ssh_config")
+	writeFixture(t, system, "Host selected\n Ciphers aes128-ctr\n KexAlgorithms curve25519-sha256\n MACs hmac-sha2-256\nHost jump\n Ciphers aes256-ctr\n KexAlgorithms ecdh-sha2-nistp256\n MACs hmac-sha2-512\nHost *\n SendEnv LANG LC_*\n")
+	target, err := ResolveStatic(user, system, "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jump, err := ResolveStatic(user, system, "jump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetToken, err := directKnownHostToken(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumpToken, err := directKnownHostToken(jump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := append(syntheticJumpPin(targetToken, 'a'), syntheticJumpPin(jumpToken, 'b')...)
+	plan, err := PrepareSingleJumpProbe(user, system, target, jump, pins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	targetOutput, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("target ssh -G: %v: %s", err, targetOutput)
+	}
+	jumpOutput, err := exec.Command(ssh, "-G", "-F", filepath.Join(plan.root, "config"), "jump").CombinedOutput()
+	if err != nil {
+		t.Fatalf("jump ssh -G: %v: %s", err, jumpOutput)
+	}
+	for _, check := range []struct {
+		output []byte
+		want   []string
+	}{
+		{targetOutput, []string{"ciphers aes128-ctr", "kexalgorithms curve25519-sha256", "macs hmac-sha2-256"}},
+		{jumpOutput, []string{"ciphers aes256-ctr", "kexalgorithms ecdh-sha2-nistp256", "macs hmac-sha2-512"}},
+	} {
+		for _, want := range check.want {
+			if !strings.Contains(string(check.output), want+"\n") {
+				t.Fatalf("private config lost %q: %s", want, check.output)
+			}
+		}
+		if strings.Contains(string(check.output), "sendenv ") {
+			t.Fatal("restricted no-session route retained SendEnv")
+		}
+	}
+}
+
+func TestSingleJumpRejectsDestinationMatchingGatewayStanza(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("single-jump execution is not yet supported on Windows")
+	}
+	for _, hostname := range []string{"jump", "JuMp"} {
+		t.Run(hostname, func(t *testing.T) {
+			config := filepath.Join(t.TempDir(), "config")
+			writeFixture(t, config, "Host selected\n HostName "+hostname+"\n User destination\n Port 2222\n ProxyJump jump\n HostKeyAlias target-reviewed\n IdentityFile /nonexistent/target-key\n Ciphers aes128-ctr\n KexAlgorithms curve25519-sha256\n MACs hmac-sha2-256\nHost jump\n HostName gateway.example.test\n User gateway\n Port 2200\n HostKeyAlias gateway-reviewed\n IdentityFile /nonexistent/gateway-key\n Ciphers aes256-ctr\n KexAlgorithms ecdh-sha2-nistp256\n MACs hmac-sha2-512\n")
+			target, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			jump, err := ResolveStatic(config, "", "jump")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target.HostName != hostname || target.HostKeyAlias != "target-reviewed" || jump.HostKeyAlias != "gateway-reviewed" ||
+				target.IdentityFiles[0] != "/nonexistent/target-key" || jump.IdentityFiles[0] != "/nonexistent/gateway-key" ||
+				target.Ciphers != "aes128-ctr" || jump.Ciphers != "aes256-ctr" ||
+				target.KexAlgorithms != "curve25519-sha256" || jump.KexAlgorithms != "ecdh-sha2-nistp256" ||
+				target.MACs != "hmac-sha2-256" || jump.MACs != "hmac-sha2-512" {
+				t.Fatalf("fixture did not separate target and gateway settings: target=%+v jump=%+v", target, jump)
+			}
+			if err := validateSingleJumpRoute(config, "", target, jump); !errors.Is(err, ErrProbeUnsupported) {
+				t.Fatalf("colliding route validated: %v", err)
+			}
+			targetToken, err := directKnownHostToken(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			jumpToken, err := directKnownHostToken(jump)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pins := append(syntheticJumpPin(targetToken, 'a'), syntheticJumpPin(jumpToken, 'b')...)
+			if plan, err := PrepareSingleJumpProbe(config, "", target, jump, pins); !errors.Is(err, ErrProbeUnsupported) || plan != nil {
+				t.Fatalf("colliding route created a probe: %v, %v", plan, err)
+			}
+		})
+	}
+}
+
 func TestPrepareSingleJumpProbeRejectsUnreviewedOrChangedRoutes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("single-jump execution is not yet supported on Windows")

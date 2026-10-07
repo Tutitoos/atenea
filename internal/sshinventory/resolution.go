@@ -33,6 +33,9 @@ type Selection struct {
 	HostKeyAlias  string
 	ProxyJump     string
 	ProxyCommand  string
+	Ciphers       string
+	KexAlgorithms string
+	MACs          string
 	IdentityFiles []string
 	Snapshot      string
 	Sources       []Diagnostic
@@ -265,6 +268,19 @@ func (r *resolver) file(path, includeRoot string, user bool, depth int, optional
 }
 
 func (r *resolver) option(key string, args []string, raw, path string, line int) error {
+	if key == "sendenv" {
+		// The probe opens no remote session, so it never sends environment
+		// variables. Validate the names before discarding this system default.
+		if len(args) == 0 {
+			return fmt.Errorf("%w: empty SendEnv at %s:%d", ErrUnresolved, path, line)
+		}
+		for _, name := range args {
+			if !safeSendEnvPattern(name) {
+				return fmt.Errorf("%w: invalid SendEnv at %s:%d", ErrUnresolved, path, line)
+			}
+		}
+		return nil
+	}
 	if key == "remotecommand" || key == "localcommand" {
 		// These commands affect a normal SSH session, but the diagnostic
 		// suppresses both and never forwards their text to OpenSSH.
@@ -340,6 +356,18 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 		r.result.ProxyJump = value
 	case "proxycommand":
 		r.result.ProxyCommand = value // recorded only; never executed here
+	case "ciphers", "kexalgorithms", "macs":
+		if !safeAlgorithmList(value) {
+			return fmt.Errorf("%w: invalid %s at %s:%d", ErrUnresolved, key, path, line)
+		}
+		switch key {
+		case "ciphers":
+			r.result.Ciphers = value
+		case "kexalgorithms":
+			r.result.KexAlgorithms = value
+		case "macs":
+			r.result.MACs = value
+		}
 	case "canonicalizehostname":
 		if value != "no" && value != "none" {
 			return fmt.Errorf("%w: hostname canonicalization", ErrUnresolved)
@@ -368,6 +396,12 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 		if value != "yes" && value != "no" && value != "ask" && value != "confirm" {
 			return fmt.Errorf("%w: unsupported AddKeysToAgent", ErrUnresolved)
 		}
+	case "hashknownhosts", "gssapiauthentication", "gssapidelegatecredentials":
+		// The restricted probe neither adds host keys nor permits GSSAPI
+		// authentication; still reject malformed system defaults.
+		if value != "yes" && value != "no" {
+			return fmt.Errorf("%w: invalid %s", ErrUnresolved, key)
+		}
 	case "controlmaster":
 		if value != "yes" && value != "no" && value != "ask" && value != "auto" && value != "autoask" {
 			return fmt.Errorf("%w: invalid ControlMaster", ErrUnresolved)
@@ -388,4 +422,46 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 	r.set[key] = true
 	r.result.Sources = append(r.result.Sources, Diagnostic{Source: path, Line: line, Code: key})
 	return nil
+}
+
+func safeSendEnvPattern(value string) bool {
+	if value == "" || value == "-" {
+		return false
+	}
+	if value[0] == '-' {
+		value = value[1:]
+	}
+	for _, c := range value {
+		if !safeASCIIAlphaNumeric(c) && c != '_' && c != '*' && c != '?' {
+			return false
+		}
+	}
+	return value != ""
+}
+
+// OpenSSH accepts a comma-separated name/pattern list and optional leading
+// +, - or ^ modifier. Keep its exact spelling for OpenSSH to interpret, but
+// never let configuration text create a new private-config line or CLI option.
+func safeAlgorithmList(value string) bool {
+	if value == "" {
+		return false
+	}
+	if strings.ContainsAny(value[:1], "+-^") {
+		value = value[1:]
+	}
+	for _, item := range strings.Split(value, ",") {
+		if item == "" {
+			return false
+		}
+		for _, c := range item {
+			if !safeASCIIAlphaNumeric(c) && !strings.ContainsRune("@._-*?", c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func safeASCIIAlphaNumeric(c rune) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }

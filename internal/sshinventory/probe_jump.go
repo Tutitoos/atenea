@@ -25,7 +25,11 @@ func PrepareSingleJumpProbe(userConfig, systemConfig string, target, jump Select
 	if err := RevalidateSelection(userConfig, systemConfig, jump); err != nil {
 		return nil, err
 	}
+	// The outer SSH process reads the private gateway config too. If its
+	// destination token matches the gateway Host stanza, gateway identity and
+	// negotiation settings can bleed into the destination before -J starts.
 	if target.Snapshot == "" || target.Snapshot != jump.Snapshot || target.Alias == jump.Alias ||
+		strings.EqualFold(target.HostName, jump.Alias) ||
 		!safeJumpAlias(jump.Alias) || target.ProxyJump != jump.Alias ||
 		(target.ProxyCommand != "" && !strings.EqualFold(target.ProxyCommand, "none")) || activeProxyRoute(jump) {
 		return nil, ErrProbeUnsupported
@@ -94,6 +98,15 @@ func PrepareSingleJumpProbe(userConfig, systemConfig string, target, jump Select
 	if jump.HostKeyAlias != "" {
 		fmt.Fprintf(&text, " HostKeyAlias %s\n", jump.HostKeyAlias)
 	}
+	for _, option := range []struct{ name, value string }{
+		{"Ciphers", jump.Ciphers},
+		{"KexAlgorithms", jump.KexAlgorithms},
+		{"MACs", jump.MACs},
+	} {
+		if option.value != "" {
+			fmt.Fprintf(&text, " %s %s\n", option.name, option.value)
+		}
+	}
 	for _, identity := range jump.IdentityFiles {
 		if identity != "none" {
 			fmt.Fprintf(&text, " IdentityFile %s\n", identity)
@@ -112,6 +125,7 @@ func PrepareSingleJumpProbe(userConfig, systemConfig string, target, jump Select
 	if target.HostKeyAlias != "" {
 		args = append(args, "-o", "HostKeyAlias="+target.HostKeyAlias)
 	}
+	args = appendSelectedAlgorithms(args, target)
 	if noAvailableExplicitIdentity(target.IdentityFiles) {
 		args = append(args, "-o", "PubkeyAuthentication=no")
 	}
@@ -158,6 +172,7 @@ func validateSingleJumpRoute(userConfig, systemConfig string, target, jump Selec
 		return err
 	}
 	if target.Snapshot == "" || target.Snapshot != jump.Snapshot || target.Alias == jump.Alias ||
+		strings.EqualFold(target.HostName, jump.Alias) ||
 		!safeJumpAlias(jump.Alias) || target.ProxyJump != jump.Alias ||
 		(target.ProxyCommand != "" && !strings.EqualFold(target.ProxyCommand, "none")) || activeProxyRoute(jump) {
 		return ErrProbeUnsupported
