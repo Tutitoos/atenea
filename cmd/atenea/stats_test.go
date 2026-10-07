@@ -13,6 +13,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/toolstats"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // TestStatsCalendarPeriods checks local day, week, month, and daylight-saving boundaries.
@@ -62,6 +63,71 @@ func TestStatsRejectsInvalidOptions(t *testing.T) {
 	}
 	if err := cmdStats("", []string{"--watch"}, &bytes.Buffer{}); err == nil {
 		t.Fatal("watch accepted redirected output")
+	}
+}
+
+func TestStatsContextOptionIsExplicitAndBounded(t *testing.T) {
+	for _, args := range [][]string{{"--context", "--week"}, {"--context", "--errors"}, {"--context", "--watch"}, {"--context", "--provider", "p"}, {"--context", "--limit", "2"}} {
+		if _, err := parseStats(args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	o, err := parseStats([]string{"--context", "--since", "24h", "--json"})
+	if err != nil || !o.contextView {
+		t.Fatalf("context option %+v %v", o, err)
+	}
+	page := toolstats.ContextBreakdown{Since: time.Now().Add(-time.Hour), Until: time.Now(), Requests: 2, Attempts: 3, Rows: []toolstats.ContextRow{{Client: "codex", Profile: "shared", Origin: "normal", Version: "v1", ContextCounts: toolstats.ContextCounts{Requests: 2, Attempts: 3}}}}
+	var b bytes.Buffer
+	if err := renderStatsContext(&b, page); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"solicitudes=2", "intentos=3", "origen=normal", "no personas ni recorridos únicos"} {
+		if !strings.Contains(b.String(), part) {
+			t.Fatalf("missing %q in %s", part, b.String())
+		}
+	}
+}
+
+func TestStatsContextCommandReadsOnlyExistingHistory(t *testing.T) {
+	path, _ := isolated(t)
+	privateStatsFixture(t, path)
+	cfg, err := config.LoadEffective(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Metrics.Path == "" {
+		t.Skip("fixture has no metrics path")
+	}
+	storePath := toolstats.Path(cfg.Metrics.Path)
+	var b bytes.Buffer
+	if err = cmdStats(path, []string{"--context", "--json"}, &b); err != nil {
+		t.Fatal(err)
+	}
+	var missing toolstats.ContextBreakdown
+	if err = json.Unmarshal(b.Bytes(), &missing); err != nil || missing.HistoryAvailable {
+		t.Fatalf("missing history: %+v %v", missing, err)
+	}
+	if _, err = os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("context query created DB: %v", err)
+	}
+	s := toolstats.New(storePath)
+	ctx := toolstats.WithMetadata(context.Background(), toolstats.Metadata{Client: "codex", Profile: "shared", ClientVersion: "2.1", Origin: "normal"})
+	_, call := s.Begin(ctx, toolstats.Event{Level: "request", Tool: "code.search", Provider: "atenea"})
+	call.End(nil)
+	_ = s.Close()
+	for i := 0; i < 2; i++ {
+		b.Reset()
+		if err = cmdStats(path, []string{"--context", "--json"}, &b); err != nil {
+			t.Fatal(err)
+		}
+		var got toolstats.ContextBreakdown
+		if err = json.Unmarshal(b.Bytes(), &got); err != nil || !got.HistoryAvailable || got.Requests != 1 || got.Attempts != 0 || got.LastRecorded == nil {
+			t.Fatalf("context command: %+v %v", got, err)
+		}
+	}
+	b.Reset()
+	if err = cmdStats(path, []string{"--context", "--since", "169h", "--json"}, &b); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("window error: %v", err)
 	}
 }
 

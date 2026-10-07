@@ -57,6 +57,11 @@ func StatsFromDisk(ctx context.Context, cfg config.Config, q toolstats.Query) (t
 	return readStats(ctx, cfg, store, q)
 }
 
+// StatsContextFromDisk reads bounded contextual counts without contacting the service.
+func StatsContextFromDisk(ctx context.Context, cfg config.Config, q toolstats.Query) (toolstats.ContextBreakdown, error) {
+	return toolstats.New(toolstats.Path(statsBasePath(cfg))).Context(ctx, q)
+}
+
 // readStats combines activity, catalog, and separately bounded legacy measurements.
 func readStats(ctx context.Context, cfg config.Config, store *toolstats.Store, q toolstats.Query) (toolstats.Snapshot, error) {
 	out, err := store.Read(ctx, q, statsCatalog(cfg))
