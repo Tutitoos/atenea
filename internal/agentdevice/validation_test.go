@@ -10,6 +10,7 @@ func TestPinnedValidationRejectsMalformedCalls(t *testing.T) {
 		{"wait", `{}`}, {"wait", `{"durationMs":1,"stable":true}`},
 		{"wait", `{"kind":"text","durationMs":1}`}, {"wait", `{"durationMs":-1}`},
 		{"wait", `{"stable":false}`}, {"wait", `{"text":""}`}, {"wait", `{"ref":"e12"}`},
+		{"wait", `{"ref":"@e12~s"}`},
 		{"click", `{"target":"e12"}`}, {"click", `{"target":{"kind":"ref","ref":"e12"}}`},
 		{"click", `{"target":{"kind":"selector","selector":"e12"}}`},
 		{"click", `{"target":{"kind":"point","x":1}}`},
@@ -30,8 +31,9 @@ func TestPinnedValidationRejectsMalformedCalls(t *testing.T) {
 func TestPinnedValidationPreservesValidVariants(t *testing.T) {
 	for _, tc := range []struct{ tool, raw string }{
 		{"wait", `{"durationMs":0}`}, {"wait", `{"kind":"stable","stable":true,"quietMs":500}`},
-		{"wait", `{"text":"Ready"}`}, {"wait", `{"ref":"@e12"}`}, {"wait", `{"selector":"role=button"}`},
+		{"wait", `{"text":"Ready"}`}, {"wait", `{"ref":"@e12"}`}, {"wait", `{"ref":"@e12~s4"}`}, {"wait", `{"selector":"role=button"}`},
 		{"click", `{"target":{"kind":"ref","ref":"@e12"}}`},
+		{"click", `{"target":{"kind":"ref","ref":"@e12~s4"}}`},
 		{"click", `{"target":{"kind":"selector","selector":"role=button"}}`},
 		{"click", `{"target":{"kind":"point","x":1,"y":2}}`},
 	} {

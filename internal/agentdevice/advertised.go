@@ -44,8 +44,8 @@ func AdvertisedSchema(version, tool string, upstream json.RawMessage) (map[strin
 			fields := variant["properties"].(map[string]any)
 			switch fields["kind"].(map[string]any)["const"] {
 			case "ref":
-				fields["ref"].(map[string]any)["pattern"] = `^@e[0-9]+$`
-				fields["ref"].(map[string]any)["description"] = "Snapshot reference such as @e12. Use a fresh snapshot of this session; the pattern alone cannot establish freshness."
+				fields["ref"].(map[string]any)["pattern"] = refPatternSource
+				fields["ref"].(map[string]any)["description"] = "Snapshot reference such as @e12 or @e12~s4 (pinned to refsGeneration). Use a fresh snapshot of this session; the pattern alone cannot establish freshness."
 			case "selector":
 				fields["selector"].(map[string]any)["pattern"] = `=`
 			}

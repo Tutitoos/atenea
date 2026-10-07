@@ -64,9 +64,11 @@ Supply an explicit nonempty `session` and absolute `cwd` for all three tools.
 `fill`, use a discriminated `target` object: `{"kind":"ref","ref":"@e12"}`,
 `{"kind":"selector","selector":"role=button"}` or
 `{"kind":"point","x":10,"y":20}`. `fill` additionally requires `text`;
-do not put private text in diagnostics. A reference must match `@e` followed
-by digits. The selector must contain `=`. The upstream variants and permitted
-fields otherwise remain unchanged.
+do not put private text in diagnostics. A reference is `@e` followed by digits,
+optionally followed by `~s` and up to 16 generation digits, for example
+`@e12~s4`. The pinned form pairs a ref with the `refsGeneration` from the
+snapshot or find response that issued it. The selector must contain `=`. The
+upstream variants and permitted fields otherwise remain unchanged.
 
 JSON Schema can describe these argument shapes. It cannot prove that a
 reference is fresh, that a named session belongs to the current flow, that a

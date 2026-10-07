@@ -25,7 +25,12 @@ func Fingerprint(raw json.RawMessage) string {
 	return hex.EncodeToString(sum[:])
 }
 
-var refPattern = regexp.MustCompile(`^@e[0-9]+$`)
+// The optional generation is emitted by agent-device 0.20.10 for mutation refs.
+// Sixteen digits cover JavaScript's safe integer range without accepting an
+// unbounded suffix; the device still decides whether the generation is fresh.
+const refPatternSource = `^@e[0-9]+(?:~s[0-9]{1,16})?$`
+
+var refPattern = regexp.MustCompile(refPatternSource)
 
 // Validate applies only rules qualified against the observed release/schema.
 // It never changes arguments or the upstream schema.
@@ -89,7 +94,7 @@ func Validate(version, tool string, schema json.RawMessage, args map[string]any)
 		case "ref":
 			ref, _ := target["ref"].(string)
 			if !refPattern.MatchString(ref) {
-				return invalid("target.ref must use @eN from the current session snapshot")
+				return invalid("target.ref must use @eN or @eN~sN from the current session snapshot")
 			}
 		case "selector":
 			selector, _ := target["selector"].(string)

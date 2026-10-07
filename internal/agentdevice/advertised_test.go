@@ -29,21 +29,28 @@ func TestAdvertisedContractAgreesWithPinnedRuntime(t *testing.T) {
 		}},
 		{"click", []string{
 			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12"}}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s4"}}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s9007199254740991"}}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"selector","selector":"role=button"}}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"point","x":1,"y":2}}`,
 		}, []string{
 			`{"cwd":"/project","target":{"kind":"ref","ref":"@e12"}}`,
 			`{"session":"flow","cwd":"relative","target":{"kind":"ref","ref":"@e12"}}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"e12"}}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s"}}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s12345678901234567"}}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"selector","selector":"button"}}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"point","x":1}}`,
 		}},
 		{"fill", []string{
 			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12"},"text":"redacted"}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s4"},"text":"redacted"}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"point","x":1,"y":2},"text":"redacted"}`,
 		}, []string{
 			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12"}}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"e12"},"text":"redacted"}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s-4"},"text":"redacted"}`,
+			`{"session":"flow","cwd":"/project","target":{"kind":"ref","ref":"@e12~s4junk"},"text":"redacted"}`,
 			`{"session":"flow","cwd":"/project","target":{"kind":"selector","selector":"button"},"text":"redacted"}`,
 			`{"session":"flow","cwd":"relative","target":{"kind":"ref","ref":"@e12"},"text":"redacted"}`,
 		}},
