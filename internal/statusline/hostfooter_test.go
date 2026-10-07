@@ -1,7 +1,9 @@
 package statusline_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -40,7 +42,15 @@ const (
 	footerEnd      = `slots.register(`
 	footerWindow   = 16 << 10
 	contractGolden = "testdata/opencode-footer.json"
+	// Homebrew's v1.18.30 Mach-O does not expose the TUI module as plain text.
+	// The tagged source is identical to v1.18.16's inspected footer. For an
+	// opaque binary, accept only this exact version and this checked-in source.
+	pinnedOpaqueVersion = "1.18.30"
+	pinnedSourcePath    = "testdata/opencode-footer-v1.18.30.tsx"
+	pinnedSourceSHA256  = "4cc399de5d61fc3d17f669347c0173b2267ad22ad4cd434dd846f49676368bbc"
 )
+
+var errFooterMarkerMissing = errors.New("footer marker not found")
 
 var updateGolden = flag.Bool("update-host-footer", false, "rewrite the pinned host footer contract from the installed client")
 
@@ -197,7 +207,7 @@ func hostFooterSource(path string) (string, error) {
 		}
 		if err != nil {
 			if err == io.EOF {
-				return "", fmt.Errorf("marker %s not found in %s", footerMarker, path)
+				return "", fmt.Errorf("%w: %s in %s", errFooterMarkerMissing, footerMarker, path)
 			}
 			return "", err
 		}
@@ -243,13 +253,22 @@ func clientVersion(path string) string {
 
 func TestHostFooterStillDrawsWhatWeReplaced(t *testing.T) {
 	client := installedClient(t)
+	version := clientVersion(client)
 
 	source, err := hostFooterSource(client)
 	if err != nil {
+		if errors.Is(err, errFooterMarkerMissing) {
+			if version != pinnedOpaqueVersion {
+				t.Fatalf("opaque OpenCode %s needs a fresh tagged-source footer review: %v", version, err)
+			}
+			verifyPinnedSource(t)
+			t.Logf("OpenCode %s binary is opaque; checked pinned official tagged source instead", version)
+			return
+		}
 		t.Fatalf("reading the host footer: %v", err)
 	}
 	got := contractFrom(source)
-	got.MeasuredOn = clientVersion(client)
+	got.MeasuredOn = version
 
 	if *updateGolden {
 		body, err := json.MarshalIndent(got, "", "  ")
@@ -292,6 +311,34 @@ func TestHostFooterStillDrawsWhatWeReplaced(t *testing.T) {
     - or hand the slot back: register sidebar_content at 900 instead, which is
       what the widget already does when the host would be onboarding.`,
 		want.MeasuredOn, got.MeasuredOn, "    "+strings.Join(changes, "\n    "))
+}
+
+func verifyPinnedSource(t *testing.T) {
+	t.Helper()
+	source, err := os.ReadFile(pinnedSourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fmt.Sprintf("%x", sha256.Sum256(source))
+	if got != pinnedSourceSHA256 {
+		t.Fatalf("pinned OpenCode source changed: SHA256 %s", got)
+	}
+	for _, fragment := range []string{
+		`const id = "internal:sidebar-footer"`,
+		"sidebar_footer(_ctx, props)",
+		"session?.directory || props.api.state.path.directory || paths.cwd",
+		"props.api.app.version",
+		"Getting started",
+	} {
+		if !strings.Contains(string(source), fragment) {
+			t.Fatalf("pinned OpenCode footer lacks %q", fragment)
+		}
+	}
+}
+
+func TestPinnedSourceFooter(t *testing.T) {
+	// Runs on CI too, where the host client is not installed.
+	verifyPinnedSource(t)
 }
 
 // The half of the gate that needs no client: what the widget must draw because it
