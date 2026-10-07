@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/agentdevice"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
@@ -701,7 +702,21 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			// the repository argument is not added: that argument is
 			// Atenea's own question about which repository a capability
 			// runs in, and a raw tool has no idea what a repository is.
-			entry["inputSchema"] = normalizeDesktopSchema(tool.InputSchema)
+			if id == "agent-device" && (tool.Name == "open" || tool.Name == "click" || tool.Name == "fill") {
+				version := ""
+				if identity, ok := backend.Backend.(interface{ Version() string }); ok {
+					version = identity.Version()
+				}
+				adapted, err := agentdevice.AdvertisedSchema(version, tool.Name, tool.InputSchema)
+				if err != nil {
+					v.core.recordBackendListingNote(id, tool.Name+": "+err.Error())
+					continue
+				}
+				entry["inputSchema"] = adapted
+				entry["description"] = agentdevice.AdvertisedDescription(tool.Name, tool.Description)
+			} else {
+				entry["inputSchema"] = normalizeDesktopSchema(tool.InputSchema)
+			}
 			if len(tool.OutputSchema) > 0 && string(tool.OutputSchema) != "null" {
 				var output any
 				if err := json.Unmarshal(tool.OutputSchema, &output); err == nil && output != nil {

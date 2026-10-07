@@ -16,6 +16,10 @@ func TestPinnedValidationRejectsMalformedCalls(t *testing.T) {
 	} {
 		var args map[string]any
 		_ = json.Unmarshal([]byte(tc.raw), &args)
+		if tc.tool == "click" {
+			args["session"] = "task"
+			args["cwd"] = "/fixture"
+		}
 		schema, _ := schemas.ReadFile("testdata/" + tc.tool + "-" + Version + ".json")
 		if err := Validate(Version, tc.tool, schema, args); err == nil {
 			t.Fatalf("accepted %s %s", tc.tool, tc.raw)
@@ -33,6 +37,10 @@ func TestPinnedValidationPreservesValidVariants(t *testing.T) {
 	} {
 		var args map[string]any
 		_ = json.Unmarshal([]byte(tc.raw), &args)
+		if tc.tool == "click" {
+			args["session"] = "task"
+			args["cwd"] = "/fixture"
+		}
 		schema, _ := schemas.ReadFile("testdata/" + tc.tool + "-" + Version + ".json")
 		before, _ := json.Marshal(args)
 		if err := Validate(Version, tc.tool, schema, args); err != nil {

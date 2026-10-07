@@ -1,0 +1,212 @@
+{
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Agent-device session name."
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "apple",
+        "android",
+        "harmonyos",
+        "vega",
+        "linux",
+        "web",
+        "ios",
+        "macos"
+      ],
+      "description": "Platform selector used to resolve a device."
+    },
+    "deviceTarget": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Device target form. Maps to the CLI --target flag."
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Alias for deviceTarget on commands without a UI target field. Interaction commands reserve target for the UI element."
+    },
+    "device": {
+      "type": "string",
+      "description": "Device name selector."
+    },
+    "udid": {
+      "type": "string",
+      "description": "iOS device UDID selector."
+    },
+    "serial": {
+      "type": "string",
+      "description": "Android device or Vega VVD serial selector."
+    },
+    "iosSimulatorDeviceSet": {
+      "type": "string",
+      "description": "iOS simulator device-set path used for device resolution."
+    },
+    "iosXctestrunFile": {
+      "type": "string",
+      "description": "Externally built iOS XCTest runner .xctestrun artifact path."
+    },
+    "iosXctestDerivedDataPath": {
+      "type": "string",
+      "description": "Derived data path for external iOS XCTest runner execution."
+    },
+    "iosXctestEnvDir": {
+      "type": "string",
+      "description": "Writable directory for iOS XCTest runner env overlays."
+    },
+    "androidDeviceAllowlist": {
+      "type": "string",
+      "description": "Android serial allowlist used for device resolution."
+    },
+    "daemonBaseUrl": {
+      "type": "string",
+      "description": "Remote daemon base URL."
+    },
+    "daemonAuthToken": {
+      "type": "string",
+      "description": "Remote daemon auth token."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Remote tenant identifier."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Lease run identifier."
+    },
+    "leaseId": {
+      "type": "string",
+      "description": "Existing lease identifier."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for command execution."
+    },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug diagnostics."
+    },
+    "app": {
+      "type": "string",
+      "description": "App name, bundle id, package, or URL."
+    },
+    "url": {
+      "type": "string",
+      "description": "Optional URL passed with an app shell."
+    },
+    "surface": {
+      "type": "string",
+      "enum": [
+        "app",
+        "frontmost-app",
+        "desktop",
+        "menubar"
+      ],
+      "description": "macOS presentation surface to open: the app itself, the frontmost app, the desktop, or the menu bar."
+    },
+    "activity": {
+      "type": "string",
+      "description": "Android activity name."
+    },
+    "launchConsole": {
+      "type": "string",
+      "description": "Launch console mode."
+    },
+    "launchArgs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Launch arguments forwarded verbatim to the platform launch command."
+    },
+    "relaunch": {
+      "type": "boolean",
+      "description": "Force relaunch."
+    },
+    "foreground": {
+      "type": "boolean",
+      "description": "Include an initial interactive snapshot in a fresh open response. With no app argument, discover the sole running app on the sole booted iOS simulator; ambiguous environments fail closed."
+    },
+    "saveScript": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Overwrite an existing --save-script target instead of refusing (alias: --overwrite)."
+    },
+    "deviceHub": {
+      "type": "boolean",
+      "description": "Use Xcode Device Hub when surfacing Apple simulators."
+    },
+    "testIme": {
+      "type": "boolean",
+      "description": "Activate the headless Android test IME for deterministic Unicode text entry (default on for emulators; opt-in on real devices)."
+    },
+    "noRecord": {
+      "type": "boolean",
+      "description": "Do not record this action."
+    },
+    "metroHost": {
+      "type": "string",
+      "description": "Session-scoped Metro/debug host hint applied to the opened app."
+    },
+    "metroPort": {
+      "type": "integer",
+      "description": "Session-scoped Metro/debug port hint applied to the opened app. On an emulator/simulator the host defaults to the loopback alias (Android 10.0.2.2, iOS 127.0.0.1) when --metro-host is omitted; physical devices still require an explicit --metro-host.",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "bundleUrl": {
+      "type": "string",
+      "description": "Session-scoped bundle URL hint applied to the opened app."
+    },
+    "launchUrl": {
+      "type": "string",
+      "description": "Session-scoped launch URL hint applied to the opened app."
+    },
+    "stateDir": {
+      "type": "string",
+      "description": "Agent-device state directory."
+    },
+    "mcpOutputFormat": {
+      "type": "string",
+      "enum": [
+        "optimized",
+        "json"
+      ],
+      "description": "MCP text content format. Defaults to optimized agent-friendly text; use json for JSON text. Structured content is always returned separately."
+    },
+    "includeCost": {
+      "type": "boolean",
+      "description": "Include per-command agent-cost (cost.wallClockMs, …) in structuredContent. Defaults to off; the default response shape is unchanged."
+    },
+    "responseLevel": {
+      "type": "string",
+      "enum": [
+        "digest",
+        "default",
+        "full"
+      ],
+      "description": "Response verbosity: token-cheap digest / default (today) / full. Defaults to default; the default response shape is unchanged."
+    }
+  },
+  "additionalProperties": false
+}
