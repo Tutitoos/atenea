@@ -165,6 +165,7 @@ func (v *conversation) decisionPlan(ctx context.Context, args map[string]any) (a
 	}
 	result["dry_run"] = true
 	result["execution_authorized"] = false
+	result["explanation"] = decision.Explain(plan)
 	return toolResult(result)
 }
 
