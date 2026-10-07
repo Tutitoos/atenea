@@ -42,6 +42,8 @@ enabled = false
 # network request. Use observe to compare a local Laya service without changing
 # the selected plan, or laya to select sufficiently confident predictions.
 mode = "rules"
+# Optional private capture for real MCP decision.plan requests. Keep outside Git.
+capture_dir = ""
 laya_endpoint = ""
 laya_model = "" # optional: english, multilingual, or typed-decisions
 # Store credentials in the environment; only the variable name belongs here.

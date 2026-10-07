@@ -58,10 +58,14 @@ func Redact(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// Capture writes an anonymized candidate only when EnvDir is explicitly set.
-// It never stores caller-provided paths or credentials as separate fields.
+// Capture writes a candidate only when EnvDir is explicitly set.
 func Capture(source, repository, objective, intent string) error {
-	dir := os.Getenv(EnvDir)
+	return CaptureIn(os.Getenv(EnvDir), source, repository, objective, intent)
+}
+
+// CaptureIn writes a redacted candidate to a private operator-owned directory.
+// It never stores caller-provided paths or credentials as separate fields.
+func CaptureIn(dir, source, repository, objective, intent string) error {
 	if dir == "" {
 		return nil
 	}

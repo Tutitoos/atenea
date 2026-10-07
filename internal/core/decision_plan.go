@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -147,7 +148,11 @@ func (v *conversation) decisionPlan(ctx context.Context, args map[string]any) (a
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
-	if err := decisioncapture.Capture("mcp.decision.plan", repository, objective, string(plan.Intent)); err != nil {
+	captureDir := v.core.settings.Decision.CaptureDir
+	if captureDir == "" {
+		captureDir = os.Getenv(decisioncapture.EnvDir)
+	}
+	if err := decisioncapture.CaptureIn(captureDir, "mcp.decision.plan", repository, objective, string(plan.Intent)); err != nil {
 		slog.Warn("decision capture unavailable", "reason", err)
 	}
 	raw, err := json.Marshal(plan)

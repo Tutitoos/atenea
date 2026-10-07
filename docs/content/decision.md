@@ -15,11 +15,13 @@ persists nor launches the workflow. The managed `atenea-plan-mode` Codex skill
 uses this surface automatically only while the active collaboration mode is
 Plan.
 
-For a private evaluation pilot, the service operator may create a directory
-owned by the service user with mode `0700` and set
-`ATENEA_DECISION_CAPTURE_DIR` to its absolute path before starting the MCP
-service. Only validated `decision.plan` calls are recorded; the feature is off
-when the variable is unset. `candidates.private.jsonl`, `capture.lock`, and
+For a private evaluation pilot, the operator may create a directory owned by
+the ATENEA user with mode `0700` and set `[decision].capture_dir` to its absolute
+path in the global settings file. New MCP processes started by different
+clients read this same setting. `ATENEA_DECISION_CAPTURE_DIR` is an alternative
+for a single process when `capture_dir` is empty. Only validated
+`decision.plan` calls are recorded; the feature is off when both settings are
+empty. `candidates.private.jsonl`, `capture.lock`, and
 the deduplication key `capture.key` are created with mode `0600`. Records
 include the MCP source, UTC capture time,
 repository, automatically redacted objective, inferred intent, and build

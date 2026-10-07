@@ -338,8 +338,9 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	if err := os.Mkdir(captureDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("ATENEA_DECISION_CAPTURE_DIR", captureDir)
-	atenea := buildService(t, decisionPlanSettings(t))
+	t.Setenv("ATENEA_DECISION_CAPTURE_DIR", "")
+	settings := decisionPlanSettings(t) + fmt.Sprintf("\n[decision]\ncapture_dir = %q\n", captureDir)
+	atenea := buildService(t, settings)
 	defer serve(t, atenea)()
 
 	c := dial(t)
@@ -415,7 +416,9 @@ func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
 	if candidate.Source != "mcp.decision.plan" || candidate.Intent != "plan" || candidate.ReviewState != "automatic_unreviewed" {
 		t.Fatalf("capture provenance = %+v", candidate)
 	}
-	t.Setenv("ATENEA_DECISION_CAPTURE_DIR", filepath.Join(t.TempDir(), "missing"))
+	if err := os.Chmod(captureDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	withoutStorage := result(t, c.call("tools/call", map[string]any{
 		"name":      "decision.plan",
 		"arguments": map[string]any{"objective": "planificar el flujo de autenticación", "repository": "work", "budget_usd": 10},
