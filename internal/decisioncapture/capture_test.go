@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Tutitoos/atenea/internal/buildinfo"
 )
 
 func TestCaptureDefaultOffAndPrivateDeduplicated(t *testing.T) {
@@ -51,6 +53,9 @@ func TestCaptureDefaultOffAndPrivateDeduplicated(t *testing.T) {
 	}
 	if record.Source != "mcp.decision.plan" || record.ReviewState != "automatic_unreviewed" {
 		t.Fatalf("wrong provenance: %+v", record)
+	}
+	if revision, modified := buildinfo.Source(); revision != "" && !modified && record.Revision != revision {
+		t.Fatalf("captured revision = %q, want clean build %q", record.Revision, revision)
 	}
 	for _, private := range []string{"alice", "example.org", "hunter2", "/Users"} {
 		if strings.Contains(record.Objective, private) {

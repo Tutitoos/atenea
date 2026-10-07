@@ -15,10 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Tutitoos/atenea/internal/buildinfo"
 )
 
 // EnvDir is the explicit opt-in directory for private capture.
@@ -132,14 +133,9 @@ func CaptureIn(dir, source, repository, objective, intent string) error {
 	if _, err := f.Seek(0, 2); err != nil {
 		return errors.New("capture file unavailable")
 	}
-	revision := ""
-	if build, ok := debug.ReadBuildInfo(); ok {
-		for _, setting := range build.Settings {
-			if setting.Key == "vcs.revision" {
-				revision = setting.Value
-				break
-			}
-		}
+	revision, modified := buildinfo.Source()
+	if modified {
+		revision = ""
 	}
 	record := Record{ID: id, CapturedAt: time.Now().UTC(), Source: source, Repository: Redact(repository), Objective: redacted, Intent: intent, Revision: revision, ReviewState: "automatic_unreviewed"}
 	line, err := json.Marshal(record)
