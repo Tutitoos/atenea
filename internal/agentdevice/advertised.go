@@ -28,11 +28,23 @@ func AdvertisedSchema(version, tool string, upstream json.RawMessage) (map[strin
 	properties["cwd"].(map[string]any)["pattern"] = `^/`
 	properties["cwd"].(map[string]any)["description"] = "Explicit absolute working directory for this flow."
 	if tool == "open" {
+		// Some clients project each anyOf branch as a complete argument schema.
+		// Keep every verified upstream field visible in each branch, while the
+		// branch-specific required selector still enforces explicit device choice.
+		propertiesJSON, err := json.Marshal(properties)
+		if err != nil {
+			return nil, err
+		}
 		selectors := []any{}
 		for _, key := range []string{"udid", "serial", "device"} {
+			var branchProperties map[string]any
+			if err := json.Unmarshal(propertiesJSON, &branchProperties); err != nil {
+				return nil, err
+			}
+			branchProperties[key].(map[string]any)["minLength"] = float64(1)
 			selectors = append(selectors, map[string]any{
-				"type": "object", "required": []string{key},
-				"properties": map[string]any{key: map[string]any{"type": "string", "minLength": float64(1)}},
+				"type": "object", "required": []string{"session", "cwd", key},
+				"properties": branchProperties, "additionalProperties": false,
 			})
 		}
 		out["anyOf"] = selectors

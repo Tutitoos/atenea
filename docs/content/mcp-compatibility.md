@@ -70,6 +70,12 @@ optionally followed by `~s` and up to 16 generation digits, for example
 snapshot or find response that issued it. The selector must contain `=`. The
 upstream variants and permitted fields otherwise remain unchanged.
 
+Each advertised `open` selector branch contains the complete verified
+upstream field set, including `session`, `cwd`, `app` and `url`. This lets clients
+that project one `anyOf` branch retain all valid options. Each branch still
+requires `session`, `cwd` and its own nonempty selector; unknown fields remain
+rejected. The upstream schema bytes and fingerprint are unchanged.
+
 JSON Schema can describe these argument shapes. It cannot prove that a
 reference is fresh, that a named session belongs to the current flow, that a
 device is free, or that the action completed after a transport failure. Atenea

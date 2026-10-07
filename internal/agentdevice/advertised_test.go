@@ -3,6 +3,7 @@ package agentdevice
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -102,6 +103,68 @@ func TestAdvertisedContractAgreesWithPinnedRuntime(t *testing.T) {
 				t.Fatal("ownership limitation hidden")
 			}
 		})
+	}
+}
+
+func TestOpenAnyOfBranchesProjectCompleteContract(t *testing.T) {
+	upstream, err := schemas.ReadFile("testdata/open-" + Version + ".json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertised, err := AdvertisedSchema(Version, "open", upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootProperties := advertised["properties"].(map[string]any)
+	branches := advertised["anyOf"].([]any)
+	for i, selector := range []string{"udid", "serial", "device"} {
+		branch := branches[i].(map[string]any)
+		properties := branch["properties"].(map[string]any)
+		if len(properties) != len(rootProperties) || branch["additionalProperties"] != false {
+			t.Fatalf("%s branch loses root fields or permits unknown fields", selector)
+		}
+		for name, rootProperty := range rootProperties {
+			if _, ok := properties[name]; !ok {
+				t.Fatalf("%s branch omits %s", selector, name)
+			}
+			if name != selector && !reflect.DeepEqual(properties[name], rootProperty) {
+				t.Fatalf("%s branch changes %s", selector, name)
+			}
+		}
+		required := branch["required"].([]string)
+		if !reflect.DeepEqual(required, []string{"session", "cwd", selector}) {
+			t.Fatalf("%s branch required fields = %v", selector, required)
+		}
+		args := map[string]any{"session": "flow", "cwd": "/project", selector: "fixture-device", "app": "example.app", "url": "https://example.test"}
+		if selector == "serial" {
+			args["udid"] = "" // A different, unused selector may be empty.
+		}
+		if err := validateSchema(branch, args, "arguments"); err != nil {
+			t.Fatalf("%s projected branch rejected valid upstream options: %v", selector, err)
+		}
+		for _, missing := range []string{"session", "cwd", selector} {
+			value := args[missing]
+			delete(args, missing)
+			if err := validateSchema(branch, args, "arguments"); err == nil {
+				t.Fatalf("%s projected branch accepted missing %s", selector, missing)
+			}
+			args[missing] = value
+		}
+		args[selector] = ""
+		if err := validateSchema(branch, args, "arguments"); err == nil {
+			t.Fatalf("%s projected branch accepted empty selector", selector)
+		}
+		args[selector] = "fixture-device"
+		args["invented"] = true
+		if err := validateSchema(branch, args, "arguments"); err == nil {
+			t.Fatalf("%s projected branch accepted unknown field", selector)
+		}
+	}
+	first := branches[0].(map[string]any)["properties"].(map[string]any)
+	second := branches[1].(map[string]any)["properties"].(map[string]any)
+	first["app"].(map[string]any)["description"] = "changed only in first branch"
+	if reflect.DeepEqual(first["app"], second["app"]) || reflect.DeepEqual(first["app"], rootProperties["app"]) {
+		t.Fatal("open branches share mutable property schemas")
 	}
 }
 
