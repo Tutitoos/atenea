@@ -43,6 +43,9 @@ func (c *Core) newDashboard() (*dashboard.Server, error) {
 
 func (c *Core) dashboardStatus() Status {
 	status := c.Status()
+	for i := range status.RedCauses {
+		status.RedCauses[i].Reason = safeDashboardText(status.RedCauses[i].Reason, 240)
+	}
 	for ci := range status.Capabilities {
 		for ii := range status.Capabilities[ci].Implementations {
 			h := &status.Capabilities[ci].Implementations[ii].Health
