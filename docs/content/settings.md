@@ -1978,6 +1978,15 @@ an *absent* list are defensible -- offer everything, offer nothing -- which is
 exactly why neither is guessed. A block declaring `raw` with no `tools` is
 refused, and so is an empty list.
 
+A raw **stdio** block may also set `working_directory = "/canonical/workspace"`
+next to `command`. It is not supported by HTTP or pointer (`expose = "off"`)
+backends. The path must be absolute and clean; both readiness probes and raw
+child spawns check that it is an existing directory without a symlink alias and
+use it as the child's actual cwd. An omitted value preserves cwd inheritance.
+A tool request cannot redirect this process. The exact agent-device `0.21.23`
+contract requires this binding and checks each local `cwd` argument against it;
+see [MCP compatibility](../mcp-compatibility/).
+
 `effects` is what those tools are authorized to cause, in the same five names
 capabilities use: `read`, `write`, `external`, `process`, `device`. Atenea cannot infer
 them; a backend's own list can hold `execute_shell_command` beside

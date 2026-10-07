@@ -6,13 +6,46 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"strings"
 )
 
-//go:embed testdata/*-0.20.10.json
+//go:embed testdata/*-0.20.10.json testdata/*-0.21.23.json
 var schemas embed.FS
+
+// IsCandidate reports whether the observed release has the bounded contract.
+func IsCandidate(version string) bool { return strings.TrimPrefix(version, "v") == CandidateVersion }
+
+// VerifySchema verifies exact releases and input schemas; it does not authorize
+// a tool or claim device acceptance. The old release keeps its existing scope.
+func VerifySchema(version, tool string, upstream json.RawMessage) error {
+	version = strings.TrimPrefix(version, "v")
+	if version != Version && version != CandidateVersion {
+		return fmt.Errorf("agent-device compatibility unverified: version=%q; supported %s, %s", version, Version, CandidateVersion)
+	}
+	if version == CandidateVersion && !CandidateAllows(tool) {
+		return fmt.Errorf("agent-device compatibility unverified: %s %s is outside the qualified core catalog", version, tool)
+	}
+	known, err := schemas.ReadFile("testdata/" + tool + "-" + version + ".json")
+	if err != nil || Fingerprint(upstream) == "" || Fingerprint(upstream) != Fingerprint(known) {
+		return fmt.Errorf("agent-device compatibility unverified: version=%q tool=%s schema=%s", version, tool, Fingerprint(upstream))
+	}
+	return nil
+}
+
+// WireArguments removes only Atenea's locally checked cwd for 0.21.23. All
+// operator-only realm/runner fields remain invalid; they are never stripped.
+// Callers must first verify the schema and the static workspace binding.
+func WireArguments(version string, args map[string]any) map[string]any {
+	if !IsCandidate(version) {
+		return args
+	}
+	out := maps.Clone(args)
+	delete(out, "cwd")
+	return out
+}
 
 // Fingerprint ignores JSON object ordering while preserving the schema itself.
 func Fingerprint(raw json.RawMessage) string {
@@ -35,28 +68,36 @@ var refPattern = regexp.MustCompile(refPatternSource)
 // Validate applies only rules qualified against the observed release/schema.
 // It never changes arguments or the upstream schema.
 func Validate(version, tool string, schema json.RawMessage, args map[string]any) error {
-	if tool != "wait" && tool != "click" && tool != "open" && tool != "fill" {
+	if strings.TrimPrefix(version, "v") == Version && tool != "wait" && tool != "click" && tool != "open" && tool != "fill" {
 		return nil
 	}
-	known, _ := schemas.ReadFile("testdata/" + tool + "-" + Version + ".json")
-	if strings.TrimPrefix(version, "v") != Version || Fingerprint(schema) != Fingerprint(known) {
-		return fmt.Errorf("agent-device compatibility unverified: version=%q schema=%s; expected %s. Run doctor before applying version-specific rules", version, Fingerprint(schema), Version)
+	if err := VerifySchema(version, tool, schema); err != nil {
+		return err
 	}
 	invalid := func(reason string) error { return fmt.Errorf("%s. %s", reason, Help(tool)) }
-	if err := validatePinnedSchema(schema, args); err != nil {
+	if IsCandidate(version) {
+		if cwd, _ := args["cwd"].(string); !strings.HasPrefix(cwd, "/") {
+			return invalid("cwd must be an explicit absolute path matching the configured working_directory")
+		}
+	}
+	if err := validatePinnedSchema(schema, WireArguments(version, args)); err != nil {
 		return invalid(err.Error())
 	}
 	switch tool {
 	case "wait":
 		condition, count := "", 0
-		for _, key := range []string{"durationMs", "text", "ref", "selector", "stable"} {
+		conditions := []string{"durationMs", "text", "ref", "selector", "stable"}
+		if IsCandidate(version) {
+			conditions = append(conditions, "absent")
+		}
+		for _, key := range conditions {
 			if _, exists := args[key]; exists {
 				condition = key
 				count++
 			}
 		}
 		if count != 1 {
-			return invalid("wait requires exactly one of durationMs, text, ref, selector, stable")
+			return invalid("wait requires exactly one supported wait condition")
 		}
 		kind := condition
 		if condition == "durationMs" {
@@ -68,7 +109,7 @@ func Validate(version, tool string, schema json.RawMessage, args map[string]any)
 		if condition == "stable" && args[condition] != true {
 			return invalid("stable must be true")
 		}
-		if condition == "text" || condition == "ref" || condition == "selector" {
+		if condition == "text" || condition == "ref" || condition == "selector" || condition == "absent" {
 			v, _ := args[condition].(string)
 			if strings.TrimSpace(v) == "" {
 				return invalid(condition + " must be nonempty")

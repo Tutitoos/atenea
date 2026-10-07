@@ -702,18 +702,34 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			// the repository argument is not added: that argument is
 			// Atenea's own question about which repository a capability
 			// runs in, and a raw tool has no idea what a repository is.
-			if id == "agent-device" && (tool.Name == "open" || tool.Name == "click" || tool.Name == "fill") {
-				version := ""
-				if identity, ok := backend.Backend.(interface{ Version() string }); ok {
-					version = identity.Version()
+			version := ""
+			if identity, ok := backend.Backend.(interface{ Version() string }); ok {
+				version = identity.Version()
+			}
+			if id == "agent-device" && version != "" && strings.TrimPrefix(version, "v") != agentdevice.Version && !agentdevice.IsCandidate(version) {
+				v.core.recordBackendListingNote(id, "agent-device release unverified; tools withheld")
+				continue
+			}
+			if id == "agent-device" && agentdevice.IsCandidate(version) && !verifiedDeviceWorkspace(backend) {
+				v.core.recordBackendListingNote(id, "0.21.23 requires an explicit working_directory; candidate tools withheld")
+				continue
+			}
+			if id == "agent-device" && agentdevice.IsCandidate(version) {
+				if _, ok := backend.Backend.(passthrough.ContractBackend); !ok {
+					v.core.recordBackendListingNote(id, "0.21.23 lacks atomic contract dispatch; candidate tools withheld")
+					continue
 				}
+			}
+			if id == "agent-device" && (agentdevice.IsCandidate(version) || tool.Name == "open" || tool.Name == "click" || tool.Name == "fill") {
 				adapted, err := agentdevice.AdvertisedSchema(version, tool.Name, tool.InputSchema)
 				if err != nil {
 					v.core.recordBackendListingNote(id, tool.Name+": "+err.Error())
 					continue
 				}
 				entry["inputSchema"] = adapted
-				entry["description"] = agentdevice.AdvertisedDescription(tool.Name, tool.Description)
+				if tool.Name == "open" || tool.Name == "click" || tool.Name == "fill" {
+					entry["description"] = agentdevice.AdvertisedDescription(tool.Name, tool.Description)
+				}
 			} else {
 				entry["inputSchema"] = normalizeDesktopSchema(tool.InputSchema)
 			}
@@ -1178,14 +1194,16 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		return desktopDiagnostic("permission_denied", params.Name, params.Name, false,
 			err.Error(), "Request the required permission before retrying."), nil
 	}
+	var deviceCatalog passthrough.CatalogContract
 	if server == "agent-device" {
-		if err := v.validateDeviceCall(ctx, backend, tool, arguments); err != nil {
+		deviceCatalog, err = v.prepareDeviceCall(ctx, backend, tool, arguments)
+		if err != nil {
 			callErr = err
 			return desktopDiagnostic(contract.CodeOf(err), params.Name, params.Name, false, err.Error(), "Call atenea.command name=device.help or name=device.sessions."), nil
 		}
 	}
 	if server == "agent-device" {
-		release, err := v.reserveDeviceCall(ctx, backend, tool, arguments)
+		release, err := v.reserveDeviceCall(ctx, backend, tool, arguments, deviceCatalog)
 		if err != nil {
 			callErr = err
 			return desktopDiagnostic(contract.CodeOf(err), params.Name, params.Name, false, err.Error(), "List sessions; choose a dedicated session and a free device."), nil
@@ -1194,7 +1212,12 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 			defer release()
 		}
 	}
-	result, err := backend.Call(ctx, tool, arguments)
+	var result json.RawMessage
+	if server == "agent-device" {
+		result, err = callDeviceContract(ctx, backend, tool, arguments, deviceCatalog)
+	} else {
+		result, err = backend.Call(ctx, tool, arguments)
+	}
 	callErr = err
 	// A call is the other place a backend's state becomes known for free.
 	// Only an unavailable or timed-out one counts against it; see

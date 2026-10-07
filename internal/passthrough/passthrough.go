@@ -234,13 +234,14 @@ type Backend interface {
 // two fields is set here and the choice is a consequence of that, not a
 // second decision that could disagree with the first.
 type Spec struct {
-	ID           string
-	URL          string
-	Command      []string
-	Env          map[string]string
-	Timeout      time.Duration
-	Allowed      []string
-	ProtocolMode ProtocolMode
+	ID               string
+	URL              string
+	Command          []string
+	Env              map[string]string
+	WorkingDirectory string
+	Timeout          time.Duration
+	Allowed          []string
+	ProtocolMode     ProtocolMode
 }
 
 // New prepares a backend. Nothing is dialed and nothing is spawned here: a

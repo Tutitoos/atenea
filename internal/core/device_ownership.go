@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Tutitoos/atenea/internal/agentdevice"
+	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/toolstats"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -102,10 +104,25 @@ func deviceSessionListArgs(args map[string]any) map[string]any {
 	return request
 }
 
-func (v *conversation) deviceSessionsState(ctx context.Context, backend rawBackend, args map[string]any) ([]deviceSessionState, error) {
+func (v *conversation) deviceSessionsState(ctx context.Context, backend rawBackend, args map[string]any, lease ...passthrough.CatalogContract) ([]deviceSessionState, error) {
 	request := deviceSessionListArgs(args)
+	var catalog passthrough.CatalogContract
+	if len(lease) > 0 {
+		catalog = lease[0]
+	}
+	if agentdevice.IsCandidate(catalog.Version) {
+		if err := validateDeviceCatalog(catalog, "session", request); err != nil {
+			return nil, err
+		}
+	} else if agentdevice.IsCandidate(deviceBackendVersion(backend)) {
+		var err error
+		catalog, err = prepareDeviceContract(ctx, backend, "session", request)
+		if err != nil {
+			return nil, err
+		}
+	}
 	_, call := v.core.stats.Begin(ctx, toolstats.Event{Level: "attempt", Tool: "raw.agent-device.session", Provider: "agent-device"})
-	raw, err := backend.Call(ctx, "session", request)
+	raw, err := callDeviceContract(ctx, backend, "session", request, catalog)
 	var body map[string]any
 	if err == nil {
 		err = json.Unmarshal(raw, &body)
@@ -125,7 +142,7 @@ func (v *conversation) deviceSessionsState(ctx context.Context, backend rawBacke
 	return sessions, nil
 }
 
-func (v *conversation) reserveDeviceCall(ctx context.Context, backend rawBackend, tool string, args map[string]any) (func(), error) {
+func (v *conversation) reserveDeviceCall(ctx context.Context, backend rawBackend, tool string, args map[string]any, lease ...passthrough.CatalogContract) (func(), error) {
 	if !deviceDependent(tool) {
 		return nil, nil
 	}
@@ -170,7 +187,7 @@ func (v *conversation) reserveDeviceCall(ctx context.Context, backend rawBackend
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := v.deviceSessionsState(ctx, backend, args)
+	sessions, err := v.deviceSessionsState(ctx, backend, args, lease...)
 	if err != nil {
 		return nil, err
 	}

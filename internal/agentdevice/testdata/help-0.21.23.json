@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "topic": {
+      "type": "string",
+      "description": "Guide topic or tool name; omit for the card."
+    }
+  },
+  "additionalProperties": false
+}

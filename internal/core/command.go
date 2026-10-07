@@ -96,13 +96,18 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 		}
 	case "device.help":
 		response.Summary = "Agent-device arguments and session recovery"
-		response.Data = map[string]any{"version": agentdevice.Version, "click": agentdevice.Help("click"), "wait": agentdevice.Help("wait")}
+		response.Data = map[string]any{"version": agentdevice.Version, "supported_versions": agentdevice.SupportedVersions(), "candidate_catalog": "core", "click": agentdevice.Help("click"), "wait": agentdevice.Help("wait")}
 	case "device.sessions":
 		backend, ok := c.backends["agent-device"]
 		if !ok || backend.Backend == nil {
 			return CommandResponse{}, contract.Fail(contract.FailureUnavailable, "agent-device requires a conversation; use atenea.command device.sessions through MCP")
 		}
-		raw, err := backend.Call(ctx, "session", deviceSessionListArgs(nil))
+		args := deviceSessionListArgs(nil)
+		catalog, err := prepareDeviceContract(ctx, backend, "session", args)
+		if err != nil {
+			return CommandResponse{}, err
+		}
+		raw, err := callDeviceContract(ctx, backend, "session", args, catalog)
 		if err != nil {
 			return CommandResponse{}, err
 		}

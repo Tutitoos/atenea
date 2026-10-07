@@ -446,13 +446,14 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			instance = config.InstanceShared
 		}
 		spec := passthrough.Spec{
-			ID:           server.ID,
-			URL:          server.URL,
-			Command:      server.Command,
-			Env:          server.Env,
-			Timeout:      server.Timeout,
-			Allowed:      server.Tools,
-			ProtocolMode: passthrough.ProtocolMode(server.ProtocolMode),
+			ID:               server.ID,
+			URL:              server.URL,
+			Command:          server.Command,
+			Env:              server.Env,
+			WorkingDirectory: server.WorkingDirectory,
+			Timeout:          server.Timeout,
+			Allowed:          server.Tools,
+			ProtocolMode:     passthrough.ProtocolMode(server.ProtocolMode),
 		}
 		var backend passthrough.Backend
 		if instance != config.InstancePerChat {

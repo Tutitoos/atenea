@@ -1,0 +1,1597 @@
+{
+  "version": "0.21.23",
+  "npm_git_head": "b8219f54ddfd2acf08a2f56a5dbcce917cc16d0c",
+  "npm_integrity": "sha512-TZAuh3fMFa12Wh+1etcEll7FNvSCg1PjFkkfGz3XIYr9Ap9rJixHq89AnPqpTqnQ5fN2sp1UQgMFr7KcYoyqkA==",
+  "capture_methods": [
+    "initialize",
+    "tools/list"
+  ],
+  "baseline_version": "0.20.10",
+  "baseline_tool_count": 57,
+  "tool_count": 59,
+  "added_tools": [
+    "action-button",
+    "fold"
+  ],
+  "removed_tools": [],
+  "tools": [
+    {
+      "name": "action-button",
+      "input_schema_sha256": "e3f5eba107698209d22e2517aec79ce44b049c016927a93bbfc14e51f6097069",
+      "supported": false,
+      "change": "added",
+      "output_schema_sha256": "b81a141082ad019c246816b0da6635a2ff0d7a0c4d04161fb86cf1641439e7c6",
+      "output_change": "added",
+      "description_changed": true,
+      "baseline_input_schema_sha256": null,
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "alert",
+      "input_schema_sha256": "a9110054427f4b225cc2b5cd5f57abef7bcc90ee6227a8e40b374491532a2a46",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "10b69032efd6701b288e429bf04528cb296cc397de1728bdb922430595369bff",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "app-switcher",
+      "input_schema_sha256": "e3f5eba107698209d22e2517aec79ce44b049c016927a93bbfc14e51f6097069",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "787ed443007e254a3a7990bef33c1326cf0da1572911d791f845bdf89729c9e1",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "f458605ae5b0d54b6c640d0a1702be95ada4088a707569c73799364ad65014ee",
+      "baseline_output_schema_sha256": "787ed443007e254a3a7990bef33c1326cf0da1572911d791f845bdf89729c9e1"
+    },
+    {
+      "name": "apps",
+      "input_schema_sha256": "a5e6816afa8b6324a444d2c55cdb4074e55178e86a2c2fae6d1f0636ae35785a",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "a7e01e5a41b572c396d6af5afe4568025d7e77dddabd063c0dc0bac995d2c391",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "8b21b665b5dbf55317b34059dcc08dc18a34f4932ff56633fdcfd02327a23b21",
+      "baseline_output_schema_sha256": "a7e01e5a41b572c396d6af5afe4568025d7e77dddabd063c0dc0bac995d2c391"
+    },
+    {
+      "name": "appstate",
+      "input_schema_sha256": "ec8fd1ab3a79c1b1917b11ee57540c4fe8cf0315dd2f197bd7cc50885e9a381f",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "7bced193f8106c3da37b03f6110fa919c6b2abec1af4b9735108d893eceff84a",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "78a0521baf92277d442cd6ae990bed17db7322acca04958b66bb416398dad385",
+      "baseline_output_schema_sha256": "4d36e32c4cb729a8b88de2f7a59df6c95bccbed28d0e3306f3448e68263c4f0e"
+    },
+    {
+      "name": "artifacts",
+      "input_schema_sha256": "bc7d206c7e6dbad8f2085f0c90a14cbb41ad492574d3cce39227409703f166a0",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "da2e07d33b8bd24fad606d3f3aff5a57dbc85862c532a83f12f6d37967f1e325",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "audio",
+      "input_schema_sha256": "e3122315067b16c61b0b2cdb4c9d1f12afe5fa65749a2bf61fd1f8569db74eef",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "759d86ad36cd3a98f34dca0d131b7afcaf06ad13be865a0d507b81273954ea34",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "back",
+      "input_schema_sha256": "772c508a3d28e6375f0b7311dfea6dbf16786f71b24174f6597fb3372034b467",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "b13a77f372b075a32a8bb92b6e44d3bb7de069c723446bfe0210d33ce60901ee",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "1fb034f066f4f2943b32fd868e554b123a5d3c0f580d03aa9eea535e20f1605c",
+      "baseline_output_schema_sha256": "74f9c07c21f3979943ca3aad43ab31506ba11f2d1fb07679a9491e01ddb47fd1"
+    },
+    {
+      "name": "batch",
+      "input_schema_sha256": "bb998a03caf23896f6141dec62ffc80ecdca7cabdb8169edaf9352b4f41890e7",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "steps",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "d35cd8d1a7e776df473e6d307e986e4f94b0d0a9d1bf76e7e9e5be0e48d15bdf",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "boot",
+      "input_schema_sha256": "82f133bc16b2e18b672b52b8835cf5a4e62e660b603eb56bfc6b9e55240c37e3",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [
+        "timeoutMs"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "b6833688886a2048ff4492ee51246313556fa2e8c31ac194732e0a363aa6f808",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "85115e342aa509a340771d956e3f21936a63357c114dcbfadedd41a632579da7",
+      "baseline_output_schema_sha256": "b6833688886a2048ff4492ee51246313556fa2e8c31ac194732e0a363aa6f808"
+    },
+    {
+      "name": "capabilities",
+      "input_schema_sha256": "ec8fd1ab3a79c1b1917b11ee57540c4fe8cf0315dd2f197bd7cc50885e9a381f",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "78a0521baf92277d442cd6ae990bed17db7322acca04958b66bb416398dad385",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "click",
+      "input_schema_sha256": "bdac4c83329f5ff8b25cbe52458f9774cac39dd74d73ea762ee1b20cee4975cb",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "1be7fa1e6b60cffac227e6ee4a0b0eb7b9c59c227e9b55bc49ee53526b412e9e",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "d517bba0bba0fbec32ddd8fe469e5b5a4d6357855d20ec639af82d25fccdd5aa",
+      "baseline_output_schema_sha256": "5f6f208b58438fa17608e7316e3914f727e170de89c561d1cf629b9f33a6c6c3"
+    },
+    {
+      "name": "clipboard",
+      "input_schema_sha256": "b770695ea43c2b14a41f8477e48acd4db13bbab0d059c67d535a567a7f78a642",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "5b2bc1a7ee47ac8ae531ec4ad01a426c45b0980ad6efd6f4e690500db0975a34",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "045ee7750b59b8c5ca3f6688a7264dd7864f3af32d45251758fe7387ef2a7691",
+      "baseline_output_schema_sha256": "5b2bc1a7ee47ac8ae531ec4ad01a426c45b0980ad6efd6f4e690500db0975a34"
+    },
+    {
+      "name": "close",
+      "input_schema_sha256": "864dbd3b4ba6859535593d71878eb5e94af0b65ebaf8348e5b8c7b3b70090f9e",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "61250150154d4ae950307886d12a40b83a47a432fe5c7380c868ccc7071b616b",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "debug",
+      "input_schema_sha256": "636c50fd9e424b94e1142459493845a88f166a2ec831cdb9cb5e0d3f359b126b",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "f11598dff0a90927631bff0eda779f5dbf6d7620979f3f37e329912582332896",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "devices",
+      "input_schema_sha256": "ec8fd1ab3a79c1b1917b11ee57540c4fe8cf0315dd2f197bd7cc50885e9a381f",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "0465262bdc2f3916ee5f54f5ad213a3d74fe38ba2216abc486af2b881f6af165",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "78a0521baf92277d442cd6ae990bed17db7322acca04958b66bb416398dad385",
+      "baseline_output_schema_sha256": "0465262bdc2f3916ee5f54f5ad213a3d74fe38ba2216abc486af2b881f6af165"
+    },
+    {
+      "name": "diff",
+      "input_schema_sha256": "37bbeaa0333e3ea54a4db93806bbc29cc206008169dc559dc8c0b56233354267",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "8d181b928d6733f769df9449dc0f4d7a27ef4571b0051b2bc94dd19e5572466d",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "59767d61a083380977e47f7edd55fe5b42985bb9d84b8834d8c2391c0fd5f1b3",
+      "baseline_output_schema_sha256": "f3806de8c76a833535c7f2e060e1103a38828a00d7a98144d55d0a7ee6c1448b"
+    },
+    {
+      "name": "doctor",
+      "input_schema_sha256": "d1bfe40111a0adf537b8c484c541a3581a1ea9032c4b54ad8f8e729df2a9de42",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "012b0b92149e320d4fe1d83fb60c648e9d158b8c707eb007d2add049a90c0d40",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "92d64eb58f2f817a266ae1396f2dd4794d7fd8c4fa4396b79a9eefebe2ec9257",
+      "baseline_output_schema_sha256": "012b0b92149e320d4fe1d83fb60c648e9d158b8c707eb007d2add049a90c0d40"
+    },
+    {
+      "name": "events",
+      "input_schema_sha256": "fb9e7007e44e7957fb74231a9b19f147face2620654670d1e8f99a409e086cf1",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "030d2a97aa6e4fb3f84c78ca8d822a0551097c883d1fc3ebbc4b83519cc4e3dc",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "fill",
+      "input_schema_sha256": "4ffb312b5501d275360f09e5a7a7ce93709334303152cfd08b09c1156f9f35c3",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "text",
+        "udid"
+      ],
+      "output_schema_sha256": "0ca54d87e6630d7322e424b1923a81419930a432012c1f634fe2285b757e9d7f",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "215f90ea50175881d9044fc43cb5dcdf7dda2a8bd9dec1572fa3b90c291397c2",
+      "baseline_output_schema_sha256": "7596ff0efaa29c48fd7e14768d60590f8f7cbc96f951045a8fa65e1580aa0287"
+    },
+    {
+      "name": "find",
+      "input_schema_sha256": "0569142cbbc5444bd6b73d50ff67e852d3efb5a11f5ff88229fceb0aaf5cb443",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "fe8f7239dc02f8bc151db8c385319b8f36276c5eed8c62e89ff9fc90de0226ff",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "9aa78634302a07f4f6618ee49556940f4aa266ac5da2051020fdfffa74f46ce4",
+      "baseline_output_schema_sha256": "3a6c526be9346c598c56afabceb711994d6f356a391812e9766a358d95f2b9f7"
+    },
+    {
+      "name": "focus",
+      "input_schema_sha256": "9ec16875b8f3b3418704f071c4ee737db2daed8a2f1763781fe7a60dc1236295",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "a8eb2f30c0bbbea0b899cfbc225e96116b3f316affc01338825ac1ece10c72be",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "fold",
+      "input_schema_sha256": "d860713dadb11445d72b8293b4f8954ba32a29b1486b37c36ae1b173cbf59391",
+      "supported": false,
+      "change": "added",
+      "output_schema_sha256": "2cca5abc5508d830bafed05c839e28c2eefb4ef3a873feb880ba3b66bda9f600",
+      "output_change": "added",
+      "description_changed": true,
+      "baseline_input_schema_sha256": null,
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "gesture",
+      "input_schema_sha256": "f0b5165b8a5e26972c8c13d1fc2f66832f8a026c5a3445a33e74c8bdd1062478",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "da69b4b587f5dbcb6a681de245bc9e041e43d4db8313f58771ac41fc8a49bdb1",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "get",
+      "input_schema_sha256": "6da5625a8d126af0197ae96813b69ad7c653b801c3a4cdcb54b0a6ac16ef72d2",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "33e425d1f200b641bb750343c2503858c7f1ae02cb77a614995f503d3ad5273d",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "help",
+      "input_schema_sha256": "93136763c33b43f697582fe1ab60ba7e51a6fbed294678deb26c114baea9f7da",
+      "supported": true,
+      "change": "unchanged",
+      "added_fields": [],
+      "removed_fields": [],
+      "changed_fields": [],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "93136763c33b43f697582fe1ab60ba7e51a6fbed294678deb26c114baea9f7da",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "home",
+      "input_schema_sha256": "e3f5eba107698209d22e2517aec79ce44b049c016927a93bbfc14e51f6097069",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "01edca6dcf7b7ecb573aa138ba6cd4753d0ed371c7cb1669773dd57c741b204b",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "f458605ae5b0d54b6c640d0a1702be95ada4088a707569c73799364ad65014ee",
+      "baseline_output_schema_sha256": "01edca6dcf7b7ecb573aa138ba6cd4753d0ed371c7cb1669773dd57c741b204b"
+    },
+    {
+      "name": "hover",
+      "input_schema_sha256": "b177b4052bc18afaf52ed0bc4e73e09809265db3f88814c15e72bb0dc4b85976",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "35d6900f8dfa1a57dc248936ddebf6e03e437ec028b2f20087b066e544e4a67f",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "a21415d8efd87ee02196f104a9269ebd6b31a728e8434ff18b7e0814fc1fa3bc",
+      "baseline_output_schema_sha256": "a0e3c2dd9b3ed38affffd9c2ee8cffeb3d7c2e172c9eb8f514eb92883ebd468d"
+    },
+    {
+      "name": "install",
+      "input_schema_sha256": "9145c07d8d23eef0de75314dc0f5a314f8fb5068c525ae8713777b49b100ead4",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "19bbb5f59b226d96b6f22d95c1e78961929b5dbf5d4f8eb8ce3d1fe19f8cc2b6",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "install-from-source",
+      "input_schema_sha256": "9180f0924b0922c16c43dac9a470ecdc53c8abb314db61ba47f1627b32685528",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "fdf2d5040040971b1c77583b529fb7969bcabe7f92366803bc7db341f4cd4f93",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "is",
+      "input_schema_sha256": "0ead20136cd7193f4ca88e88999d6f8f89f74f4d040e70dddf83473c9fa24d9b",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "predicate",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "dadb5bc5771e4367abaaf50146042f8363b1ff038f8726781e535ca83c1f70b4",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "keyboard",
+      "input_schema_sha256": "16329a4fc05629d7ea65c5926b5742efbd63b34d2ac3187bc8101f73f1cdf489",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "901ce37ebda3e21ffe0370c90f4e00fdb538acbdc669b9fa56c2ec5ff74a0786",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "41d6441a09949f8f8c24ab2f9d240c4b9f641cad84d56c6823184656f0d91cf6",
+      "baseline_output_schema_sha256": "901ce37ebda3e21ffe0370c90f4e00fdb538acbdc669b9fa56c2ec5ff74a0786"
+    },
+    {
+      "name": "logs",
+      "input_schema_sha256": "42efe789093fcfa8b4f32670d6f32df60d60714da10217f7b636b3128502e125",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "942cfed167ef7777514a8e930fc7974a59100ad0e9b80a7bbe28d183f3162ae1",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "longpress",
+      "input_schema_sha256": "181105dc0c5089bc44f440f4568d31d035f17e4373e2a2e3a9ae9d446a3225a7",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "f243fc62b364dcebece41271b50c09da132ca7ca2a32d8961241669cb0e6a1a9",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "acc7926888cf6d53b3db6577cb89c01743824aa28fef8a121f542dc15e81753d",
+      "baseline_output_schema_sha256": "1b1e7091c854f4686077a6430b58369a20f0fcda099a2ea0d43588fa5daade5d"
+    },
+    {
+      "name": "metro",
+      "input_schema_sha256": "ba41e075dba77eb12e9ece5da6a6c6c004b8b9855a2eedeb6f22a7b57143d110",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "bearerToken",
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "proxyBaseUrl",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "94ce184fa6d1c6af828277ec8ff7e5233648fce8ae0364e2dd7d96c077b97d59",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "network",
+      "input_schema_sha256": "cf1ab3beb4ad4f79c7de272591c47115fd8b976707574158867dba0b321d5b8f",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "0213237dfcddf92003e0379f8f7169eb9b58054f8b475a352b0ecfc12494291b",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "open",
+      "input_schema_sha256": "052a4fef0d7c88692ee508750d243c3af4f5d07bc7d2868cccb6a0b98c4f8ff8",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [
+        "timeoutMs",
+        "waitMs"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "deviceHub",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "c1be5cf6134abcd7c7d454f2ba3dd46f3109ed30c1c9025f65117ee0cae753eb",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "orientation",
+      "input_schema_sha256": "697e92ce3100c63055a2e9a2bba31835a2e51ce4b8f775c3eed7e1abf85691c3",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "634e580bf2efdf0fbab5b71530860483af38be2e2ae333ea313f43c9d385df84",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "99a3527c86179016e3800d575430ce517018bc875ec247d13592a2d6c7f950bd",
+      "baseline_output_schema_sha256": "67fc91d72284f851a478625631969ce9c0d3056576a62aae566fea0e78c129fc"
+    },
+    {
+      "name": "perf",
+      "input_schema_sha256": "114e8d8b30c5ca289b93a6e0b457c4554fd57af5fb884add04ad9ba449d0df51",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "area",
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "2569f2c133d001bfe2492c2d9ebeb08db5987277c98a82c5094497fe4cef77fc",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "press",
+      "input_schema_sha256": "816e90a004df85c0b92d782ae2eb60359a73a33673497117bc0ea71b3a1608fa",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "1be7fa1e6b60cffac227e6ee4a0b0eb7b9c59c227e9b55bc49ee53526b412e9e",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "5fe389276ace223282d776e2ed1f11064d101e0f87c232c170b93d2307be9918",
+      "baseline_output_schema_sha256": "5f6f208b58438fa17608e7316e3914f727e170de89c561d1cf629b9f33a6c6c3"
+    },
+    {
+      "name": "push",
+      "input_schema_sha256": "15e926b7a47097d4e438fd624d6c9d67b7f129092556fad432df7eb5e72853b0",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "f0d798b1f95e7d5433ad7ccb1a65142ca4a3cedb8314e13790446c4b07ac8fa5",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "b65e3418495402e44f3e0817e3d42a73898b8f170ebd53a90a34e89abb1d9539",
+      "baseline_output_schema_sha256": "f0d798b1f95e7d5433ad7ccb1a65142ca4a3cedb8314e13790446c4b07ac8fa5"
+    },
+    {
+      "name": "react-native",
+      "input_schema_sha256": "57610f5124c6da2b1594a987908af09a13e36b585c15bc88fae1787745f74fd2",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "7a467562012fe6811cc3701de9497e11c30110eab70ab41fa4c4602aae3e6a54",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "record",
+      "input_schema_sha256": "501802575e7397c72d19a92eb04d9cd7c85c45c735000643e297f34a8df84571",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "23ad42136de342691fcdd532629d5fd735328b747fbaaf7073071176dca0d113",
+      "output_change": "changed",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "695c5c67e7c15721418fdfd3cb278a99de856cabbc9af3f309e059a5a3bae6d3",
+      "baseline_output_schema_sha256": "e39c18e2ff48032a953cfab6ad0eb90896a7c0fe4d8ce0db0affcd8eb8093431"
+    },
+    {
+      "name": "reinstall",
+      "input_schema_sha256": "91b44b79ed42419ac1bf553b283b9a49f22b309eb4ba4039462176f1baffb630",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "eed00fbb2dcdb930172380e495181bc04fc221897661323916cf3467bcfbe52a",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "replay",
+      "input_schema_sha256": "64dc26e742f1076c386dcbb60824d2767e866ccb1938abf060d36b77d8b68491",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [
+        "testIme"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "4ec127bef4c82deac2caecc1675055886565e4a152fdd44b94581e906e826c3c",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "efe7cf9678253b390329e5c7a7007e6d0e6f0cf90d3b7e136be50ce58d126bf6",
+      "baseline_output_schema_sha256": "4ec127bef4c82deac2caecc1675055886565e4a152fdd44b94581e906e826c3c"
+    },
+    {
+      "name": "screenshot",
+      "input_schema_sha256": "5256c1d105d2547ed75ee31e253388a92fcfeccbbbde04b49b8601915f24dca2",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [
+        "cropOn"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "cd29cdc11cbce077000f842099289403a52fa80902bacc34fc7d7bb9979d6ff2",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "scroll",
+      "input_schema_sha256": "5ec027ee2b5a0e12b21a3ad8d56880d09b0604fef33fed3096543f0de914e2a0",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [
+        "until"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "500cb36e41f2d47dd53a272f3731a544fe88c198718a8bff5abad65eee689638",
+      "output_change": "added",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "f913104335f7cb719ff1cd4448be0fe79dfa8641bc55ed6db27eea6c94252549",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "session",
+      "input_schema_sha256": "8bd80a0dd5a9bdbb10a3f4777c924c35268409b382e9b8c5dde3a3ab51befbe0",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "ba8b0fda69c909d7093af0cd6a07fe89cf835d8ddd49fd3b8301da3f06663719",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "settings",
+      "input_schema_sha256": "cab2d0f90d0dffc7d06c7d50463e2de611d9f0369bacc6fadcb2c83f5fbee7f3",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "app",
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "470e584e46dd44ab13ea6d97868545c33950a102e378ca7db35df0236d104783",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "shutdown",
+      "input_schema_sha256": "ec8fd1ab3a79c1b1917b11ee57540c4fe8cf0315dd2f197bd7cc50885e9a381f",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "343bb545b3123168af473c3eb7a1506daa3ecee8c4e7d1f0ad13cbdd84eb71ba",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "78a0521baf92277d442cd6ae990bed17db7322acca04958b66bb416398dad385",
+      "baseline_output_schema_sha256": "343bb545b3123168af473c3eb7a1506daa3ecee8c4e7d1f0ad13cbdd84eb71ba"
+    },
+    {
+      "name": "snapshot",
+      "input_schema_sha256": "4277d594b687444688baa906034205bf89a52c2b96aff50d66b175476bf20534",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "d5de5b9cfc90c4dfd9186a15753bd031a9613e54a3799b837a6b633fcd451247",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "swipe",
+      "input_schema_sha256": "3c41e9f1f52558187ae65485336b135d49b9a28224ae7c7945e4f0ce039bbdfd",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "2621376b5203dc2e09050caa4516066123d6b9576b25f299f72f4a9b92bac5e0",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "test",
+      "input_schema_sha256": "37b5681081900b4d119c10a2e8a06578f559fc16c2a27b5d61b946eab29b2b1c",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [
+        "testIme"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "05a47b0eb2bf6587ec42da0c80513e133115d8523bda6786ca937055c1a9894d",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "43c8b29c8a406819ca59689170f0c8715aa72834cc8145790cfd205ec96c6d92",
+      "baseline_output_schema_sha256": "05a47b0eb2bf6587ec42da0c80513e133115d8523bda6786ca937055c1a9894d"
+    },
+    {
+      "name": "trace",
+      "input_schema_sha256": "c2723c7d695ee26f6cf2a66782228ca5eed52681ec282b185fb4bfb128ee3a49",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "e8c16e63a9440a287a7b208e82aa00cd30d6fd0358287afe88a4c2b106095779",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "f2d69896ea95bede3ba08ebb27ee4a7cc3ded35b398a945ef32df0fe05b0fa43",
+      "baseline_output_schema_sha256": "e8c16e63a9440a287a7b208e82aa00cd30d6fd0358287afe88a4c2b106095779"
+    },
+    {
+      "name": "trigger-app-event",
+      "input_schema_sha256": "e6640adeeb1d7f90bcc5cbd46c7628aea342e6e26512214a956fe90ace4c1b2c",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "5d06d81289df110046949739e0b39548df1e5739a9827cf9ce8464ef503927bc",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "e9b72c0fa6d4061d7d32779e48fe272f7c0297206b03b163d27f62936ca98c28",
+      "baseline_output_schema_sha256": "5d06d81289df110046949739e0b39548df1e5739a9827cf9ce8464ef503927bc"
+    },
+    {
+      "name": "tv-remote",
+      "input_schema_sha256": "4e7049d7cbb4e60085b413a56fe670c3b0d40ff8b48b770a2f5fa3f0f6194f37",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "31174d2a5a3572940f8a3ed51f59dc9e303dbf1e2452fa4dbe31ed50f5051184",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "3f283ddd7e8941c09e66f56c957c70057b39724ed55543bb9a1bc28ad0391b15",
+      "baseline_output_schema_sha256": "31174d2a5a3572940f8a3ed51f59dc9e303dbf1e2452fa4dbe31ed50f5051184"
+    },
+    {
+      "name": "type",
+      "input_schema_sha256": "215f4a88524e0c500185ff9722f603aa7991231eae514574beb187d863c8aadd",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": null,
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "09e289316bda531db8a4213f105cddd76b5a4dcbaa6dd8d9267007439f649377",
+      "baseline_output_schema_sha256": null
+    },
+    {
+      "name": "viewport",
+      "input_schema_sha256": "b025ee8d4348841f81ff4e073f64366b8a98d3a64463fcd9c726a4c9db1c674a",
+      "supported": false,
+      "change": "changed",
+      "added_fields": [],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "2352ad4c3e7e3585e0e84463e6484b9949a63f629ad71449da138f43ffedb0be",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "2347f172b69b34ce5c7dd7fe9b0b4cf93da5b3935667d0b8089f8b786e001dc0",
+      "baseline_output_schema_sha256": "2352ad4c3e7e3585e0e84463e6484b9949a63f629ad71449da138f43ffedb0be"
+    },
+    {
+      "name": "wait",
+      "input_schema_sha256": "e29dc35bb64240cacaa495046d7a39d6eed054fd7cd3709e928b65f8eff7a474",
+      "supported": true,
+      "change": "changed",
+      "added_fields": [
+        "absent"
+      ],
+      "removed_fields": [
+        "cwd",
+        "daemonAuthToken",
+        "daemonBaseUrl",
+        "iosSimulatorDeviceSet",
+        "iosXctestDerivedDataPath",
+        "iosXctestEnvDir",
+        "iosXctestrunFile",
+        "stateDir"
+      ],
+      "changed_fields": [
+        "device",
+        "kind",
+        "serial",
+        "udid"
+      ],
+      "output_schema_sha256": "ea5f3b48faa44c40364659ee652ecb4049045ec6ac284dc7018cb9e57733b53c",
+      "output_change": "unchanged",
+      "description_changed": true,
+      "baseline_input_schema_sha256": "3e18a6e28c292808d29c397b5b6cc77ee7cfa3cc3b06a0dfe9856fcb712772c9",
+      "baseline_output_schema_sha256": "ea5f3b48faa44c40364659ee652ecb4049045ec6ac284dc7018cb9e57733b53c"
+    }
+  ],
+  "output_schema_counts": {
+    "baseline": 28,
+    "candidate": 31
+  },
+  "catalog_sha256": "1d87aaf4fa0ae7f672540f5e6794254143479cde5d312990d9b6d3b84622a0f3",
+  "baseline_catalog_sha256": "f2ab6497ad4d9975be0e834fb38d7e63f1d30203acd18dc49f1aeb02e6942d7a"
+}

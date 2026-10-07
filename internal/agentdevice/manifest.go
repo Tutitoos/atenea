@@ -8,6 +8,20 @@ import "slices"
 // Version is the agent-device release whose MCP surface this manifest pins.
 const Version = "0.20.10"
 
+// CandidateVersion is qualified for the bounded core catalog. Its operator
+// context is bound to the MCP child process rather than request arguments.
+const CandidateVersion = "0.21.23"
+
+// SupportedVersions lists exact qualified releases without admitting a range.
+func SupportedVersions() []string { return []string{Version, CandidateVersion} }
+
+// CandidateAllows intentionally excludes full-only tools and new upstream
+// additions until their effects and ownership requirements have been reviewed.
+func CandidateAllows(tool string) bool {
+	tool = normalize(tool)
+	return slices.Contains(coreTools, tool) || tool == "session" || tool == "help"
+}
+
 var allTools = []string{
 	"alert", "app-switcher", "apps", "appstate", "artifacts", "audio",
 	"back", "batch", "boot", "capabilities", "click", "clipboard", "close",

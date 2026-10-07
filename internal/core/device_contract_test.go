@@ -57,13 +57,26 @@ func TestDeviceOpenClickFillInvalidContractsStopBeforeDispatch(t *testing.T) {
 
 type catalogOnlyDeviceBackend struct {
 	passthrough.Backend
-	tools []passthrough.Tool
+	tools              []passthrough.Tool
+	version, workspace string
 }
 
 func (b catalogOnlyDeviceBackend) Tools(context.Context) ([]passthrough.Tool, error) {
 	return b.tools, nil
 }
-func (catalogOnlyDeviceBackend) Version() string { return "0.20.10" }
+func (b catalogOnlyDeviceBackend) Version() string {
+	if b.version == "" {
+		return "0.20.10"
+	}
+	return b.version
+}
+func (b catalogOnlyDeviceBackend) WorkingDirectory() string { return b.workspace }
+func (b catalogOnlyDeviceBackend) ContractTools(context.Context) (passthrough.CatalogContract, error) {
+	return passthrough.CatalogContract{Tools: b.tools, Version: b.Version(), WorkingDirectory: b.workspace}, nil
+}
+func (catalogOnlyDeviceBackend) CallContract(context.Context, string, map[string]any, passthrough.CatalogContract) (json.RawMessage, error) {
+	panic("fixture contract must not dispatch an action")
+}
 func (catalogOnlyDeviceBackend) Call(context.Context, string, map[string]any) (json.RawMessage, error) {
 	panic("tools/list fixture must not dispatch a device action")
 }

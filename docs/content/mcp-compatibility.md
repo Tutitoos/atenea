@@ -84,3 +84,75 @@ is uncertain, inspect the session and a fresh snapshot before deciding whether
 another action is needed. Use `atenea.command` with `name=device.sessions` or
 `name=device.help` for recovery. The local contract tests do not certify
 Android or iOS client behavior; each needs separate real-client acceptance.
+
+### Staged agent-device 0.21.23 compatibility
+
+The exact `0.21.23` release has a separate compatibility contract. Its complete
+59-tool MCP catalog was compared with the 57-tool `0.20.10` catalog using only
+`initialize` and `tools/list`. The capture, npm integrity, upstream Git revision,
+and per-tool input-schema fingerprints live in
+`internal/agentdevice/testdata/catalog-0.21.23.json`. The input schemas are
+fixtures from the upstream MIT-licensed package, not device observations.
+
+For this release, Atenea qualifies only the existing 20-tool **core** catalog,
+plus the read-only session inspection command and `help`. Full-only tools remain
+unqualified, including `batch`, `replay`, `test`, `settings`, and `shutdown`.
+The newly added `action-button` and `fold` are also unqualified. Selecting a
+`full` desktop profile does not widen this release's qualified catalog. Atenea
+withholds these tools, records a compatibility diagnostic, and refuses direct
+calls before dispatch. The `0.20.10` catalog and its existing behavior remain
+available. Neither contract admits another version by a version range.
+
+Candidate validation and dispatch share an opaque lease for the exact backend
+instance, child process, catalog generation, protocol mode, version and
+workspace. Ownership inspection and the final action use that same lease. If
+the child exits or is replaced after validation, the call is refused without
+starting or dispatching to a replacement. A failure after writing to the
+validated child can still be uncertain and must be observed before retrying.
+
+The upstream `0.21.23` MCP surface removed request fields for working directory,
+daemon realm/authentication, and Apple runner configuration. Those are operator
+configuration. A raw stdio backend must now declare its workspace explicitly:
+
+```toml
+[[mcp_server]]
+id = "agent-device"
+command = ["node", "/qualified/package/bin/agent-device.mjs", "mcp"]
+working_directory = "/canonical/existing/qa-workspace"
+expose = "raw"
+# Keep the existing explicit tool budget and effect declarations.
+```
+
+`working_directory` is optional for other releases and supported only by raw
+stdio backends. Configuration requires an absolute clean path; each child spawn
+also checks that it is an existing directory without a symlink alias and sets
+the child's actual `cwd` to that path. HTTP cannot establish this child binding.
+Candidate tools are withheld when the binding is absent.
+
+For `0.21.23`, every tool call supplies the matching `cwd` to Atenea. Atenea
+checks it against the backend binding, then removes only that locally consumed
+field from a detached wire argument map. Upstream schema bytes remain unchanged.
+The read-only `device.sessions` command uses the operator's binding. Runtime
+`stateDir`, `daemonBaseUrl`, `daemonAuthToken`, and Apple runner fields are
+rejected rather than silently removed. Configure the realm and runner through
+the backend's operator environment; do not isolate the global device claim
+directory, which protects devices held by other sessions.
+
+Qualified argument changes include bounded `open` startup/contending-session
+waits, screenshot `cropOn`, scroll `until`, and the read-only `wait` absent
+condition. Each remains subject to its exact schema, declared effects and
+ownership checks. `wait` accepts exactly one supported condition. References,
+explicit open/click/fill session and device selectors, self-contained open
+branches, uncertain-result handling and occlusion protections remain in force.
+There is no implicit coordinate fallback, keyboard replacement or test IME
+activation added by this adapter.
+
+Roll out first in an isolated workspace and realm with a verified package;
+keep the normal package, configuration and signing unchanged. Validate automatic
+Safari navigation, pinned click/fill, Android with its visible keyboard, Chrome
+semantic accessibility, session closure and state restoration separately through
+a real MCP client. Source tests and schema capture do not establish those
+physical results. Install only after independent review, required checks and
+authorization for the exact revision. Rollback restores the previous backend
+command/environment and removes this candidate's sessions after inspection;
+close only sessions owned by that rollout and preserve shared device claims.

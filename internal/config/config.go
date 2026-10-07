@@ -157,6 +157,9 @@ type MCPServer struct {
 	URL     string
 	Command []string
 	Env     map[string]string
+	// WorkingDirectory fixes the cwd of a raw stdio child. Empty preserves the
+	// inherited cwd. It cannot be selected or changed by a tool request.
+	WorkingDirectory string
 	// Dashboard is an optional HTTP(S) web UI belonging to this MCP. It is
 	// metadata only: Atenea never opens it during startup or probing.
 	Dashboard string
@@ -255,12 +258,13 @@ func (m MCPServer) EffectsFor(tool string, args map[string]any) []contract.Effec
 // screen ends up naming a transport the prober would not have used.
 func (m MCPServer) Probe() mcpprobe.Server {
 	return mcpprobe.Server{
-		ID:           m.ID,
-		URL:          m.URL,
-		Command:      m.Command,
-		Env:          m.Env,
-		Timeout:      m.Timeout,
-		ProtocolMode: mcpprobe.ProtocolMode(m.ProtocolMode),
+		ID:               m.ID,
+		URL:              m.URL,
+		Command:          m.Command,
+		Env:              m.Env,
+		WorkingDirectory: m.WorkingDirectory,
+		Timeout:          m.Timeout,
+		ProtocolMode:     mcpprobe.ProtocolMode(m.ProtocolMode),
 	}
 }
 
@@ -1742,18 +1746,19 @@ type fileRepository struct {
 }
 
 type fileMCPServer struct {
-	ID           string            `toml:"id"`
-	URL          string            `toml:"url"`
-	Command      []string          `toml:"command"`
-	Env          map[string]string `toml:"env"`
-	Dashboard    string            `toml:"dashboard"`
-	Timeout      string            `toml:"timeout"`
-	ProtocolMode string            `toml:"protocol_mode"`
-	Expose       string            `toml:"expose"`
-	Instance     string            `toml:"instance"`
-	Tools        []string          `toml:"tools"`
-	Effects      []string          `toml:"effects"`
-	Tool         []fileMCPTool     `toml:"tool"`
+	ID               string            `toml:"id"`
+	URL              string            `toml:"url"`
+	Command          []string          `toml:"command"`
+	Env              map[string]string `toml:"env"`
+	WorkingDirectory string            `toml:"working_directory"`
+	Dashboard        string            `toml:"dashboard"`
+	Timeout          string            `toml:"timeout"`
+	ProtocolMode     string            `toml:"protocol_mode"`
+	Expose           string            `toml:"expose"`
+	Instance         string            `toml:"instance"`
+	Tools            []string          `toml:"tools"`
+	Effects          []string          `toml:"effects"`
+	Tool             []fileMCPTool     `toml:"tool"`
 }
 
 type fileMCPTool struct {
@@ -1805,6 +1810,12 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 		return fail("mcp_server %s: protocol_mode %q is not legacy, auto, or modern-pin", id, protocolMode)
 	}
 	out := MCPServer{ID: id, Command: m.Command, Env: m.Env, Dashboard: strings.TrimSpace(m.Dashboard), ProtocolMode: protocolMode}
+	if m.WorkingDirectory != "" {
+		if !hasCommand || !filepath.IsAbs(m.WorkingDirectory) || filepath.Clean(m.WorkingDirectory) != m.WorkingDirectory {
+			return fail("mcp_server %s: working_directory requires a canonical absolute path and a stdio command", id)
+		}
+		out.WorkingDirectory = m.WorkingDirectory
+	}
 	if out.Dashboard != "" {
 		validated, err := validateDashboardURL(source, "mcp_server", id, out.Dashboard)
 		if err != nil {
@@ -1846,6 +1857,9 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 		out.Expose = Expose(expose)
 	default:
 		return fail("mcp_server %s: expose %q is not %s or %s", id, expose, ExposeOff, ExposeRaw)
+	}
+	if out.WorkingDirectory != "" && out.Expose != ExposeRaw {
+		return fail("mcp_server %s: working_directory is supported only for expose = raw", id)
 	}
 	instance := strings.TrimSpace(m.Instance)
 	if instance == "" {
