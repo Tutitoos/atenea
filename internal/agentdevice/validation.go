@@ -80,6 +80,15 @@ func Validate(version, tool string, schema json.RawMessage, args map[string]any)
 			return invalid("cwd must be an explicit absolute path matching the configured working_directory")
 		}
 	}
+	if tool == "fill" {
+		if target, ok := args["target"].(map[string]any); ok && target["kind"] == "ref" {
+			// Both pinned SDKs serialize this label into fill's positional text.
+			// Reject its presence, including empty/null, without changing the call.
+			if _, present := target["label"]; present {
+				return invalid("fill with a ref target must omit target.label")
+			}
+		}
+	}
 	if err := validatePinnedSchema(schema, WireArguments(version, args)); err != nil {
 		return invalid(err.Error())
 	}
@@ -184,7 +193,7 @@ func Help(tool string) string {
 		return `Example: {"session":"my-task","cwd":"/absolute/project","udid":"explicit-device-id","app":"example.app"}. Choose a free device and a dedicated session.`
 	}
 	if tool == "fill" {
-		return `Example: {"session":"my-task","cwd":"/absolute/project","target":{"kind":"ref","ref":"@e12"},"text":"value"}. Use a fresh snapshot; do not include private text in diagnostics.`
+		return `Example: {"session":"my-task","cwd":"/absolute/project","target":{"kind":"ref","ref":"@e12"},"text":"value"}. Omit target.label for kind=ref. Use a fresh snapshot; do not include private text in diagnostics.`
 	}
 	return `Examples: {"session":"my-task","kind":"duration","durationMs":1000} or {"session":"my-task","kind":"stable","stable":true,"quietMs":500}. List sessions with atenea.command name=device.sessions. Keep session, cwd and device explicit; do not take another task's session.`
 }

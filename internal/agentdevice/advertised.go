@@ -63,6 +63,10 @@ func AdvertisedSchema(version, tool string, upstream json.RawMessage) (map[strin
 			fields := variant["properties"].(map[string]any)
 			switch fields["kind"].(map[string]any)["const"] {
 			case "ref":
+				if tool == "fill" {
+					delete(fields, "label")
+					variant["additionalProperties"] = false
+				}
 				fields["ref"].(map[string]any)["pattern"] = refPatternSource
 				fields["ref"].(map[string]any)["description"] = "Snapshot reference such as @e12 or @e12~s4 (pinned to refsGeneration). Use a fresh snapshot of this session; the pattern alone cannot establish freshness."
 			case "selector":
@@ -79,6 +83,6 @@ func AdvertisedDescription(tool, upstream string) string {
 		map[string]string{
 			"open":  "Choose an explicit free udid, serial or device. An uncertain open must be observed before retrying.",
 			"click": "Use a fresh snapshot for a ref. An uncertain click must be observed before retrying.",
-			"fill":  "Use a fresh snapshot for a ref. Do not log private text or retry an uncertain fill automatically.",
+			"fill":  "Use a fresh snapshot for a ref and omit target.label. Do not log private text or retry an uncertain fill automatically.",
 		}[tool]
 }

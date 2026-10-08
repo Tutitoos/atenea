@@ -70,6 +70,13 @@ optionally followed by `~s` and up to 16 generation digits, for example
 snapshot or find response that issued it. The selector must contain `=`. The
 upstream variants and permitted fields otherwise remain unchanged.
 
+For both pinned releases (`0.20.10` and `0.21.23`), a `fill` ref target must
+omit `target.label`: the SDK serializes that optional label into the entered
+text. Atenea rejects any supplied label, including empty or `null`, before
+dispatch and omits it from the advertised ref variant. It does not remove the
+field from a call or rewrite the text. `click` ref labels and selector/point
+targets retain their existing contract.
+
 Each advertised `open` selector branch contains the complete verified
 upstream field set, including `session`, `cwd`, `app` and `url`. This lets clients
 that project one `anyOf` branch retain all valid options. Each branch still
