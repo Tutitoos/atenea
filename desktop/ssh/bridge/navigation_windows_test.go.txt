@@ -1,0 +1,27 @@
+package edge
+
+import "testing"
+
+func TestAteneaAllowedNavigation(t *testing.T) {
+	tests := []struct {
+		uri string
+		want bool
+	}{
+		{"http://wails.localhost/", true},
+		{"http://wails.localhost/#ssh", true},
+		{"http://wails.localhost/other", false},
+		{"http://wails.localhost/?other", false},
+		{"https://wails.localhost/", false},
+		{"http://wails.localhost.evil/", false},
+		{"http://user@wails.localhost/", false},
+		{"http://wails.localhost:8080/", false},
+		{"file:///C:/secret", false},
+		{"data:text/html,hello", false},
+		{"about:blank", false},
+	}
+	for _, tt := range tests {
+		if got := ateneaAllowedNavigation(tt.uri); got != tt.want {
+			t.Errorf("ateneaAllowedNavigation(%q) = %t, want %t", tt.uri, got, tt.want)
+		}
+	}
+}

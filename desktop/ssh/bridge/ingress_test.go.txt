@@ -1,0 +1,16 @@
+package PLATFORM
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestAteneaSSHIngressRejectsRuntimeBypass(t *testing.T) {
+	for _, message := range []string{"DomReady", "runtime:ready", "Q", `C{"name":"main.App.ControllerStatus","args":[],"callbackID":"1"}`} {
+		if !ateneaSSHIngressMessage(message) { t.Fatalf("required lifecycle or call message blocked: %s", message) }
+	}
+	if !ateneaSSHIngressMessage("C" + strings.Repeat("x", 4095)) { t.Fatal("maximum-size call message blocked at ingress") }
+	for _, message := range []string{"", "C", "drag", "resize:left", "wails:showInspector", "wails:openInspector", "file:drop:0:0", "BOpen:https://example.invalid", "Ddrop", "Wz", "C" + strings.Repeat("x", 4096)} {
+		if ateneaSSHIngressMessage(message) { t.Fatalf("framework bypass accepted: %s", message) }
+	}
+}
