@@ -8,20 +8,38 @@ final class InputMonitor: @unchecked Sendable {
     static let shared = InputMonitor()
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
-    private(set) var active = false
+    var active: Bool {
+        guard let tap, source != nil, failure == nil else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
     private(set) var failure: String?
     private var lastMove: CGPoint = .zero
     private var moveAt = Date.distantPast
     private var moved = CGFloat.zero
 
-    private init() {}
+    init() {}
+
+    static let monitoredEventTypes: [CGEventType] = [
+        .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+        .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown, .flagsChanged
+    ]
+
+    static func isMovementEvent(_ type: CGEventType) -> Bool {
+        [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
+    }
+
+    static func isSynthetic(_ event: CGEvent) -> Bool {
+        event.getIntegerValueField(.eventSourceUserData) == Input.marker
+    }
+
+    static func isDisabledTapEvent(_ type: CGEventType) -> Bool {
+        type == .tapDisabledByTimeout || type == .tapDisabledByUserInput
+    }
 
     func start() {
-        guard tap == nil else { return }
-        let events: CGEventMask = [
-            CGEventType.mouseMoved, .leftMouseDown, .rightMouseDown,
-            .otherMouseDown, .scrollWheel, .keyDown, .flagsChanged
-        ].reduce(0) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
+        guard !active else { return }
+        if tap != nil { stop() }
+        let events = Self.monitoredEventTypes.reduce(0) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
         let info = Unmanaged.passUnretained(self).toOpaque()
         guard let created = CGEvent.tapCreate(tap: .cgSessionEventTap,
                                               place: .headInsertEventTap,
@@ -30,7 +48,6 @@ final class InputMonitor: @unchecked Sendable {
                                               callback: InputMonitor.callback,
                                               userInfo: info) else {
             failure = "Input monitoring unavailable: grant Input Monitoring or Accessibility in System Settings"
-            active = false
             return
         }
         tap = created
@@ -38,8 +55,13 @@ final class InputMonitor: @unchecked Sendable {
         if let source {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: created, enable: true)
-            active = true
-            failure = nil
+            if CGEvent.tapIsEnabled(tap: created) {
+                failure = nil
+            } else {
+                failure = "Input monitoring was disabled by macOS"
+            }
+        } else {
+            failure = "Input monitoring unavailable: could not create an event tap run loop source"
         }
     }
 
@@ -48,12 +70,11 @@ final class InputMonitor: @unchecked Sendable {
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
         source = nil
-        active = false
     }
 
     private func observe(_ event: CGEvent, type: CGEventType) {
-        if event.getIntegerValueField(.eventSourceUserData) == Input.marker { return }
-        if type == .mouseMoved {
+        if Self.isSynthetic(event) { return }
+        if Self.isMovementEvent(type) {
             let point = event.location
             let now = Date()
             if now.timeIntervalSince(moveAt) > 0.1 {
@@ -73,9 +94,25 @@ final class InputMonitor: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    func tapWasDisabled(_ type: CGEventType) -> Task<Void, Never>? {
+        guard Self.isDisabledTapEvent(type) else { return nil }
+        failure = "Input monitoring was disabled by macOS"
+        return Task {
+            if await ActionGate.shared.interrupt() {
+                await MainActor.run { VisualFeedbackController.shared.pause(byHumanInput: true) }
+            }
+        }
+    }
+
     private static let callback: CGEventTapCallBack = { _, type, event, userInfo in
         if let userInfo {
-            Unmanaged<InputMonitor>.fromOpaque(userInfo).takeUnretainedValue().observe(event, type: type)
+            let monitor = Unmanaged<InputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+            if InputMonitor.isDisabledTapEvent(type) {
+                monitor.tapWasDisabled(type)
+            } else {
+                monitor.observe(event, type: type)
+            }
         }
         return Unmanaged.passUnretained(event)
     }
