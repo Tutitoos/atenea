@@ -483,44 +483,22 @@ sections at 151 and 152 directly under it. A test pins every one of those, reads
 them out of the file that ships, and refuses a registration naming a slot outside
 the sidebar.
 
-The last three lines are not in that column at all. They are the client's footer,
-a box **outside** the scroll, pinned to the bottom — and Atenea draws it. The
-client publishes it as a `sidebar_footer` slot declared `mode:"single_winner"`:
-the lowest registered order wins it outright and the host's own lines are slot
-children used **only** if the winner draws nothing. So there is no arrangement in
-which both draw, and adding a line under the version means owning every line
-there. This widget registers at 50, beating the client's 100, and renders the
-project path, the client's version, and Atenea's line — which is the whole point,
-since a line reporting a service belongs beside the version of the thing it runs
-under, not a gap above it.
+The Atenea line preserves the client's own footer. On legacy OpenCode it sits
+last in the scrolling content column, at order 900. On OpenCode 2.x it appends to
+`sidebar.footer` using the public `setup` / `ui.slot` API. The host continues to
+render its directory, onboarding, and directory actions itself. Atenea reads only
+its own version from its status socket; it no longer copies the client's path or
+version line.
 
-Three rules come with owning it, and each one is a check rather than a promise:
+The pre-commit hook and host-footer workflow check that the widget never replaces
+the footer and execute both registration paths with a mocked renderer. These
+checks establish registration and theme mapping, not acceptance in a live client.
+The `session-share` and `limits` widgets retain their legacy OpenCode API; this
+compatibility change applies to the Atenea line only.
 
-- **The two versions come from two places and neither is remembered.** The
-  client's is read from the host on every paint; Atenea's from its socket. An
-  unreadable one prints `sin lectura` **in its own slot** — a version line that
-  keeps showing the last good value is the one failure it cannot survive.
-- **The widget hands the slot back rather than deleting something.** On a machine
-  with no paid provider the client uses that same footer for a `Getting started`
-  card with a `/connect` prompt. Both halves of its condition are readable at
-  registration time, so the widget checks, declines the footer, and sits in the
-  column at 900 instead. Anything it cannot read counts as onboarding: declining
-  costs one line's placement, guessing wrong costs a first-run user the only
-  prompt that tells them how to connect a provider.
-- **A client that changes its footer breaks a build.** The shape of that
-  component — every string it draws, every field it reads, how many elements it
-  builds — is pinned in `internal/statusline/testdata/opencode-footer.json` and compared against the
-  client installed on the machine. The pre-commit hook runs it here; a scheduled
-  workflow installs the newest published client each morning and runs it there.
-  When they add a line, that fails and names it, instead of the line quietly
-  disappearing from your screen.
-
-One placement is genuinely **not** available: **inside the `Context` box**. There
-is no slot there. The client offers twelve — `app`, `app_bottom`, `home_logo`,
-`home_prompt`, `home_prompt_right`, `home_bottom`, `home_footer`,
-`session_prompt`, `session_prompt_right`, `sidebar_title`, `sidebar_content`,
-`sidebar_footer` — and a section of one's own directly beneath it is as close as
-it allows.
+The public slot and theme contract was checked against
+[OpenCode v2.0.25](https://github.com/anomalyco/opencode/blob/v2.0.25/packages/plugin/src/tui/context.ts).
+The widget uses `append`, leaving existing host content inside that boundary.
 
 **When a section outgrows the room, the column scrolls rather than clipping, and
 the footer stays pinned.** The content sits in a 42-column `scrollbox`: a probe with

@@ -7,7 +7,6 @@ package decision
 import (
 	"context"
 	"fmt"
-	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -22,8 +21,7 @@ import (
 )
 
 // Kind is the coarse intent used to choose an initial workflow shape. It is
-// intentionally small and deterministic; a future model classifier can return
-// the same vocabulary without changing the compiler below it.
+// intentionally small and deterministic.
 type Kind string
 
 // Intent kinds supported by the deterministic decision compiler.
@@ -54,30 +52,10 @@ type Request struct {
 	Tool            string
 }
 
-// IntentClassifier proposes one of ATENEA's closed set of planning intents.
-// Its result can affect the workflow shape, but never grants effects or
-// authorizes execution.
-type IntentClassifier interface {
-	Classify(context.Context, string) (IntentClassification, error)
-}
-
-// IntentClassification is the typed result returned by a model-backed
-// classifier. Confidence is Laya's calibrated answer_confidence value.
-type IntentClassification struct {
-	Intent        Kind    `json:"intent"`
-	Confidence    float64 `json:"confidence"`
-	Model         string  `json:"model,omitempty"`
-	RoutingModel  string  `json:"routing_model,omitempty"`
-	RoutingReason string  `json:"routing_reason,omitempty"`
-}
-
-// IntentEvidence records the classifier mode, selected source, model proposal,
-// and any deterministic fallback used to build this plan.
+// IntentEvidence records the deterministic source used to build this plan.
 type IntentEvidence struct {
-	Mode           string                `json:"mode"`
-	Source         string                `json:"source"`
-	Laya           *IntentClassification `json:"laya,omitempty"`
-	FallbackReason string                `json:"fallback_reason,omitempty"`
+	Mode   string `json:"mode"`
+	Source string `json:"source"`
 }
 
 // ModelChoice describes the model role selected for one agent type.
@@ -172,7 +150,6 @@ type Planner struct {
 	Selector      Selector
 	Estimator     BudgetEstimator
 	Ranker        ModelRanker
-	Classifier    IntentClassifier
 	AcceptedPlans *AcceptedPlanStore
 }
 
@@ -181,8 +158,7 @@ func (p Planner) Build(req Request) (Plan, error) {
 	return p.BuildContext(context.Background(), req)
 }
 
-// BuildContext creates a decision plan while bounding model-backed intent
-// classification to the lifetime of the caller's request.
+// BuildContext creates a decision plan using the caller's context for accepted-plan verification.
 func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
@@ -263,21 +239,11 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	var intent Kind
-	var intentEvidence IntentEvidence
+	intent := infer(text)
+	intentEvidence := IntentEvidence{Mode: "rules", Source: "rules"}
 	if needsAcceptedPlanContext(text) {
-		mode := strings.ToLower(strings.TrimSpace(p.Config.Decision.Mode))
-		if mode == "" {
-			mode = "rules"
-		}
-		// The accepted-plan continuation resolves the current action already;
-		// a classifier must not reinterpret "do it" without that authority.
 		intent = resolution.Intent
-		intentEvidence = IntentEvidence{Mode: mode, Source: "context"}
-	} else {
-		// Deterministic rules describe the user's current request. Laya may also
-		// consider the separately supplied context included in req.Text.
-		intent, intentEvidence = p.classifyIntent(ctx, text, req.Text)
+		intentEvidence.Source = "context"
 	}
 	agent := p.agentFor(intent, req.Files)
 	criterion := strings.TrimSpace(req.Criterion)
@@ -301,26 +267,6 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 			{Stage: "intent", Message: intentReason(intent, intentEvidence)},
 			{Stage: "policy", Message: "user constraints and declared effects are applied before provider choice"},
 		},
-	}
-	if intentEvidence.Laya != nil {
-		observation := intentEvidence.Laya
-		model := observation.Model
-		if model == "" {
-			model = "unknown model"
-		}
-		message := fmt.Sprintf("Laya proposed %s with answer confidence %.2f using %s", observation.Intent, observation.Confidence, model)
-		if observation.RoutingModel != "" {
-			message += " (routed to " + observation.RoutingModel + ")"
-		}
-		if intentEvidence.Source == "context" {
-			message += "; the accepted-plan context remained selected"
-		} else if intentEvidence.Source != "laya" {
-			message += "; the deterministic intent remained selected"
-		}
-		plan.Reasons = append(plan.Reasons, Reason{Stage: "intent", Message: message})
-	}
-	if intentEvidence.FallbackReason != "" {
-		plan.Reasons = append(plan.Reasons, Reason{Stage: "intent", Message: "Laya was not selected: " + intentEvidence.FallbackReason})
 	}
 	plan.Models = p.modelsFor(agent, intent, firstRepository(repos), slices.Contains(plan.Effects, contract.EffectWrite))
 	plan.Tools = p.toolsFor(agent, intent, req.Tool)
@@ -377,68 +323,8 @@ func (p Planner) BuildContext(ctx context.Context, req Request) (Plan, error) {
 	return plan, nil
 }
 
-func (p Planner) classifyIntent(ctx context.Context, requestText, classifierText string) (Kind, IntentEvidence) {
-	rulesIntent := infer(requestText)
-	mode := strings.ToLower(strings.TrimSpace(p.Config.Decision.Mode))
-	if mode == "" {
-		mode = "rules"
-	}
-	evidence := IntentEvidence{Mode: mode, Source: "rules"}
-	if mode == "rules" {
-		return rulesIntent, evidence
-	}
-	if mode != "observe" && mode != "laya" {
-		evidence.FallbackReason = "unsupported classifier mode"
-		return rulesIntent, evidence
-	}
-
-	classifier := p.Classifier
-	if classifier == nil && p.Config.Decision.LayaEndpoint != "" {
-		classifier = NewLayaClassifier(p.Config.Decision)
-	}
-	if classifier == nil {
-		evidence.FallbackReason = "Laya endpoint is not configured"
-		return rulesIntent, evidence
-	}
-	classification, err := classifier.Classify(ctx, classifierText)
-	if err != nil {
-		evidence.FallbackReason = "service request failed"
-		return rulesIntent, evidence
-	}
-	if !validIntentClassification(classification) {
-		evidence.FallbackReason = "response did not contain a supported intent and confidence"
-		return rulesIntent, evidence
-	}
-	evidence.Laya = &classification
-	if mode == "observe" {
-		return rulesIntent, evidence
-	}
-	minimum := p.Config.Decision.MinimumConfidence
-	if minimum <= 0 || minimum > 1 || math.IsNaN(minimum) {
-		minimum = 0.8
-	}
-	if classification.Confidence < minimum {
-		evidence.FallbackReason = fmt.Sprintf("answer confidence %.2f is below the configured minimum %.2f", classification.Confidence, minimum)
-		return rulesIntent, evidence
-	}
-	evidence.Source = "laya"
-	return classification.Intent, evidence
-}
-
-func validIntentClassification(classification IntentClassification) bool {
-	switch classification.Intent {
-	case KindUnderstand, KindSearch, KindPlan, KindChange:
-	default:
-		return false
-	}
-	return !math.IsNaN(classification.Confidence) && !math.IsInf(classification.Confidence, 0) &&
-		classification.Confidence >= 0 && classification.Confidence <= 1
-}
-
 func intentReason(intent Kind, evidence IntentEvidence) string {
 	switch evidence.Source {
-	case "laya":
-		return fmt.Sprintf("classified as %s by Laya at answer confidence %.2f", intent, evidence.Laya.Confidence)
 	case "context":
 		return fmt.Sprintf("resolved as %s from the accepted-plan continuation context", intent)
 	default:

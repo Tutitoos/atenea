@@ -1,23 +1,13 @@
 name: host-footer
 
-# Atenea's status-line widget wins opencode's `sidebar_footer` slot, and that slot
-# is declared `mode:"single_winner"`: the winner replaces everything the host put
-# there. Since this binary draws the client's own project path and version line,
-# a client release that adds anything to its footer would delete it from the
-# screen in silence -- no error, no log, just a line that used to be there.
-#
-# So this asks the newest published client, on a schedule, whether its footer is
-# still the one that was measured. It is the only job here that can fail because
-# of somebody else's release, which is the entire point: a red run is how that
-# release gets noticed before a user does.
-#
-# It is a workflow of its own rather than a step in ci: installing the client is
-# a 180 MB download of whatever the registry published last, and an unrelated
-# pull request has no business failing over it.
+# The widget must compose with the host footer, never replace it. Test actual
+# legacy and modern registrations; host implementation changes need no copy.
 
 on:
-  schedule:
-    - cron: "17 6 * * *"
+  pull_request:
+    paths:
+      - "internal/statusline/**"
+      - ".github/workflows/host-footer.yml"
   workflow_dispatch:
   push:
     branches: [main]
@@ -44,41 +34,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install the newest client
-        run: |
-          set -eu
-          # Watching `latest` is the job; installing the tag is not. `npm i
-          # opencode-ai@latest` executes whatever the registry resolves at that
-          # instant and leaves no record of it, so a red run said the footer
-          # changed without naming the release that changed it, and a rerun
-          # could quietly install a different build than the one that failed.
-          # Resolving the number first, printing it, and installing that exact
-          # version keeps the daily question ("is the newest client still the
-          # one we measured?") while making every run reproducible from its log.
-          version="$(npm view opencode-ai version)"
-          test -n "$version"
-          echo "newest published opencode-ai: $version"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
 
-          # Outside the checkout: the point is to read the client's bundle, not to
-          # leave a node_modules and a lockfile in a Go repository.
-          npm i --silent --no-audit --no-fund --prefix /tmp/client "opencode-ai@$version"
-
-          # The real binary ships in a per-platform package. Both names have been
-          # seen; if neither is there the packaging changed and this must fail
-          # rather than skip, because a skipped gate reads as a green one.
-          for candidate in \
-            /tmp/client/node_modules/opencode-linux-x64/bin/opencode \
-            /tmp/client/node_modules/opencode-linux-x64-baseline/bin/opencode; do
-            if [ -x "$candidate" ]; then
-              echo "ATENEA_OPENCODE_BIN=$candidate" >>"$GITHUB_ENV"
-              exit 0
-            fi
-          done
-          echo "no client binary inside opencode-ai@$version"
-          exit 1
-
-      - name: Which client answered
-        run: "$ATENEA_OPENCODE_BIN --version"
-
-      - name: Compare its footer with the one Atenea replaced
+      - name: Verify additive footer registration
         run: go test -count=1 -v ./internal/statusline/ -run HostFooter

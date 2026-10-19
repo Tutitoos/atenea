@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
-	"math"
 	"net"
 	"net/url"
 	"os"
@@ -129,16 +128,9 @@ type Knowledge struct {
 	WorkflowPath string
 }
 
-// DecisionSettings configures the optional typed intent classifier. The rules
-// classifier remains the default and does not contact the configured endpoint.
+// DecisionSettings configures optional private planning capture.
 type DecisionSettings struct {
-	Mode              string
-	CaptureDir        string
-	LayaEndpoint      string
-	LayaModel         string
-	LayaAPIKeyEnv     string
-	Timeout           time.Duration
-	MinimumConfidence float64
+	CaptureDir string
 }
 
 // MCPServer is one MCP endpoint a client should be pointed at instead of
@@ -1423,13 +1415,7 @@ type fileKnowledge struct {
 }
 
 type fileDecision struct {
-	Mode              string   `toml:"mode"`
-	CaptureDir        string   `toml:"capture_dir"`
-	LayaEndpoint      string   `toml:"laya_endpoint"`
-	LayaModel         string   `toml:"laya_model"`
-	LayaAPIKeyEnv     string   `toml:"laya_api_key_env"`
-	Timeout           string   `toml:"timeout"`
-	MinimumConfidence *float64 `toml:"minimum_confidence"`
+	CaptureDir string `toml:"capture_dir"`
 }
 
 // fileModel is [model] as written.
@@ -3521,84 +3507,12 @@ func (c fileCore) build(source string) (Core, error) {
 }
 
 func (d fileDecision) build(source string) (DecisionSettings, error) {
-	out := DecisionSettings{
-		Mode:              strings.ToLower(strings.TrimSpace(d.Mode)),
-		CaptureDir:        strings.TrimSpace(d.CaptureDir),
-		LayaEndpoint:      strings.TrimSpace(d.LayaEndpoint),
-		LayaModel:         strings.ToLower(strings.TrimSpace(d.LayaModel)),
-		LayaAPIKeyEnv:     strings.TrimSpace(d.LayaAPIKeyEnv),
-		Timeout:           10 * time.Second,
-		MinimumConfidence: 0.8,
-	}
-	fail := func(format string, args ...any) (DecisionSettings, error) {
-		return DecisionSettings{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: decision: %s", source, fmt.Sprintf(format, args...))
-	}
-	if out.Mode == "" {
-		out.Mode = "rules"
-	}
-	if out.Mode != "rules" && out.Mode != "observe" && out.Mode != "laya" {
-		return fail("mode %q must be rules, observe or laya", out.Mode)
-	}
+	out := DecisionSettings{CaptureDir: strings.TrimSpace(d.CaptureDir)}
 	if out.CaptureDir != "" && !filepath.IsAbs(out.CaptureDir) {
-		return fail("capture_dir must be an absolute path")
-	}
-	if out.LayaModel != "" && out.LayaModel != "english" && out.LayaModel != "multilingual" && out.LayaModel != "typed-decisions" {
-		return fail("laya_model must be english, multilingual or typed-decisions")
-	}
-	if strings.TrimSpace(d.Timeout) != "" {
-		parsed, err := time.ParseDuration(strings.TrimSpace(d.Timeout))
-		if err != nil || parsed <= 0 || parsed > 2*time.Minute {
-			return fail("timeout must be positive and no greater than 2m")
-		}
-		out.Timeout = parsed
-	}
-	if d.MinimumConfidence != nil {
-		confidence := *d.MinimumConfidence
-		if confidence <= 0 || confidence > 1 || math.IsNaN(confidence) || math.IsInf(confidence, 0) {
-			return fail("minimum_confidence must be greater than 0 and at most 1")
-		}
-		out.MinimumConfidence = confidence
-	}
-	if out.LayaEndpoint != "" {
-		endpoint, err := url.Parse(out.LayaEndpoint)
-		if err != nil || !endpoint.IsAbs() || endpoint.Hostname() == "" ||
-			(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
-			endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
-			endpoint.Path != "/v1/systemone" {
-			return fail("laya_endpoint must be an HTTP(S) URL ending in /v1/systemone, without credentials, query or fragment")
-		}
-		if endpoint.Scheme == "http" {
-			host := strings.ToLower(endpoint.Hostname())
-			ip := net.ParseIP(host)
-			if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-				return fail("laya_endpoint must use HTTPS unless it targets loopback")
-			}
-		}
-	}
-	if out.Mode != "rules" && out.LayaEndpoint == "" {
-		return fail("laya_endpoint is required when mode is %q", out.Mode)
-	}
-	if out.LayaAPIKeyEnv != "" && !validEnvironmentName(out.LayaAPIKeyEnv) {
-		return fail("laya_api_key_env must name an environment variable")
+		return DecisionSettings{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: decision: capture_dir must be an absolute path", source)
 	}
 	return out, nil
-}
-
-func validEnvironmentName(value string) bool {
-	for index, char := range value {
-		letter := char == '_' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z'
-		if index == 0 {
-			if !letter {
-				return false
-			}
-			continue
-		}
-		if !letter && (char < '0' || char > '9') {
-			return false
-		}
-	}
-	return value != ""
 }
 
 // defaultModelTimeout mirrors claudecode's own DefaultTimeout: a model turn
