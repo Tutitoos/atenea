@@ -64,7 +64,7 @@ func TestTheAteneaWidgetStillReadsTheStatusSocketThisBinaryServes(t *testing.T) 
 		if err != nil {
 			t.Fatalf("reading the installed widget: %v", err)
 		}
-		for _, marker := range []string{"atenea/run/core.sock", `"method":"atenea/status"`, "sidebar_footer"} {
+		for _, marker := range []string{"atenea/run/core.sock", `"method":"atenea/status"`, "sidebar_content"} {
 			if !strings.Contains(string(body), marker) {
 				t.Errorf("the atenea widget no longer carries %q", marker)
 			}

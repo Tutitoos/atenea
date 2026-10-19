@@ -50,8 +50,8 @@ The view separates completed **tool requests** from completed implementation
 low-level counts do not identify unique people, conversations, or user journeys.
 Origins are `normal`, `synthetic`, or `unknown`. They are metadata asserted by
 the calling client. `normal` does **not** prove a human request, and these
-counts do not constitute a validated sample for the Laya evaluation in issue
-#165. Client and profile are fixed categories; unrecognized
+counts do not constitute a validated sample of human intent. Client and profile
+are fixed categories; unrecognized
 values are `other`. Client version is reduced to a numeric major version or
 `other`/`unknown`. No raw metadata, prompts, arguments, file paths, event IDs,
 receipts, or diagnostic reasons appear in this output.

@@ -16,6 +16,8 @@
 
 import { createSignal, onCleanup, onMount } from "solid-js";
 import { existsSync } from "node:fs";
+import type { RGBA } from "@opentui/core";
+import type { Plugin } from "@opencode/plugin/tui";
 
 const SOCKET = `${process.env.XDG_STATE_HOME || `${process.env.HOME}/.local/state`}/atenea/run/core.sock`;
 const REQUEST = `{"jsonrpc":"2.0","id":1,"method":"atenea/status"}\n`;
@@ -128,90 +130,24 @@ async function ask(): Promise<Reading> {
 	return reading;
 }
 
-type Session = { directory?: string };
+type Colors = Record<"text" | "textMuted" | "success" | "warning" | "error", string | RGBA>;
 
 type StatusApi = {
-	// The client's own version, read here and never remembered: a copy of it kept
-	// in this file would be a lie the moment the client upgrades underneath us,
-	// and this widget now draws that line itself.
-	app?: { version?: string };
-	theme: { current: Record<string, string> };
-	kv?: { get(key: string, fallback?: unknown): unknown };
-	state?: {
-		provider?: { id?: string; models?: Record<string, { cost?: { input?: number } }> }[];
-		path?: { directory?: string };
-		vcs?: { branch?: string };
-		session?: { get(id: string): Session | undefined };
-	};
+	theme: { current: Colors };
 	slots: {
 		register(plugin: {
 			order: number;
-			slots: Record<string, (ctx: unknown, props: { session_id?: string }) => unknown>;
+			slots: Record<string, () => unknown>;
 		}): string;
 	};
 };
 
-type ProjectPath = { parent: string; name: string };
-
-// The client's own path line, which this widget replaces. Rules copied from the
-// component it stands in for: the session's directory when it has one, else the
-// directory the client was started in; $HOME shortened to `~`; and `:branch`
-// appended only when the session is the one the client is standing in.
-//
-// Verified against the host's render for a session whose directory differs from
-// the launch cwd -- `~/Desktop/taxiprime-app/new-app`, no branch -- rather than
-// against the minified helper, because three different functions in that bundle
-// answer to the name the footer calls and none of them is identifiable.
-//
-// One quirk is not reproduced: the host joins parent and name with "/"
-// unconditionally, so a session sitting exactly at $HOME renders as "/~". Here
-// the separator is dropped when there is no parent.
-function projectPath(api: StatusApi, sessionID: string): ProjectPath | undefined {
-	const state = api.state;
-	const session = sessionID ? state?.session?.get(sessionID) : undefined;
-	const launched = state?.path?.directory;
-	const directory = session?.directory || launched || process.cwd();
-	if (typeof directory !== "string" || directory.length === 0) return undefined;
-
-	const home = process.env.HOME;
-	const short =
-		home && (directory === home || directory.startsWith(`${home}/`)) ? `~${directory.slice(home.length)}` : directory;
-	const branch = session?.directory && session.directory === launched ? state?.vcs?.branch : undefined;
-	const parts = (branch ? `${short}:${branch}` : short).split("/");
-	return { parent: parts.slice(0, -1).join("/"), name: parts.at(-1) ?? "" };
-}
-
-// The host draws a "Getting started" card in this same footer for a machine with
-// no paid provider, and that card is the slot's own children -- so winning the
-// slot deletes it. Both halves of its condition are readable at registration
-// time, measured, so the widget can decline the footer and stay a section in the
-// column above, where it costs the host nothing.
-//
-// Anything unreadable counts as onboarding: declining costs one line's placement,
-// while guessing wrong costs a first-run user the only prompt that tells them how
-// to connect a provider.
-function hostIsOnboarding(api: StatusApi): boolean {
-	try {
-		const providers = api.state?.provider;
-		if (!Array.isArray(providers)) return true;
-		const paid = providers.some(
-			(provider) =>
-				provider?.id !== "opencode" ||
-				Object.values(provider?.models ?? {}).some((model) => model?.cost?.input !== 0),
-		);
-		if (paid) return false;
-		return api.kv?.get("dismissed_getting_started", false) !== true;
-	} catch {
-		return true;
-	}
-}
-
-function AteneaLine(props: { api: StatusApi }) {
+function AteneaLine(props: { theme: () => Colors }) {
 	// Undefined until the first answer lands. Starting at "unreadable" would paint
 	// an amber warning for the ~100 ms before anything had been asked, which is a
 	// false alarm: not having read yet is not the same as failing to read.
 	const [reading, setReading] = createSignal<Reading | undefined>();
-	const theme = () => props.api.theme.current;
+	const theme = () => props.theme();
 
 	onMount(() => {
 		let inFlight = false;
@@ -288,80 +224,28 @@ function AteneaLine(props: { api: StatusApi }) {
 	);
 }
 
-// The client's footer, drawn by us: its path line, its version line, and the
-// Atenea line adjacent to it -- which is the whole reason this widget owns the
-// slot instead of sitting in the column above.
-//
-// The two versions come from two different places on purpose. The client's is
-// read from the host on every paint; Atenea's from its socket. Neither is cached
-// and neither is inferred from the other: an unreadable one says so in its own
-// slot, because a stale version is the one error a version line cannot survive.
-//
-// Nothing here is conditional in the element tree, for the same reason as above.
-// The outer gap of 1 is the host's: one blank row between the path and the
-// versions, and none between the two versions, which sit in a box of their own.
-function FooterSection(props: { api: StatusApi; sessionID: string }) {
-	const theme = () => props.api.theme.current;
-	const where = () => projectPath(props.api, props.sessionID);
-
-	const parent = () => {
-		const path = where();
-		return path && path.parent ? `${path.parent}/` : "";
-	};
-	const name = () => where()?.name ?? "sin lectura";
-
-	const clientVersion = () => {
-		const version = props.api.app?.version;
-		return typeof version === "string" && version.trim().length > 0 ? version : "sin lectura";
-	};
-
-	return (
-		<box gap={1}>
-			<text>
-				<span style={{ fg: theme().textMuted }}>{parent()}</span>
-				<span style={{ fg: theme().text }}>{name()}</span>
-			</text>
-			<box>
-				<text fg={theme().textMuted}>
-					<span style={{ fg: theme().success }}>•</span> <b>Open</b>
-					<span style={{ fg: theme().text }}>
-						<b>Code</b>
-					</span>{" "}
-					{clientVersion()}
-				</text>
-				<AteneaLine api={props.api} />
-			</box>
-		</box>
-	);
-}
-
 export default {
 	id: "atenea.status",
+	// Legacy clients have a shared content column but a single-winner footer.
 	tui: async (api: StatusApi) => {
-		// Two placements, and the client's own screen decides which one. The footer
-		// is a `sidebar_footer` slot declared `mode:"single_winner"`: the lowest
-		// registered order wins it outright and the loser's content is dropped, so
-		// 50 beats the host's 100 and there is no arrangement in which both draw.
-		// Winning means owning every line that slot had, which is why the widget
-		// declines it whenever the host would be using it for onboarding.
-		if (hostIsOnboarding(api)) {
-			api.slots.register({
-				// Last in the scrolling column: the client's own sections claim 100 to
-				// 500, so 900 leaves it room to add more and still keeps this at the
-				// bottom, as close to the footer as a section can sit.
-				order: 900,
-				slots: {
-					sidebar_content: () => <AteneaLine api={api} />,
-				},
-			});
-			return;
-		}
-
 		api.slots.register({
-			order: 50,
+			order: 900,
 			slots: {
-				sidebar_footer: (_ctx, props) => <FooterSection api={api} sessionID={props?.session_id ?? ""} />,
+				sidebar_content: () => <AteneaLine theme={() => api.theme.current} />,
 			},
+		});
+	},
+	// OpenCode 2.x supports additive footer claims; leave its path and onboarding intact.
+	setup(context: Plugin.Context) {
+		context.ui.slot({
+			append: "sidebar.footer",
+			render: () => <AteneaLine theme={() => ({
+				text: context.theme.text.base,
+				textMuted: context.theme.text.muted,
+				success: context.theme.text.feedback.success.base,
+				warning: context.theme.text.feedback.warning.base,
+				error: context.theme.text.feedback.error.base,
+			})} />,
 		});
 	},
 };

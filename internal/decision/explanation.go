@@ -121,7 +121,7 @@ func intentCode(value Kind) string {
 
 func sourceCode(value string) string {
 	switch value {
-	case "rules", "context", "laya":
+	case "rules", "context":
 		return value
 	default:
 		return "unknown"
@@ -130,7 +130,7 @@ func sourceCode(value string) string {
 
 func modeCode(value string) string {
 	switch value {
-	case "rules", "observe", "laya":
+	case "rules":
 		return value
 	default:
 		return "unknown"
@@ -141,20 +141,8 @@ func classifierCode(e IntentEvidence) string {
 	if e.Source == "context" {
 		return "bypassed_by_context"
 	}
-	if e.Source == "laya" {
-		return "selected"
-	}
 	if e.Mode == "rules" {
 		return "not_used"
-	}
-	if e.Mode == "observe" && e.Laya != nil {
-		return "observed_only"
-	}
-	if e.Mode == "observe" && e.FallbackReason != "" {
-		return "observation_failed"
-	}
-	if e.Mode == "laya" && e.Source == "rules" && e.FallbackReason != "" {
-		return "fallback_to_rules"
 	}
 	return "unknown"
 }

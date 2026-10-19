@@ -1,7 +1,9 @@
 package statusline_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,19 +47,18 @@ func TestOmpUsageReportStillLooksLikeTheWidgetReadsIt(t *testing.T) {
 
 	// Read-only, and while omp may be writing: the store is in WAL.
 	out, err := exec.Command(sqlite, "-readonly", "-json", store,
-		`SELECT key, value FROM cache WHERE key LIKE 'usage_cache:report:%'`).CombinedOutput()
+		`SELECT value FROM cache WHERE key LIKE 'usage_cache:report:%'`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("the widget reads `cache` from omp's store and this query failed -- "+
-			"the table or the store moved: %v\n%s", err, out)
+			"the table or the store moved: %v", err)
 	}
 
 	var rows []struct {
-		Key   string `json:"key"`
 		Value string `json:"value"`
 	}
 	if len(out) > 0 {
 		if err := json.Unmarshal(out, &rows); err != nil {
-			t.Fatalf("unparseable rows: %v\n%s", err, out)
+			t.Fatalf("unparseable rows: %v", err)
 		}
 	}
 	if len(rows) == 0 {
@@ -65,63 +66,20 @@ func TestOmpUsageReportStillLooksLikeTheWidgetReadsIt(t *testing.T) {
 			"the widget matches on has changed, and the widget would draw nothing")
 	}
 
-	type limit struct {
-		ID    string `json:"id"`
-		Scope struct {
-			Tier string `json:"tier"`
-		} `json:"scope"`
-		Window struct {
-			ID         string   `json:"id"`
-			DurationMS *float64 `json:"durationMs"`
-		} `json:"window"`
-		Amount struct {
-			Unit         string   `json:"unit"`
-			UsedFraction *float64 `json:"usedFraction"`
-			Remaining    *float64 `json:"remaining"`
-		} `json:"amount"`
-		Status string `json:"status"`
-	}
-	type report struct {
-		Provider  string   `json:"provider"`
-		FetchedAt *float64 `json:"fetchedAt"`
-		Limits    []limit  `json:"limits"`
-	}
-
-	// The cached value is wrapped as `{ value, expiresAt }`, and the widget unwraps
-	// exactly that. A report that stopped being wrapped would read as empty.
-	found := map[string]report{}
-	for _, row := range rows {
-		var wrapper struct {
-			Value json.RawMessage `json:"value"`
-		}
-		if err := json.Unmarshal([]byte(row.Value), &wrapper); err != nil {
-			t.Errorf("%s: value is not JSON: %v", row.Key, err)
+	// Null values are cached misses, not usage reports. Keep malformed non-null
+	// reports loud, and never include private cache keys or payloads in failures.
+	found := map[string]ompReport{}
+	for index, row := range rows {
+		rep, err := parseOmpCachedReport(row.Value)
+		if err != nil {
+			t.Errorf("cache entry %d: %v", index, err)
 			continue
 		}
-		if len(wrapper.Value) == 0 {
-			t.Errorf("%s: no `value` inside the cached entry: the wrapper the widget "+
-				"unwraps is gone", row.Key)
-			continue
-		}
-		raw := wrapper.Value
-		// Some rows carry the report as a nested JSON string, and the widget accepts
-		// both shapes.
-		var nested string
-		if err := json.Unmarshal(raw, &nested); err == nil {
-			raw = json.RawMessage(nested)
-		}
-		var rep report
-		if err := json.Unmarshal(raw, &rep); err != nil {
-			t.Errorf("%s: report is not the shape the widget parses: %v", row.Key, err)
-			continue
-		}
-		if rep.Provider == "" {
-			t.Errorf("%s: report carries no `provider`, which is the field the widget "+
-				"selects on -- the key is not parsed for it on purpose", row.Key)
+		if rep == nil {
 			continue
 		}
 		if _, seen := found[rep.Provider]; !seen {
-			found[rep.Provider] = rep
+			found[rep.Provider] = *rep
 		}
 	}
 
@@ -145,17 +103,17 @@ func TestOmpUsageReportStillLooksLikeTheWidgetReadsIt(t *testing.T) {
 			// One usable window is the bar's whole requirement: a percentage of a known
 			// whole, inside a window of known length.
 			usable := 0
-			for _, l := range rep.Limits {
+			for index, l := range rep.Limits {
 				if l.Amount.Unit != "percent" || l.Amount.UsedFraction == nil || l.Amount.Remaining == nil {
 					continue
 				}
 				if l.Window.ID == "" {
-					t.Errorf("%s: no `window.id`, which is what the widget prints as `5h` or `7d`", l.ID)
+					t.Errorf("limit %d: no `window.id`, which is what the widget prints as `5h` or `7d`", index)
 					continue
 				}
 				if l.Window.DurationMS == nil {
-					t.Errorf("%s: no `window.durationMs`: the rule that drops a reading older "+
-						"than its own window has nothing to compare against", l.ID)
+					t.Errorf("limit %d: no `window.durationMs`: the rule that drops a reading older "+
+						"than its own window has nothing to compare against", index)
 					continue
 				}
 				usable++
@@ -165,5 +123,79 @@ func TestOmpUsageReportStillLooksLikeTheWidgetReadsIt(t *testing.T) {
 					"the widget would draw `sin lectura`", len(rep.Limits))
 			}
 		})
+	}
+}
+
+type ompLimit struct {
+	ID    string `json:"id"`
+	Scope struct {
+		Tier string `json:"tier"`
+	} `json:"scope"`
+	Window struct {
+		ID         string   `json:"id"`
+		DurationMS *float64 `json:"durationMs"`
+	} `json:"window"`
+	Amount struct {
+		Unit         string   `json:"unit"`
+		UsedFraction *float64 `json:"usedFraction"`
+		Remaining    *float64 `json:"remaining"`
+	} `json:"amount"`
+	Status string `json:"status"`
+}
+type ompReport struct {
+	Provider  string     `json:"provider"`
+	FetchedAt *float64   `json:"fetchedAt"`
+	Limits    []ompLimit `json:"limits"`
+}
+
+func parseOmpCachedReport(value string) (*ompReport, error) {
+	var wrapper struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(value), &wrapper); err != nil {
+		return nil, errors.New("cached entry is not a JSON wrapper")
+	}
+	raw := bytes.TrimSpace(wrapper.Value)
+	if len(raw) == 0 {
+		return nil, errors.New("cached entry has no value field")
+	}
+	// The widget accepts either a report object or a JSON-encoded string.
+	if raw[0] == '"' {
+		var nested string
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			return nil, errors.New("cached report string is invalid")
+		}
+		raw = bytes.TrimSpace([]byte(nested))
+	}
+	if bytes.Equal(raw, []byte("null")) {
+		return nil, nil
+	}
+	var rep ompReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return nil, errors.New("report is not the shape the widget parses")
+	}
+	if rep.Provider == "" {
+		return nil, errors.New("non-null report carries no provider")
+	}
+	return &rep, nil
+}
+
+func TestOmpCachedMissIsNotSchemaDrift(t *testing.T) {
+	for _, value := range []string{`{"value":null}`, `{"value":" null "}`} {
+		rep, err := parseOmpCachedReport(value)
+		if err != nil || rep != nil {
+			t.Errorf("cached miss: report=%v error=%v", rep, err)
+		}
+	}
+	for _, value := range []string{`{}`, `null`, `{"value":{}}`, `{"value":[]}`, `{"value":"broken"}`, `broken`} {
+		if _, err := parseOmpCachedReport(value); err == nil {
+			t.Errorf("malformed non-null entry accepted: %s", value)
+		}
+	}
+	for _, value := range []string{`{"value":{"provider":"anthropic","fetchedAt":1}}`, `{"value":"{\"provider\":\"anthropic\",\"fetchedAt\":1}"}`} {
+		rep, err := parseOmpCachedReport(value)
+		if err != nil || rep == nil || rep.Provider != "anthropic" || rep.FetchedAt == nil {
+			t.Errorf("valid report: report=%v error=%v", rep, err)
+		}
 	}
 }

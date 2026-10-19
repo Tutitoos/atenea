@@ -434,21 +434,16 @@ func TestEveryShippedWidgetInstallsSomething(t *testing.T) {
 // was. The client's sidebar is an ordered column whose own sections claim round
 // numbers: Context 100, MCP 200, LSP 300, Todo 400, Files 500.
 //
-// Below that column, outside its scroll, sits the client's footer: the project
-// path and the client's version. That is a `sidebar_footer` slot declared
-// `mode:"single_winner"` -- the lowest registered order wins it outright and
-// draws it alone. The atenea widget takes it at 50, which is how its line ends up
-// adjacent to the client's version instead of a gap above it, and it keeps the
-// column registration for the case where it declines the footer: a machine with
-// no paid provider, whose footer the host is using for an onboarding card.
+// Atenea stays last in the legacy content column. The host keeps its footer,
+// including onboarding and directory actions; OpenCode 2.x gets an additive
+// footer claim tested separately by TestHostFooter.
 //
 // Every placement is a decision and gets pinned here, slot by slot. This reads the
 // file that ships, because the file is the contract: a plugin naming a slot that
 // does not exist registers nothing and draws nothing, which looks exactly like a
 // plugin that never loaded.
 func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
-	// Bounds are exclusive on both ends. A footer registration that is not below
-	// the host's own 100 loses the slot and draws nothing at all.
+	// Bounds are exclusive on both ends.
 	type placement struct {
 		slot   string
 		after  int
@@ -466,7 +461,6 @@ func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
 			{slot: "sidebar_content", after: 151, before: 200},
 		},
 		"atenea": {
-			{slot: "sidebar_footer", after: 0, before: 100},
 			{slot: "sidebar_content", after: 500, before: 1000},
 		},
 	}

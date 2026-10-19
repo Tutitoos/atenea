@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -531,38 +529,22 @@ func TestDecisionPlanResolvesContinuationContextWithoutLeavingDryRun(t *testing.
 	}
 }
 
-func TestDecisionPlanObservesLayaWithoutChangingItsDryRunIntent(t *testing.T) {
-	laya := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/systemone" {
-			t.Errorf("Laya path = %q", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"laya-multilingual","answers":{"intent":{"type":"choice","choice":"plan","confidence":0.99,"answer_confidence":0.93}},"routing":{"model":"multilingual","reason":"Spanish and English text"}}`))
-	}))
-	defer laya.Close()
-	settings := decisionPlanSettings(t) + fmt.Sprintf(`
-
-[decision]
-mode = "observe"
-laya_endpoint = %q
-minimum_confidence = 0.8
-`, laya.URL+"/v1/systemone")
-	atenea := buildService(t, settings)
+func TestDecisionPlanUsesDeterministicRulesForDryRunIntent(t *testing.T) {
+	atenea := buildService(t, decisionPlanSettings(t))
 	defer serve(t, atenea)()
 	c := dial(t)
 	result(t, c.handshake("codex"), "initialize")
 	got := result(t, c.call("tools/call", map[string]any{
 		"name": "decision.plan",
 		"arguments": map[string]any{
-			"objective":  "Do not make changes yet. Tell me how you would add Laya.",
+			"objective":  "Do not make changes yet. Tell me how you would add input validation.",
 			"repository": "work",
 			"budget_usd": 10,
 		},
 	}), "decision.plan")
 	structured := got["structuredContent"].(map[string]any)
 	evidence := structured["intent_evidence"].(map[string]any)
-	layaResult := evidence["laya"].(map[string]any)
-	if structured["intent"] != "plan" || evidence["mode"] != "observe" || evidence["source"] != "rules" || layaResult["intent"] != "plan" {
+	if structured["intent"] != "plan" || evidence["mode"] != "rules" || evidence["source"] != "rules" || len(evidence) != 2 {
 		t.Fatalf("intent/evidence = %v/%v", structured["intent"], evidence)
 	}
 	if structured["dry_run"] != true || structured["execution_authorized"] != false {
