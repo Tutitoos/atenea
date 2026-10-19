@@ -21,6 +21,7 @@ Declared interfaces audited in September 2026. Tests validate Atenea routing and
 | symbol.unresolved | No implementation | Declaration and local contracts |
 | graph.status | kivgraph.status | Declaration and local contracts |
 | desktop.apps | macos.apps | Declaration and local contracts |
+| desktop.open | macos.open | Declaration and local contracts |
 | desktop.inspect | macos.inspect | Declaration and local contracts |
 | desktop.screenshot | macos.screenshot | Declaration and local contracts |
 | desktop.click | macos.click | Declaration and local contracts |

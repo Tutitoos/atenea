@@ -93,10 +93,10 @@ effects = ["process"]
 client_effects = ["process"]
 
 # Capability-level MCP kill switch. Effects alone cannot block `desktop.move`
-# while still allowing read + device observation, so the six interactive
+# while still allowing read + device observation, so the interactive
 # capabilities stay out of tools/list and are refused if called by name.
 # Set this to [] only as an explicit phase-two activation.
-client_denied_capabilities = ["desktop.move", "desktop.drag", "desktop.scroll",
+client_denied_capabilities = ["desktop.open", "desktop.move", "desktop.drag", "desktop.scroll",
                               "desktop.click", "desktop.type", "desktop.key",
                               "android.tap", "android.swipe", "android.type",
                               "android.key", "android.mirror", "android.unmirror"]
@@ -325,6 +325,7 @@ runners = ["omp"]
     "macos.inspect",
     "macos.key",
     "macos.move",
+    "macos.open",
     "macos.screenshot",
     "macos.scroll",
     "macos.type",
@@ -2506,6 +2507,65 @@ effects = ["read", "device"]
     summary = "Whether this application is the one in front right now."
 
 [[capability]]
+id = "desktop.open"
+version = "1.0.0"
+summary = "Open an installed application and bring it to the foreground."
+semantics = """
+Accepts only an application bundle identifier, resolved by macOS rather than a \
+caller-supplied path, URL, executable or process id. Reuses an existing instance \
+or launches the installed application. The action_applications allow-list and \
+denied list apply even when the app is not running. May run application startup \
+code and cause external effects. Requires explicit interactive capability and \
+effect grants. No screenshot is needed for opening; take a fresh screenshot \
+before sending subsequent input. A successful answer verifies the actual \
+foreground process. An error after dispatch may mean the app opened: observe \
+before another action and never automatically replay a launch or human pause.\
+"""
+effects = ["read", "device", "process", "write", "external"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Installed application's bundle identifier, permitted by [desktop] action_applications."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability performed: desktop.open."
+
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "Whether the native open request was sent."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "The resolved application's display name."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "The resolved application's bundle identifier."
+
+  [[capability.output]]
+  name = "pid"
+  type = "int"
+  required = true
+  summary = "The resolved running application's process identifier."
+
+  [[capability.output]]
+  name = "frontmost"
+  type = "bool"
+  required = true
+  summary = "True only after macOS confirms this process is the foreground application."
+
+[[capability]]
 id = "desktop.inspect"
 version = "1.0.0"
 summary = "Read one application's accessibility tree."
@@ -4542,6 +4602,22 @@ scope_guarantee = "confined"
   # what an image of this size costs a model to read, not what it costs to make.
   estimated_duration = "800ms"
   estimated_tokens = 1600
+
+[[implementation]]
+id = "macos.open"
+provider = "desktop"
+capability = "desktop.open"
+scope_guarantee = "confined"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "2s"
+  estimated_tokens = 100
 
 [[implementation]]
 id = "macos.click"

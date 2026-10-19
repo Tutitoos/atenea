@@ -10,6 +10,7 @@ actor ActionGate {
     private var visualAction = false
 
     func begin(visualFeedback: Bool = true) throws {
+        try RequestCancellation.shared.checkpoint()
         guard !paused else { throw RPCError.denied("desktop actions are paused; press Resume in the Atenea preview") }
         guard !active else { throw RPCError.denied("another desktop action is already in progress") }
         active = true
@@ -18,6 +19,7 @@ actor ActionGate {
     }
 
     func checkpoint() throws {
+        try RequestCancellation.shared.checkpoint()
         if interrupted {
             throw RPCError.canceled("interrupted by human input; the action was not retried")
         }

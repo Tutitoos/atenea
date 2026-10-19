@@ -65,6 +65,8 @@ const DefaultTimeout = 10 * time.Second
 const (
 	CapabilityListApps       = "desktop.apps"
 	ImplementationListApps   = "macos.apps"
+	CapabilityOpen           = "desktop.open"
+	ImplementationOpen       = "macos.open"
 	CapabilityInspect        = "desktop.inspect"
 	ImplementationInspect    = "macos.inspect"
 	CapabilityScreenshot     = "desktop.screenshot"
@@ -113,7 +115,7 @@ const (
 // DefaultImplementations is what this adapter answers for when a settings file
 // does not narrow it.
 func DefaultImplementations() []string {
-	out := []string{ImplementationListApps, ImplementationInspect, ImplementationScreenshot}
+	out := []string{ImplementationListApps, ImplementationOpen, ImplementationInspect, ImplementationScreenshot}
 	for _, m := range mutations {
 		out = append(out, m.implementation)
 	}
@@ -267,7 +269,7 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 // Capabilities is what its code can actually dispatch, which the wiring above
 // checks against Implementations before anything runs.
 func (r *Runner) Capabilities() []string {
-	out := []string{CapabilityListApps, CapabilityInspect, CapabilityScreenshot}
+	out := []string{CapabilityListApps, CapabilityOpen, CapabilityInspect, CapabilityScreenshot}
 	for capability := range mutations {
 		out = append(out, capability)
 	}
@@ -309,6 +311,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	switch req.Implementation.ID {
 	case ImplementationListApps:
 		return r.listApps(ctx)
+	case ImplementationOpen:
+		return r.open(ctx, req)
 	case ImplementationInspect:
 		return r.inspect(ctx, req)
 	case ImplementationScreenshot:
@@ -333,6 +337,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 // accessibility tree or the screen do need them, and say so here.
 var osNeeds = map[string]struct{ accessibility, screenRecording bool }{
 	CapabilityListApps:   {},
+	CapabilityOpen:       {accessibility: true},
 	CapabilityInspect:    {accessibility: true},
 	CapabilityScreenshot: {screenRecording: true},
 	"desktop.click":      {accessibility: true},
@@ -572,23 +577,30 @@ func (r *Runner) actionTarget(ctx context.Context, bundleID string) (int, string
 	return r.targetAllowed(ctx, bundleID, r.mayActOn(bundleID), "action_applications")
 }
 
-func (r *Runner) targetAllowed(ctx context.Context, bundleID string, allowed bool, setting string) (int, string, error) {
+func (r *Runner) checkAllowed(bundleID string, allowed bool, setting string) error {
 	// Two refusals, because the two causes are different facts and the remedy
 	// for one does not work on the other. Denied is checked first and named on
 	// its own: telling somebody to add an application they already allowed --
 	// which is what "*" does -- sends them to edit a list that was never the
 	// thing refusing, and the edit they make will not help.
 	if slices.Contains(r.denied, bundleID) {
-		return 0, "", contract.Fail(contract.FailurePermissionDenied,
+		return contract.Fail(contract.FailurePermissionDenied,
 			"desktop: %q is on [desktop] denied, which wins over every allow-list including %q -- "+
 				"adding it to applications will not change this; remove it from denied if that is "+
 				"deliberate", bundleID, AllApplications)
 	}
 	if !allowed {
-		return 0, "", contract.Fail(contract.FailurePermissionDenied,
+		return contract.Fail(contract.FailurePermissionDenied,
 			"desktop: %q is not in the desktop action/read allow-list -- add it to [desktop] %s "+
 				"in the settings file, or %q for every application denied does not name",
 			bundleID, setting, AllApplications)
+	}
+	return nil
+}
+
+func (r *Runner) targetAllowed(ctx context.Context, bundleID string, allowed bool, setting string) (int, string, error) {
+	if err := r.checkAllowed(bundleID, allowed, setting); err != nil {
+		return 0, "", err
 	}
 	text, err := r.call(ctx, "list_apps", map[string]any{})
 	if err != nil {

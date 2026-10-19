@@ -162,6 +162,8 @@ final class VisualFeedbackController: NSObject {
 
     func pause(byHumanInput: Bool) {
         guard enabled else { return }
+        // Opening an app may be interrupted before any captured target exists.
+        ensureMiniature()
         state = .pausedByUser
         stateLabel?.stringValue = (target?.appName ?? "Atenea") + " • " + VisualState.pausedByUser.rawValue
         miniature?.orderFrontRegardless()

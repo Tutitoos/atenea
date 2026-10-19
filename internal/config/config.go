@@ -2375,6 +2375,7 @@ var defaultCodexImplementations = []string{"codex.search"}
 // read + device, so a client floor that allows observation would otherwise
 // allow moving the pointer too.
 var clientDeniedCapabilitiesDefault = []string{
+	"desktop.open",
 	"desktop.move",
 	"desktop.drag",
 	"desktop.scroll",

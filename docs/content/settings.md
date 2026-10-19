@@ -699,7 +699,7 @@ that must not be switched on by a settings file that forgot to mention it. Find
 the identifiers with `desktop.apps`, which needs no entry here because it
 returns names and identifiers and nothing about what any window contains.
 
-`action_applications` independently governs `desktop.click`, `desktop.move`,
+`action_applications` independently governs `desktop.open`, `desktop.click`, `desktop.move`,
 `desktop.drag`, `desktop.scroll`, `desktop.type`, and `desktop.key`. If the key
 is absent it inherits `applications`, preserving older configuration files. If
 it is present as `[]`, every mutation is denied while observation can remain

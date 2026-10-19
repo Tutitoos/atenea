@@ -126,6 +126,22 @@ let tools: [Tool] = [
         run: { _ in ["apps": Apps.list()] }
     ),
     Tool(
+        name: "open",
+        description: "Open an installed application by bundle identifier and verify it is frontmost.",
+        inputSchema: ["type": "object", "required": ["bundle_id"],
+                      "properties": ["bundle_id": ["type": "string"],
+                                     "visual_feedback": ["type": "boolean"]] as [String: Any]],
+        run: { args in
+            guard let bundle = args["bundle_id"] as? String else {
+                throw RPCError.invalidParams("bundle_id is required")
+            }
+            let visual = args["visual_feedback"] as? Bool ?? true
+            try await ensureInputMonitor(visual)
+            await MainActor.run { VisualFeedbackController.shared.setEnabled(visual) }
+            return try await Apps.open(bundleID: bundle, visualFeedback: visual)
+        }
+    ),
+    Tool(
         name: "inspect",
         description: "Read one application's accessibility tree, bounded by a time budget.",
         inputSchema: [
@@ -449,7 +465,11 @@ func handle(_ message: [String: Any]) async {
             return
         }
         do {
-            reply(id: id, result: toolResult(try await tool.run(args)))
+            let result = try await RPCRequestContext.$id.withValue(RPCRequestID(id)) {
+                try RequestCancellation.shared.checkpoint()
+                return try await tool.run(args)
+            }
+            reply(id: id, result: toolResult(result))
         } catch let err as RPCError {
             reply(id: id, result: toolResult(["error": err.message, "kind": err.kind], isError: true))
         } catch {
@@ -484,11 +504,15 @@ let incoming = AsyncStream<String> { continuation in
     DispatchQueue.global(qos: .userInitiated).async {
         while let line = readLine(strippingNewline: true) {
             if let data = line.data(using: .utf8),
-               let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-               message["method"] as? String == "$/cancelRequest" {
-                // Cancellation is acted on by the producer immediately, even
-                // while the serial RPC consumer is inside a capture or drag.
-                Task { await ActionGate.shared.interrupt() }
+               let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                if isCancellation(message) {
+                    let params = message["params"] as? [String: Any] ?? [:]
+                    if let id = RPCRequestID(params["requestId"] ?? params["id"]) {
+                        RequestCancellation.shared.cancel(id)
+                    }
+                    continue
+                }
+                if let id = RPCRequestID(message["id"]) { RequestCancellation.shared.register(id) }
             }
             if !line.isEmpty { continuation.yield(line) }
         }
@@ -504,8 +528,9 @@ Task {
             log("skipping a line that is not a JSON object")
             continue
         }
-        if message["method"] as? String == "$/cancelRequest" { continue }
+        let id = RPCRequestID(message["id"])
         await handle(message)
+        if let id { RequestCancellation.shared.finish(id) }
     }
     await MainActor.run {
         InputMonitor.shared.stop()

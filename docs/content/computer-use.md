@@ -74,7 +74,7 @@ The first phase is observation only for connected clients:
 
 The interactive capabilities remain denied by
 `[orchestrator] client_denied_capabilities`:
-`desktop.move`, `desktop.drag`, `desktop.scroll`, `desktop.click`,
+`desktop.open`, `desktop.move`, `desktop.drag`, `desktop.scroll`, `desktop.click`,
 `desktop.type` and `desktop.key`.
 
 `client_effects = ["process", "device"]` permits the observation surface while
@@ -87,6 +87,15 @@ Configure `[desktop] applications` with explicit bundle identifiers. An empty
 list denies every application. Use `denied` for password managers, keychain,
 banking and any other application that must never be inspected, even when a
 wildcard allow-list is used.
+
+`desktop.open` opens an installed application by bundle identifier and brings
+it to the foreground, reusing the running instance when present. It accepts no
+document URL, executable path or launch arguments. Its success receipt includes
+the resolved PID and a verified `frontmost = true`; an unconfirmed launch is
+never replayed automatically. Opening needs no screenshot, but subsequent input
+still requires a fresh `desktop.screenshot` frame. It observes the same action
+allow-list, denied apps, effect grants and human-interruption gate as input.
+The shipped MCP kill switch also denies `desktop.open` until explicitly enabled.
 
 `action_applications` is the independent mutation allow-list. If absent it
 inherits `applications` for backward compatibility; an explicit empty list
