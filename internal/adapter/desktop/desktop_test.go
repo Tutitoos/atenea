@@ -358,7 +358,7 @@ func TestSurfaceSaysWhosePermissionsTheseWouldBe(t *testing.T) {
 func TestACapabilityThatNeedsNoPermissionIsNotGatedOnOne(t *testing.T) {
 	session := fakeHelper(t, map[string]any{
 		"list_apps": map[string]any{"apps": []any{}},
-		"health": map[string]any{
+		"health": map[string]any{"isolated_input": true,
 			"accessibility": false, "screen_recording": false,
 			"missing": "neither Accessibility nor Screen Recording is granted",
 		},
@@ -407,7 +407,7 @@ func inspectRequest(t *testing.T, bundle string) contract.RunRequest {
 
 func inspectHelper(t *testing.T) func(context.Context) (*mcpstdio.Session, error) {
 	return fakeHelper(t, map[string]any{
-		"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+		"health": map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "missing": ""},
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 42, "name": "Notes", "bundle_id": "com.apple.Notes", "frontmost": true}}},
 		"inspect": map[string]any{
@@ -621,7 +621,7 @@ func screenshotCapability() contract.Capability {
 func TestScaleIsReportedAndCoordinatesAreNotTransformed(t *testing.T) {
 	for _, tc := range []struct{ scale float64 }{{1.0}, {0.5}, {0.25}} {
 		session := fakeHelper(t, map[string]any{
-			"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+			"health": map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "missing": ""},
 			"list_apps": map[string]any{"apps": []any{map[string]any{
 				"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 			"screenshot": map[string]any{
@@ -665,7 +665,7 @@ func TestScaleIsReportedAndCoordinatesAreNotTransformed(t *testing.T) {
 // somebody's screen: the caller sees a tidy list and no reason to doubt it.
 func TestATruncatedWalkSaysSo(t *testing.T) {
 	session := fakeHelper(t, map[string]any{
-		"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+		"health": map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "missing": ""},
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 		"inspect": map[string]any{
@@ -689,11 +689,11 @@ func TestATruncatedWalkSaysSo(t *testing.T) {
 
 func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 	session := fakeHelper(t, map[string]any{
-		"health": map[string]any{"accessibility": true, "screen_recording": true, "input_monitor_active": true},
+		"health": map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "input_monitor_active": true},
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 42, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 		"click": map[string]any{"action_sent": true, "frame_id": "frame-1", "window_id": 9,
-			"dominant_display_id": 2, "geometry_generation": "topology-1"},
+			"dominant_display_id": 2, "geometry_generation": "topology-1", "input_backend": "cg_event_pid", "input_source": "private", "target_pid": 42, "events_sent": 2, "pointer_before": []float64{0, 0}, "pointer_after": []float64{0, 0}, "frontmost_before": 77, "frontmost_after": 77, "elapsed_ms": 1.0},
 	})
 	runner, err := desktop.New(desktop.Options{
 		Session: session, Responsible: func() bool { return true },
@@ -712,11 +712,7 @@ func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 		{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
 		{Name: "frame_id", Type: contract.TypeString, Required: true},
 	}
-	capability.Outputs = []contract.Field{{Name: "did", Type: contract.TypeString, Required: true},
-		{Name: "application", Type: contract.TypeString, Required: true}, {Name: "bundle_id", Type: contract.TypeString, Required: true},
-		{Name: "action_sent", Type: contract.TypeBool, Required: true}, {Name: "frame_id", Type: contract.TypeString, Required: true},
-		{Name: "window_id", Type: contract.TypeInt, Required: true}, {Name: "dominant_display_id", Type: contract.TypeInt, Required: true},
-		{Name: "geometry_generation", Type: contract.TypeString, Required: true}}
+	capability.Outputs = isolatedRequest(t).Capability.Outputs
 	out, err := runner.Run(t.Context(), contract.RunRequest{
 		Capability:     capability,
 		Implementation: contract.Implementation{ID: "macos.click", Capability: capability.ID},
@@ -745,10 +741,10 @@ func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 
 func TestObservationAndActionApplicationListsAreIndependent(t *testing.T) {
 	session := fakeHelper(t, map[string]any{
-		"health":  map[string]any{"accessibility": true, "screen_recording": true},
+		"health":  map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "input_monitor_active": true},
 		"inspect": map[string]any{"nodes": []any{}, "count": 0},
 		"click": map[string]any{"action_sent": true, "frame_id": "frame-1", "window_id": 4,
-			"dominant_display_id": 1, "geometry_generation": "g1"},
+			"dominant_display_id": 1, "geometry_generation": "g1", "input_backend": "cg_event_pid", "input_source": "private", "target_pid": 11, "events_sent": 2, "pointer_before": []float64{0, 0}, "pointer_after": []float64{0, 0}, "frontmost_before": 77, "frontmost_after": 77, "elapsed_ms": 1.0},
 		"list_apps": map[string]any{"apps": []any{
 			map[string]any{"pid": 10, "name": "Finder", "bundle_id": "com.apple.finder"},
 			map[string]any{"pid": 11, "name": "Simulator", "bundle_id": "com.apple.iphonesimulator"},
@@ -775,6 +771,7 @@ func TestObservationAndActionApplicationListsAreIndependent(t *testing.T) {
 			{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
 			{Name: "frame_id", Type: contract.TypeString, Required: true}}}
 	runAction := func(bundle string) error {
+		action.Outputs = isolatedRequest(t).Capability.Outputs
 		_, err := runner.Run(t.Context(), contract.RunRequest{Capability: action,
 			Implementation: contract.Implementation{ID: "macos.click", Capability: action.ID},
 			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
@@ -824,11 +821,11 @@ func TestTypeAndKeyForwardTheValidatedFrameToken(t *testing.T) {
 		{"desktop.key", "macos.key", "key", "key", "return"},
 	} {
 		session := fakeHelper(t, map[string]any{
-			"health": map[string]any{"accessibility": true, "screen_recording": true, "input_monitor_active": true},
+			"health": map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "input_monitor_active": true},
 			"list_apps": map[string]any{"apps": []any{map[string]any{
 				"pid": 42, "name": "Simulator", "bundle_id": "com.apple.iphonesimulator"}}},
 			tc.tool: map[string]any{"action_sent": true, "frame_id": "frame-2", "window_id": 8,
-				"dominant_display_id": 1, "geometry_generation": "g2"},
+				"dominant_display_id": 1, "geometry_generation": "g2", "input_backend": "cg_event_pid", "input_source": "private", "target_pid": 42, "events_sent": 2, "pointer_before": []float64{0, 0}, "pointer_after": []float64{0, 0}, "frontmost_before": 77, "frontmost_after": 77, "elapsed_ms": 1.0},
 		})
 		runner, err := desktop.New(desktop.Options{Session: session, Responsible: func() bool { return true },
 			Allowed: []string{"com.apple.iphonesimulator"}})
@@ -840,6 +837,7 @@ func TestTypeAndKeyForwardTheValidatedFrameToken(t *testing.T) {
 			Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true},
 				{Name: tc.field, Type: contract.TypeString, Required: true},
 				{Name: "frame_id", Type: contract.TypeString, Required: true}}}
+		declared.Outputs = isolatedRequest(t).Capability.Outputs
 		_, err = runner.Run(t.Context(), contract.RunRequest{Capability: declared,
 			Implementation: contract.Implementation{ID: tc.implementation, Capability: tc.capability},
 			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
@@ -867,7 +865,7 @@ func TestTypeAndKeyForwardTheValidatedFrameToken(t *testing.T) {
 // leaked out of the one file that is allowed to know about it.
 func TestNothingPlatformShapedCrossesTheSeam(t *testing.T) {
 	session := fakeHelper(t, map[string]any{
-		"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+		"health": map[string]any{"isolated_input": true, "accessibility": true, "screen_recording": true, "missing": ""},
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 		"screenshot": map[string]any{"png_base64": "iVBOR", "width": 800,

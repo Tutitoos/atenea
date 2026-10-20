@@ -175,6 +175,7 @@ const (
 // permission to.
 const (
 	desktopAppsCapability       = "desktop.apps"
+	desktopOpenCapability       = "desktop.open"
 	desktopInspectCapability    = "desktop.inspect"
 	desktopScreenshotCapability = "desktop.screenshot"
 	desktopClickCapability      = "desktop.click"
@@ -303,6 +304,7 @@ var card = contract.Agent{
 		graphStatusCapability,
 		"graph.repositories", "graph.ensure_fresh", "symbol.source", "symbol.impact",
 		desktopAppsCapability,
+		desktopOpenCapability,
 		desktopInspectCapability,
 		desktopScreenshotCapability,
 		desktopClickCapability,

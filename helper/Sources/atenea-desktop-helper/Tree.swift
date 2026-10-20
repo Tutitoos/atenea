@@ -60,13 +60,19 @@ enum Tree {
         var bytes = 0
         var stopped = Truncation.none
 
-        func visit(_ el: AXUIElement, _ depth: Int) {
+        func visit(_ el: AXUIElement, _ depth: Int, secureAncestor: Bool = false) {
             if stopped != .none { return }
             if Date() > limits.deadline { stopped = .time; return }
             if rows.count >= limits.maxNodes { stopped = .nodes; return }
             if bytes >= limits.maxBytes { stopped = .bytes; return }
 
             let role = text(el, kAXRoleAttribute as String) ?? "AXUnknown"
+            if roles.isEmpty && role == kAXMenuBarRole as String { return }
+            var subroleValue: CFTypeRef?
+            let subroleStatus = AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &subroleValue)
+            let knownSafe = (try? Input.validateSecurity(role: role, subrole: subroleValue as? String,
+                status: subroleStatus, hasSubroleValue: subroleValue != nil)) != nil
+            let secure = secureAncestor || !knownSafe
             if roles.isEmpty || roles.contains(role) {
                 var row: [String: Any] = [
                     "role": role,
@@ -81,11 +87,12 @@ enum Tree {
                 for (key, attribute) in [("title", kAXTitleAttribute),
                                          ("value", kAXValueAttribute),
                                          ("description", kAXDescriptionAttribute)] {
-                    if let t = text(el, attribute as String) {
+                    if !secure, let t = text(el, attribute as String) {
                         row[key] = t
                         bytes += t.utf8.count
                     }
                 }
+                if secure { row["redacted"] = true }
                 rows.append(row)
             }
 
@@ -93,7 +100,7 @@ enum Tree {
             var children: CFTypeRef?
             guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children) == .success,
                   let list = children as? [AXUIElement] else { return }
-            for child in list { visit(child, depth + 1) }
+            for child in list { visit(child, depth + 1, secureAncestor: secure) }
         }
 
         visit(root, 0)

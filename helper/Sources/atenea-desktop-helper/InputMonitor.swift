@@ -8,75 +8,164 @@ final class InputMonitor: @unchecked Sendable {
     static let shared = InputMonitor()
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
-    private(set) var active = false
+    private var createdTap = false
+    var active: Bool {
+        guard let tap, source != nil, failure == nil else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
     private(set) var failure: String?
-    private var lastMove: CGPoint = .zero
-    private var moveAt = Date.distantPast
-    private var moved = CGFloat.zero
 
-    private init() {}
+    init() {}
 
-    func start() {
-        guard tap == nil else { return }
-        let events: CGEventMask = [
-            CGEventType.mouseMoved, .leftMouseDown, .rightMouseDown,
-            .otherMouseDown, .scrollWheel, .keyDown, .flagsChanged
-        ].reduce(0) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
+    static let monitoredEventTypes: [CGEventType] = [
+        .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+        .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown, .flagsChanged
+    ]
+
+    static func isSynthetic(_ event: CGEvent) -> Bool {
+        event.getIntegerValueField(.eventSourceUserData) == Input.marker
+    }
+
+    static func isDisabledTapEvent(_ type: CGEventType) -> Bool {
+        type == .tapDisabledByTimeout || type == .tapDisabledByUserInput
+    }
+
+    @MainActor func start() {
+        // A disabled/retired tap is never replaced in this process. Permission
+        // prompts may retry only when no tap was created; otherwise restart.
+        guard !createdTap else { return }
+        let events = Self.monitoredEventTypes.reduce(0) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
         let info = Unmanaged.passUnretained(self).toOpaque()
-        guard let created = CGEvent.tapCreate(tap: .cgSessionEventTap,
+        guard let created = CGEvent.tapCreate(tap: .cgAnnotatedSessionEventTap,
                                               place: .headInsertEventTap,
                                               options: .listenOnly,
                                               eventsOfInterest: events,
                                               callback: InputMonitor.callback,
                                               userInfo: info) else {
             failure = "Input monitoring unavailable: grant Input Monitoring or Accessibility in System Settings"
-            active = false
             return
         }
+        createdTap = true
         tap = created
         source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, created, 0)
         if let source {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: created, enable: true)
-            active = true
-            failure = nil
+            if CGEvent.tapIsEnabled(tap: created) {
+                failure = nil
+            } else {
+                failure = "Input monitoring was disabled by macOS; check permissions and restart the desktop helper"
+            }
+        } else {
+            failure = "Input monitoring unavailable: could not create an event tap run loop source"
         }
     }
 
-    func stop() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+    @MainActor func stop() {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
         source = nil
-        active = false
     }
 
     private func observe(_ event: CGEvent, type: CGEventType) {
-        if event.getIntegerValueField(.eventSourceUserData) == Input.marker { return }
-        if type == .mouseMoved {
-            let point = event.location
-            let now = Date()
-            if now.timeIntervalSince(moveAt) > 0.1 {
-                moved = 0
-                lastMove = point
-                moveAt = now
-            } else {
-                moved += hypot(point.x - lastMove.x, point.y - lastMove.y)
-                lastMove = point
-            }
-            if moved < 4 { return }
-        }
+        if Self.isSynthetic(event) { return }
+        let timestamp = event.timestamp == 0 ? DispatchTime.now().uptimeNanoseconds : event.timestamp
+        let destination = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        // The annotated tap has the recipient PID. Hardware input in another
+        // app must not interrupt private CUA input; pointer travel is free.
+        guard let epoch = HumanInputEpoch.shared.record(destinationPID: destination,
+            unknownDestination: destination <= 0 && type != .flagsChanged, timestamp: timestamp,
+            metadata: "event_type=\(type.rawValue) target_pid=\(destination) source_pid=\(event.getIntegerValueField(.eventSourceUnixProcessID)) source_state=\(event.getIntegerValueField(.eventSourceStateID))") else { return }
         Task {
-            if await ActionGate.shared.interrupt() {
-                await MainActor.run { VisualFeedbackController.shared.pause(byHumanInput: true) }
+            if await ActionGate.shared.interrupt(observedEpoch: epoch, observedAt: timestamp) {
+                await MainActor.run {
+                    if HumanInputEpoch.shared.isPaused { VisualFeedbackController.shared.pause(byHumanInput: true) }
+                }
             }
+        }
+    }
+
+    @discardableResult
+    func tapWasDisabled(_ type: CGEventType) -> Task<Void, Never>? {
+        guard Self.isDisabledTapEvent(type) else { return nil }
+        failure = "Input monitoring was disabled by macOS; check permissions and restart the desktop helper"
+        HumanInputEpoch.shared.pause()
+        return Task {
+            await MainActor.run { VisualFeedbackController.shared.pause(byHumanInput: true) }
         }
     }
 
     private static let callback: CGEventTapCallBack = { _, type, event, userInfo in
         if let userInfo {
-            Unmanaged<InputMonitor>.fromOpaque(userInfo).takeUnretainedValue().observe(event, type: type)
+            let monitor = Unmanaged<InputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+            if InputMonitor.isDisabledTapEvent(type) {
+                monitor.tapWasDisabled(type)
+            } else {
+                monitor.observe(event, type: type)
+            }
         }
         return Unmanaged.passUnretained(event)
+    }
+}
+
+/// The event callback records interference before returning. Actor scheduling
+/// must neither lose it nor apply an old event to a later action.
+final class HumanInputEpoch: @unchecked Sendable {
+    static let shared = HumanInputEpoch()
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    private var timestamp: UInt64 = 0
+    private var metadata = "external input"
+    private var active = false
+    private var targetPID: Int32?
+    private var pauseRequested = false
+    private var pauseOnInput = true
+    private var beganTime: UInt64 = 0
+    var current: UInt64 { lock.withLock { value } }
+    var lastMetadata: String { lock.withLock { metadata } }
+    var isPaused: Bool { lock.withLock { pauseRequested } }
+    func begin(targetPID: Int32? = nil, pauseOnInput: Bool = true) throws -> (UInt64, UInt64) {
+        try lock.withLock {
+            guard !pauseRequested else { throw RPCError.denied("desktop actions are paused; press Resume in the Atenea preview") }
+            active = true
+            self.targetPID = targetPID
+            self.pauseOnInput = pauseOnInput
+            beganTime = DispatchTime.now().uptimeNanoseconds
+            return (value, beganTime)
+        }
+    }
+    func end() { lock.withLock { active = false; targetPID = nil } }
+    func pause() {
+        lock.withLock {
+            pauseRequested = true
+            value += 1
+            timestamp = DispatchTime.now().uptimeNanoseconds
+        }
+    }
+    func resume() { lock.withLock { pauseRequested = false } }
+    func hasInput(since epoch: UInt64, after beganAt: UInt64) -> Bool {
+        lock.withLock { pauseRequested || (value != epoch && timestamp >= beganAt) }
+    }
+    @discardableResult func record(timestamp: UInt64 = DispatchTime.now().uptimeNanoseconds,
+                                   metadata: String = "external input") -> UInt64 {
+        lock.withLock {
+            value += 1
+            if timestamp >= self.timestamp { self.timestamp = timestamp; self.metadata = metadata }
+            if active && timestamp >= beganTime && pauseOnInput { pauseRequested = true }
+            return value
+        }
+    }
+    @discardableResult func record(destinationPID: Int32, unknownDestination: Bool = false,
+                                   timestamp: UInt64 = DispatchTime.now().uptimeNanoseconds,
+                                   metadata: String = "target input") -> UInt64? {
+        lock.withLock {
+            guard active, timestamp >= beganTime,
+                  unknownDestination || targetPID == nil || targetPID == destinationPID else { return nil }
+            value += 1
+            if timestamp >= self.timestamp { self.timestamp = timestamp; self.metadata = metadata }
+            if pauseOnInput { pauseRequested = true }
+            return value
+        }
     }
 }

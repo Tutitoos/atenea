@@ -57,6 +57,7 @@ final class VisualFeedbackController: NSObject {
     }
 
     func show(target: WindowTarget, imageData: Data? = nil, state: VisualState = .observing) {
+        let state = HumanInputEpoch.shared.isPaused ? VisualState.pausedByUser : state
         if suppressed, self.target?.bundleID != target.bundleID {
             suppressed = false
             suppressionTimer?.invalidate(); suppressionTimer = nil
@@ -73,6 +74,10 @@ final class VisualFeedbackController: NSObject {
         if let imageData, let image = NSImage(data: imageData) {
             preview?.image = image
             preview?.isHidden = false
+        }
+        if state == .pausedByUser {
+            pause(byHumanInput: true)
+            return
         }
         startPreviewStream()
         blurTimer?.invalidate()
@@ -137,7 +142,7 @@ final class VisualFeedbackController: NSObject {
 
     /// Critically damped cursor travel. It reaches the destination within the
     /// 300ms action budget and can be interrupted without overshoot.
-    func animateCursor(globalPoint: CGPoint) async {
+    func animateCursor(globalPoint: CGPoint) async throws {
         guard let target, !suppressed else { return }
         let destination = CGPoint(x: globalPoint.x - target.frame.minX,
                                   y: globalPoint.y - target.frame.minY)
@@ -147,7 +152,7 @@ final class VisualFeedbackController: NSObject {
         }
         let start = cursor.position
         for tick in 1...18 {
-            if Task.isCancelled { return }
+            try await ActionGate.shared.checkpoint()
             let t = Double(tick) / 18.0
             let damped = 1 - (1 + 5 * t) * exp(-5 * t)
             cursor.position = CGPoint(x: start.x + (destination.x - start.x) * damped,
@@ -155,18 +160,24 @@ final class VisualFeedbackController: NSObject {
             cursor.isHidden = false
             miniatureCursor?.needsDisplay = true
             overlay?.contentView?.needsDisplay = true
-            try? await Task.sleep(nanoseconds: 16_000_000)
+            try await Task.sleep(nanoseconds: 16_000_000)
         }
         setCursor(globalPoint: globalPoint)
     }
 
     func pause(byHumanInput: Bool) {
+        if byHumanInput && !HumanInputEpoch.shared.isPaused { return }
         guard enabled else { return }
+        // Opening an app may be interrupted before any captured target exists.
+        ensureMiniature()
         state = .pausedByUser
         stateLabel?.stringValue = (target?.appName ?? "Atenea") + " • " + VisualState.pausedByUser.rawValue
         miniature?.orderFrontRegardless()
         preview?.alphaValue = 0.45
         resumeButton?.isHidden = false
+        resumeButton?.title = "Resume"
+        blurTimer?.invalidate(); blurTimer = nil
+        closeTimer?.invalidate(); closeTimer = nil
         previewTask?.cancel(); previewTask = nil
         overlay?.contentView?.needsDisplay = true
     }
@@ -177,9 +188,9 @@ final class VisualFeedbackController: NSObject {
         state = .observing
         preview?.alphaValue = 1
         stateLabel?.stringValue = (target?.appName ?? "Atenea") + " • " + VisualState.observing.rawValue
-        resumeButton?.isHidden = true
+        resumeButton?.title = "Pause"
         startPreviewStream()
-        Task { await ActionGate.shared.resume() }
+        HumanInputEpoch.shared.resume()
     }
 
     func suppressByUser() {
@@ -254,8 +265,11 @@ final class VisualFeedbackController: NSObject {
     /// bounds, while AppKit panels use a bottom-left origin. Convert only for
     /// drawing; event coordinates remain in Quartz space.
     private func appKitFrame(_ quartz: CGRect) -> CGRect {
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(quartz) }) else { return quartz }
-        return CGRect(x: quartz.minX, y: screen.frame.maxY - quartz.maxY,
+        Self.appKitFrame(quartz, primaryHeight: NSScreen.screens.first?.frame.maxY ?? 0)
+    }
+
+    static func appKitFrame(_ quartz: CGRect, primaryHeight: CGFloat) -> CGRect {
+        return CGRect(x: quartz.minX, y: primaryHeight - quartz.maxY,
                       width: quartz.width, height: quartz.height)
     }
 
@@ -335,11 +349,10 @@ final class VisualFeedbackController: NSObject {
         close.frame = NSRect(x: root.bounds.width - 32, y: root.bounds.height - 32, width: 24, height: 24)
         close.autoresizingMask = [.minXMargin, .minYMargin]
         root.addSubview(close)
-        let resume = NSButton(title: "Resume", target: self, action: #selector(resumeFromPanel))
+        let resume = NSButton(title: "Pause", target: self, action: #selector(togglePauseFromPanel))
         resume.bezelStyle = .rounded
         resume.frame = NSRect(x: root.bounds.width - 94, y: 10, width: 78, height: 22)
         resume.autoresizingMask = [.minXMargin, .maxYMargin]
-        resume.isHidden = true
         root.addSubview(resume)
         resumeButton = resume
         panel.contentView = root
@@ -351,7 +364,13 @@ final class VisualFeedbackController: NSObject {
     }
 
     @objc private func closeMiniature() { suppressByUser() }
-    @objc private func resumeFromPanel() { resume() }
+    @objc private func togglePauseFromPanel() {
+        if HumanInputEpoch.shared.isPaused { resume() }
+        else {
+            HumanInputEpoch.shared.pause()
+            pause(byHumanInput: false)
+        }
+    }
     @objc private func accessibilityChanged() {
         overlay?.contentView?.needsDisplay = true
         let color = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
@@ -359,8 +378,8 @@ final class VisualFeedbackController: NSObject {
         miniature?.contentView?.layer?.backgroundColor = color.cgColor
     }
     @objc private func sessionUnavailable() {
+        HumanInputEpoch.shared.pause()
         hide()
-        Task { await ActionGate.shared.interrupt() }
     }
     @objc private func saveMiniatureFrame(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }

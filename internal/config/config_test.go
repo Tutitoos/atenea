@@ -47,7 +47,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(ids)
 	wantIDs := []string{"android.devices", "android.diagnose", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
+		"desktop.move", "desktop.open", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -84,7 +84,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		case "desktop.click", "desktop.type", "desktop.key":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice,
 				contract.EffectWrite, contract.EffectExternal}
-		case "android.tap", "android.type", "android.key":
+		case "desktop.open", "android.tap", "android.type", "android.key":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectProcess,
 				contract.EffectWrite, contract.EffectExternal}
 		// The only capabilities whose whole purpose is to leave this machine.
@@ -174,6 +174,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"macos.inspect",
 		"macos.key",
 		"macos.move",
+		"macos.open",
 		"macos.screenshot",
 		"macos.scroll",
 		"macos.type",

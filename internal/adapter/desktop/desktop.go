@@ -65,6 +65,8 @@ const DefaultTimeout = 10 * time.Second
 const (
 	CapabilityListApps       = "desktop.apps"
 	ImplementationListApps   = "macos.apps"
+	CapabilityOpen           = "desktop.open"
+	ImplementationOpen       = "macos.open"
 	CapabilityInspect        = "desktop.inspect"
 	ImplementationInspect    = "macos.inspect"
 	CapabilityScreenshot     = "desktop.screenshot"
@@ -113,7 +115,7 @@ const (
 // DefaultImplementations is what this adapter answers for when a settings file
 // does not narrow it.
 func DefaultImplementations() []string {
-	out := []string{ImplementationListApps, ImplementationInspect, ImplementationScreenshot}
+	out := []string{ImplementationListApps, ImplementationOpen, ImplementationInspect, ImplementationScreenshot}
 	for _, m := range mutations {
 		out = append(out, m.implementation)
 	}
@@ -267,7 +269,7 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 // Capabilities is what its code can actually dispatch, which the wiring above
 // checks against Implementations before anything runs.
 func (r *Runner) Capabilities() []string {
-	out := []string{CapabilityListApps, CapabilityInspect, CapabilityScreenshot}
+	out := []string{CapabilityListApps, CapabilityOpen, CapabilityInspect, CapabilityScreenshot}
 	for capability := range mutations {
 		out = append(out, capability)
 	}
@@ -299,6 +301,11 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err := r.permitted(req.Capability); err != nil {
 		return contract.Outcome{}, err
 	}
+	if _, input := mutations[req.Capability.ID]; input {
+		if err := privateOutputSchema(req.Capability); err != nil {
+			return contract.Outcome{}, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
@@ -309,6 +316,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	switch req.Implementation.ID {
 	case ImplementationListApps:
 		return r.listApps(ctx)
+	case ImplementationOpen:
+		return r.open(ctx, req)
 	case ImplementationInspect:
 		return r.inspect(ctx, req)
 	case ImplementationScreenshot:
@@ -322,6 +331,43 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 }
 
+// Check both possible receipt shapes before sending input, including fractional
+// coordinates and elapsed time; a post-dispatch schema failure cannot be undone.
+func privateOutputSchema(capability contract.Capability) error {
+	var hasEnum func([]contract.Field) bool
+	hasEnum = func(fields []contract.Field) bool {
+		for _, field := range fields {
+			if len(field.Enum) > 0 || hasEnum(field.Fields) {
+				return true
+			}
+		}
+		return false
+	}
+	refuse := func() error {
+		return contract.Fail(contract.FailureInvalidInput,
+			"desktop: %s has an incompatible private-input output schema; copy the six desktop mutation outputs from the installed default catalog before acting; no input was sent", capability.ID)
+	}
+	// Receipt metadata contains dynamic application identities and measured values.
+	if hasEnum(capability.Outputs) {
+		return refuse()
+	}
+	input := map[string]any{"backend": "cg_event_pid", "source": "private", "target_pid": 1, "events_sent": 1,
+		"pointer_unchanged": true, "frontmost_before": 1, "frontmost_after": 1, "elapsed_ms": 1.25,
+		"virtual_pointer_x": 1.25, "virtual_pointer_y": 2.5}
+	probe := map[string]any{"did": capability.ID, "application": "schema-probe", "bundle_id": "org.atenea.schema-probe",
+		"action_sent": true, "frame_id": "schema-probe", "window_id": 1, "dominant_display_id": 1,
+		"geometry_generation": "schema-probe", "input": input}
+	if capability.ValidateOutput(probe) != nil {
+		return refuse()
+	}
+	delete(input, "virtual_pointer_x")
+	delete(input, "virtual_pointer_y")
+	if capability.ValidateOutput(probe) != nil {
+		return refuse()
+	}
+	return nil
+}
+
 // osNeeds says which operating-system permissions a capability actually
 // requires, so a missing one becomes a sentence naming the pane to open rather
 // than whatever error the API happens to raise ten frames later.
@@ -333,6 +379,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 // accessibility tree or the screen do need them, and say so here.
 var osNeeds = map[string]struct{ accessibility, screenRecording bool }{
 	CapabilityListApps:   {},
+	CapabilityOpen:       {accessibility: true},
 	CapabilityInspect:    {accessibility: true},
 	CapabilityScreenshot: {screenRecording: true},
 	"desktop.click":      {accessibility: true},
@@ -401,6 +448,7 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 		Accessibility   bool   `json:"accessibility"`
 		ScreenRecording bool   `json:"screen_recording"`
 		InputMonitor    bool   `json:"input_monitor_active"`
+		IsolatedInput   bool   `json:"isolated_input"`
 		InputMonitorErr string `json:"input_monitor_error"`
 		Missing         string `json:"missing"`
 	}
@@ -426,14 +474,14 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 				"Privacy & Security > %s, to Atenea itself and not to a terminal",
 			capability, strings.Join(missing, " and "), missing[0])
 	}
-	if r.visualFeedback && capability != CapabilityListApps && capability != CapabilityInspect && capability != CapabilityScreenshot && !state.InputMonitor {
-		reason := state.InputMonitorErr
-		if reason == "" {
-			reason = "the helper could not create its passive human-input monitor"
-		}
+	if _, input := mutations[capability]; input && !state.IsolatedInput {
 		return contract.Fail(contract.FailurePermissionDenied,
-			"desktop: %s is blocked while visual_feedback is enabled because %s; grant Input Monitoring/Accessibility or disable visual_feedback",
-			capability, reason)
+			"desktop: this helper does not support private PID-directed input; update the helper before acting")
+	}
+	_, inputAction := mutations[capability]
+	if (inputAction || capability == CapabilityOpen) && !state.InputMonitor {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"desktop: %s requires its passive human-input monitor; grant Input Monitoring/Accessibility", capability)
 	}
 	return nil
 }
@@ -572,23 +620,30 @@ func (r *Runner) actionTarget(ctx context.Context, bundleID string) (int, string
 	return r.targetAllowed(ctx, bundleID, r.mayActOn(bundleID), "action_applications")
 }
 
-func (r *Runner) targetAllowed(ctx context.Context, bundleID string, allowed bool, setting string) (int, string, error) {
+func (r *Runner) checkAllowed(bundleID string, allowed bool, setting string) error {
 	// Two refusals, because the two causes are different facts and the remedy
 	// for one does not work on the other. Denied is checked first and named on
 	// its own: telling somebody to add an application they already allowed --
 	// which is what "*" does -- sends them to edit a list that was never the
 	// thing refusing, and the edit they make will not help.
 	if slices.Contains(r.denied, bundleID) {
-		return 0, "", contract.Fail(contract.FailurePermissionDenied,
+		return contract.Fail(contract.FailurePermissionDenied,
 			"desktop: %q is on [desktop] denied, which wins over every allow-list including %q -- "+
 				"adding it to applications will not change this; remove it from denied if that is "+
 				"deliberate", bundleID, AllApplications)
 	}
 	if !allowed {
-		return 0, "", contract.Fail(contract.FailurePermissionDenied,
+		return contract.Fail(contract.FailurePermissionDenied,
 			"desktop: %q is not in the desktop action/read allow-list -- add it to [desktop] %s "+
 				"in the settings file, or %q for every application denied does not name",
 			bundleID, setting, AllApplications)
+	}
+	return nil
+}
+
+func (r *Runner) targetAllowed(ctx context.Context, bundleID string, allowed bool, setting string) (int, string, error) {
+	if err := r.checkAllowed(bundleID, allowed, setting); err != nil {
+		return 0, "", err
 	}
 	text, err := r.call(ctx, "list_apps", map[string]any{})
 	if err != nil {
@@ -879,11 +934,21 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		return contract.Outcome{}, err
 	}
 	var acknowledged struct {
-		ActionSent         bool   `json:"action_sent"`
-		FrameID            string `json:"frame_id"`
-		WindowID           int    `json:"window_id"`
-		DominantDisplayID  int    `json:"dominant_display_id"`
-		GeometryGeneration string `json:"geometry_generation"`
+		ActionSent         bool       `json:"action_sent"`
+		FrameID            string     `json:"frame_id"`
+		WindowID           int        `json:"window_id"`
+		DominantDisplayID  int        `json:"dominant_display_id"`
+		GeometryGeneration string     `json:"geometry_generation"`
+		InputBackend       string     `json:"input_backend"`
+		InputSource        string     `json:"input_source"`
+		TargetPID          int        `json:"target_pid"`
+		EventsSent         int        `json:"events_sent"`
+		PointerBefore      []*float64 `json:"pointer_before"`
+		PointerAfter       []*float64 `json:"pointer_after"`
+		FrontmostBefore    *int       `json:"frontmost_before"`
+		FrontmostAfter     *int       `json:"frontmost_after"`
+		ElapsedMS          *float64   `json:"elapsed_ms"`
+		VirtualPointer     []*float64 `json:"virtual_pointer"`
 	}
 	if err := json.Unmarshal([]byte(text), &acknowledged); err != nil {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
@@ -897,6 +962,16 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"desktop: %s did not return a geometry-bound action_sent acknowledgement", spec.tool)
 	}
+	if acknowledged.InputSource != "private" || acknowledged.TargetPID != pid || acknowledged.EventsSent < 1 ||
+		(acknowledged.InputBackend != "cg_event_pid" && acknowledged.InputBackend != "ax_press" && acknowledged.InputBackend != "ax_selection") ||
+		len(acknowledged.PointerBefore) != 2 || len(acknowledged.PointerAfter) != 2 ||
+		acknowledged.PointerBefore[0] == nil || acknowledged.PointerBefore[1] == nil ||
+		acknowledged.PointerAfter[0] == nil || acknowledged.PointerAfter[1] == nil ||
+		acknowledged.FrontmostBefore == nil || acknowledged.FrontmostAfter == nil ||
+		acknowledged.ElapsedMS == nil || *acknowledged.ElapsedMS < 0 {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: helper did not return a valid private-input receipt; observe before another action")
+	}
 	result := map[string]any{
 		"did":                 capability,
 		"action_sent":         true,
@@ -906,6 +981,18 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		"window_id":           acknowledged.WindowID,
 		"dominant_display_id": acknowledged.DominantDisplayID,
 		"geometry_generation": acknowledged.GeometryGeneration,
+		"input": map[string]any{
+			"backend": acknowledged.InputBackend, "source": acknowledged.InputSource,
+			"target_pid": acknowledged.TargetPID, "events_sent": acknowledged.EventsSent,
+			"pointer_unchanged": *acknowledged.PointerBefore[0] == *acknowledged.PointerAfter[0] && *acknowledged.PointerBefore[1] == *acknowledged.PointerAfter[1],
+			"frontmost_before":  *acknowledged.FrontmostBefore, "frontmost_after": *acknowledged.FrontmostAfter,
+			"elapsed_ms": *acknowledged.ElapsedMS,
+		},
+	}
+	if len(acknowledged.VirtualPointer) == 2 && acknowledged.VirtualPointer[0] != nil && acknowledged.VirtualPointer[1] != nil {
+		input := result["input"].(map[string]any)
+		input["virtual_pointer_x"] = *acknowledged.VirtualPointer[0]
+		input["virtual_pointer_y"] = *acknowledged.VirtualPointer[1]
 	}
 	return contract.Outcome{
 		Result: result, Verdict: contract.VerdictOK,

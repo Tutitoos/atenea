@@ -6,6 +6,53 @@
 // on the other side would have to guess.
 import Foundation
 
+func isCancellation(_ message: [String: Any]) -> Bool {
+    let method = message["method"] as? String
+    return method == "$/cancelRequest" || method == "notifications/canceled"
+}
+
+enum RPCRequestID: Hashable, Sendable {
+    case integer(Int)
+    case string(String)
+
+    init?(_ value: Any?) {
+        if let number = value as? Int { self = .integer(number) }
+        else if let text = value as? String { self = .string(text) }
+        else { return nil }
+    }
+}
+
+enum RPCRequestContext {
+    @TaskLocal static var id: RPCRequestID?
+}
+
+// The stdin producer registers and cancels synchronously before queueing.
+// Every access to pending is protected by lock, including the consumer's reads.
+final class RequestCancellation: @unchecked Sendable {
+    static let shared = RequestCancellation()
+    private let lock = NSLock()
+    private var pending: [RPCRequestID: Bool] = [:]
+
+    func register(_ id: RPCRequestID) {
+        lock.withLock { pending[id] = pending[id] ?? false }
+    }
+
+    func cancel(_ id: RPCRequestID) {
+        lock.withLock { if pending[id] != nil { pending[id] = true } }
+    }
+
+    func finish(_ id: RPCRequestID) {
+        _ = lock.withLock { pending.removeValue(forKey: id) }
+    }
+
+    func checkpoint() throws {
+        guard let id = RPCRequestContext.id else { return }
+        if lock.withLock({ pending[id] == true }) {
+            throw RPCError.canceled("request canceled; the action was not retried")
+        }
+    }
+}
+
 struct RPCError: Error {
     let code: Int
     let message: String

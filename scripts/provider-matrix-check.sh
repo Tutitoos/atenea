@@ -42,6 +42,7 @@ required=(
 	# a catalog cannot notice on its own, and on this provider it would mean a
 	# capability that reads answering with one that types.
 	"desktop.apps|macos.apps"
+	"desktop.open|macos.open"
 	"desktop.inspect|macos.inspect"
 	"desktop.screenshot|macos.screenshot"
 	"desktop.click|macos.click"
