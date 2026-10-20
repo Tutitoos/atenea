@@ -60,6 +60,11 @@ separately: a logical pointer position does not prove an app accepted hover.
 Some views ignore background mouse events. Keep that failure visible; do not
 add a global input fallback or change the fixture to accept first mouse.
 
+Run the transport diagnostic checks with
+`python3 -m unittest discover -s helper/Fixtures/IsolatedInput -p 'test_*.py'`.
+They verify that MCP errors retain their message and cancellation kind rather
+than hiding them behind structured diagnostic metadata.
+
 `negative.py` checks missing/cross-process/stale frames, secure fields, changed
 window geometry, another focused window and ambiguous windows. With the direct
 helper transport it cancels a drag after observed dispatch and verifies that

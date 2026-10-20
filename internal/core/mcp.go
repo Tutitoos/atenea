@@ -1032,16 +1032,19 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	}
 	// Receipts describe dispatch, not selection, and survive failed calls too.
 	defer func() { appendToolUsage(result, runResult) }()
+	recommendation := "Inspect the tool error and retry if appropriate."
+	if strings.HasPrefix(capability.ID, "desktop.") {
+		recommendation = "Observe the application before another action; an error can occur after input was sent. Do not automatically retry."
+	}
 	if runErr != nil {
 		code := contract.CodeOf(statsErr)
-		recommendation := "Inspect the tool error and retry if appropriate."
 
 		return desktopDiagnostic(code, requestedTool, params.Name, fallbackUsed, runErr.Error(), recommendation), nil
 	}
 	answer, ok := answerOf(runResult)
 	if !ok {
 		return desktopDiagnostic(contract.CodeOf(statsErr), requestedTool, params.Name, fallbackUsed,
-			refusalOf(runResult), "Inspect the tool error and retry if appropriate."), nil
+			refusalOf(runResult), recommendation), nil
 	}
 	// The text block carries the same answer serialized, because a client
 	// that cannot read structuredContent must not get a different story --
@@ -1286,11 +1289,19 @@ func refusalOf(result *orchestrator.Result) string {
 		if step.Failure != "" {
 			return step.Failure
 		}
+		if step.Review.Parent != contract.VerdictOK && step.Review.Reason != "" {
+			// Output validation can quote a rejected value, including an unlabelled secret.
+			reason, _, omitted := strings.Cut(step.Review.Reason, ", got ")
+			if omitted {
+				reason += " (value omitted)"
+			}
+			return contract.RedactRaw(reason)
+		}
 	}
 	if len(result.Steps) == 0 {
 		return "nothing ran"
 	}
-	return "the run finished with verdict " + string(result.Steps[0].Review.Parent)
+	return "the run finished with verdict " + result.Steps[0].Review.Parent.String()
 }
 
 func toolFailure(message string) map[string]any {

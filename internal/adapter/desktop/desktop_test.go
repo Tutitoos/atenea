@@ -712,11 +712,7 @@ func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 		{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
 		{Name: "frame_id", Type: contract.TypeString, Required: true},
 	}
-	capability.Outputs = []contract.Field{{Name: "did", Type: contract.TypeString, Required: true},
-		{Name: "application", Type: contract.TypeString, Required: true}, {Name: "bundle_id", Type: contract.TypeString, Required: true},
-		{Name: "action_sent", Type: contract.TypeBool, Required: true}, {Name: "frame_id", Type: contract.TypeString, Required: true},
-		{Name: "window_id", Type: contract.TypeInt, Required: true}, {Name: "dominant_display_id", Type: contract.TypeInt, Required: true},
-		{Name: "geometry_generation", Type: contract.TypeString, Required: true}}
+	capability.Outputs = isolatedRequest(t).Capability.Outputs
 	out, err := runner.Run(t.Context(), contract.RunRequest{
 		Capability:     capability,
 		Implementation: contract.Implementation{ID: "macos.click", Capability: capability.ID},
@@ -775,6 +771,7 @@ func TestObservationAndActionApplicationListsAreIndependent(t *testing.T) {
 			{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
 			{Name: "frame_id", Type: contract.TypeString, Required: true}}}
 	runAction := func(bundle string) error {
+		action.Outputs = isolatedRequest(t).Capability.Outputs
 		_, err := runner.Run(t.Context(), contract.RunRequest{Capability: action,
 			Implementation: contract.Implementation{ID: "macos.click", Capability: action.ID},
 			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
@@ -840,6 +837,7 @@ func TestTypeAndKeyForwardTheValidatedFrameToken(t *testing.T) {
 			Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true},
 				{Name: tc.field, Type: contract.TypeString, Required: true},
 				{Name: "frame_id", Type: contract.TypeString, Required: true}}}
+		declared.Outputs = isolatedRequest(t).Capability.Outputs
 		_, err = runner.Run(t.Context(), contract.RunRequest{Capability: declared,
 			Implementation: contract.Implementation{ID: tc.implementation, Capability: tc.capability},
 			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},

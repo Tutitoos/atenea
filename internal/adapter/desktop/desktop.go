@@ -301,6 +301,11 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err := r.permitted(req.Capability); err != nil {
 		return contract.Outcome{}, err
 	}
+	if _, input := mutations[req.Capability.ID]; input {
+		if err := privateOutputSchema(req.Capability); err != nil {
+			return contract.Outcome{}, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
@@ -324,6 +329,43 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
 			"desktop: nothing here answers implementation %q", req.Implementation.ID)
 	}
+}
+
+// Check both possible receipt shapes before sending input, including fractional
+// coordinates and elapsed time; a post-dispatch schema failure cannot be undone.
+func privateOutputSchema(capability contract.Capability) error {
+	var hasEnum func([]contract.Field) bool
+	hasEnum = func(fields []contract.Field) bool {
+		for _, field := range fields {
+			if len(field.Enum) > 0 || hasEnum(field.Fields) {
+				return true
+			}
+		}
+		return false
+	}
+	refuse := func() error {
+		return contract.Fail(contract.FailureInvalidInput,
+			"desktop: %s has an incompatible private-input output schema; copy the six desktop mutation outputs from the installed default catalog before acting; no input was sent", capability.ID)
+	}
+	// Receipt metadata contains dynamic application identities and measured values.
+	if hasEnum(capability.Outputs) {
+		return refuse()
+	}
+	input := map[string]any{"backend": "cg_event_pid", "source": "private", "target_pid": 1, "events_sent": 1,
+		"pointer_unchanged": true, "frontmost_before": 1, "frontmost_after": 1, "elapsed_ms": 1.25,
+		"virtual_pointer_x": 1.25, "virtual_pointer_y": 2.5}
+	probe := map[string]any{"did": capability.ID, "application": "schema-probe", "bundle_id": "org.atenea.schema-probe",
+		"action_sent": true, "frame_id": "schema-probe", "window_id": 1, "dominant_display_id": 1,
+		"geometry_generation": "schema-probe", "input": input}
+	if capability.ValidateOutput(probe) != nil {
+		return refuse()
+	}
+	delete(input, "virtual_pointer_x")
+	delete(input, "virtual_pointer_y")
+	if capability.ValidateOutput(probe) != nil {
+		return refuse()
+	}
+	return nil
 }
 
 // osNeeds says which operating-system permissions a capability actually

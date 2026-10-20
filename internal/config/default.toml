@@ -2860,7 +2860,7 @@ id = "desktop.click"
 version = "2.0.0"
 summary = "Click inside one application's window."
 semantics = """
-Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input. \
 
 A button may delete something or send something, and nothing can know which before it is pressed. \
 
@@ -3022,7 +3022,7 @@ id = "desktop.move"
 version = "2.0.0"
 summary = "Move the pointer without pressing anything."
 semantics = """
-Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input. \
 
 Moves the synthetic pointer within the captured target window without moving the human pointer; hover effects depend on the application. \
 
@@ -3178,7 +3178,7 @@ id = "desktop.drag"
 version = "2.0.0"
 summary = "Press at one point, drag to another, release."
 semantics = """
-Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input. \
 
 Moves something from one place to another. It rearranges rather than sends, which is why it declares no external effect. \
 
@@ -3346,7 +3346,7 @@ id = "desktop.scroll"
 version = "2.0.0"
 summary = "Scroll at a point."
 semantics = """
-Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input. \
 
 Changes what is visible rather than what is there, which is why it declares no external effect. \
 
@@ -3514,7 +3514,7 @@ id = "desktop.type"
 version = "2.0.0"
 summary = "Type literal text into the validated target application window with private synthetic input."
 semantics = """
-Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input. \
 
 Refused twice over: text that reads as a credential never leaves this process, and macOS's own secure text fields are refused at the moment of typing, because focus moves and an earlier check is a check about a different field. \
 
@@ -3664,7 +3664,7 @@ id = "desktop.key"
 version = "2.0.0"
 summary = "Press one key, with optional modifiers."
 semantics = """
-Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input. \
 
 A shortcut is a command with no label. cmd+w and cmd+q are one letter apart and neither asks first. \
 
@@ -3746,7 +3746,6 @@ effects = ["read", "device", "write", "external"]
   type = "string"
   required = true
   summary = "The display-topology generation bound to the frame."
-
 
 [[implementation]]
 id = "ripgrep"

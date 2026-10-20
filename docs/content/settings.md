@@ -778,6 +778,15 @@ not prove absence of transients, and those samples may legitimately differ while
 the human works. Concurrent acceptance observes marked input at the global event
 tap and at a decoy app, target effects and any target activation separately.
 
+An explicit `[[capability]]` catalog is not merged with new defaults. When
+upgrading private input, copy the `input` output record and its nested fields
+from the matching six `desktop.click/move/drag/scroll/type/key` declarations in
+`internal/config/default.toml` before restarting the service. Keep local app
+allow-lists and grants unchanged. A legacy output without that record is
+refused before contacting the helper; otherwise output validation could reject
+an acknowledgement after the action already happened. Confirm the new record
+in all six MCP `tools/list` output schemas before functional acceptance.
+
 Keyboard actions query the target application, not global focus. Unknown or
 secure focused elements, unknown text-field subroles and ambiguous target windows
 are refused. A moved window still receives an emergency release at the last

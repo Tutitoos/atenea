@@ -44,8 +44,17 @@ class Bridge:
         result=self.request('tools/call',{'name':tool,'arguments':args})
         payload=result.get('structuredContent')
         if not isinstance(payload,dict):
-            payload=next((json.loads(c['text']) for c in result.get('content',[]) if c.get('type')=='text'),{})
-        if result.get('isError'):raise Rejected(payload)
+            payload={}
+            for c in result.get('content',[]):
+                if c.get('type')!='text':continue
+                try:parsed=json.loads(c['text'])
+                except (ValueError,TypeError):continue
+                if isinstance(parsed,dict):payload=parsed;break
+        if result.get('isError'):
+            payload=dict(payload)
+            if 'kind' not in payload and 'error_code' in payload:payload['kind']=payload['error_code']
+            payload.setdefault('error','\n'.join(c['text'] for c in result.get('content',[]) if c.get('type')=='text'))
+            raise Rejected(payload)
         return payload
     def close(self):
         self.p.stdin.close();self.p.wait(timeout=5)
