@@ -143,7 +143,7 @@ def main():
         b,r=action('scroll','scroll','scroll',dx=0,dy=-120);check('scroll',r,lambda:target()['scroll_y']!=b['scroll_y'])
         b,r=action('type','type',text='isolated lowercase ñ 123');check('type',r,lambda:'isolated lowercase ñ 123' in target()['text'])
         b,r=action('key','select-all',key='a',modifiers=['cmd'])
-        check('select-all',r,lambda:target()['selection_length']==len(target()['text']))
+        check('select-all',r,lambda:target()['selection_length']==len(target()['text'].encode('utf-16-le'))//2)
         b,r=action('type','replace-selection',text='SECOND isolated ñ 123');check('replace-selection',r,lambda:target()['text']=='SECOND isolated ñ 123')
         b,r=action('key','shift-left',key='left',modifiers=['shift'])
         check('shift-left',r,lambda:target()['selection_length']==1)
