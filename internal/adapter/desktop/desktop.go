@@ -406,6 +406,7 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 		Accessibility   bool   `json:"accessibility"`
 		ScreenRecording bool   `json:"screen_recording"`
 		InputMonitor    bool   `json:"input_monitor_active"`
+		IsolatedInput   bool   `json:"isolated_input"`
 		InputMonitorErr string `json:"input_monitor_error"`
 		Missing         string `json:"missing"`
 	}
@@ -431,14 +432,14 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 				"Privacy & Security > %s, to Atenea itself and not to a terminal",
 			capability, strings.Join(missing, " and "), missing[0])
 	}
-	if r.visualFeedback && capability != CapabilityListApps && capability != CapabilityInspect && capability != CapabilityScreenshot && !state.InputMonitor {
-		reason := state.InputMonitorErr
-		if reason == "" {
-			reason = "the helper could not create its passive human-input monitor"
-		}
+	if _, input := mutations[capability]; input && !state.IsolatedInput {
 		return contract.Fail(contract.FailurePermissionDenied,
-			"desktop: %s is blocked while visual_feedback is enabled because %s; grant Input Monitoring/Accessibility or disable visual_feedback",
-			capability, reason)
+			"desktop: this helper does not support private PID-directed input; update the helper before acting")
+	}
+	_, inputAction := mutations[capability]
+	if (inputAction || capability == CapabilityOpen) && !state.InputMonitor {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"desktop: %s requires its passive human-input monitor; grant Input Monitoring/Accessibility", capability)
 	}
 	return nil
 }
@@ -891,11 +892,21 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		return contract.Outcome{}, err
 	}
 	var acknowledged struct {
-		ActionSent         bool   `json:"action_sent"`
-		FrameID            string `json:"frame_id"`
-		WindowID           int    `json:"window_id"`
-		DominantDisplayID  int    `json:"dominant_display_id"`
-		GeometryGeneration string `json:"geometry_generation"`
+		ActionSent         bool       `json:"action_sent"`
+		FrameID            string     `json:"frame_id"`
+		WindowID           int        `json:"window_id"`
+		DominantDisplayID  int        `json:"dominant_display_id"`
+		GeometryGeneration string     `json:"geometry_generation"`
+		InputBackend       string     `json:"input_backend"`
+		InputSource        string     `json:"input_source"`
+		TargetPID          int        `json:"target_pid"`
+		EventsSent         int        `json:"events_sent"`
+		PointerBefore      []*float64 `json:"pointer_before"`
+		PointerAfter       []*float64 `json:"pointer_after"`
+		FrontmostBefore    *int       `json:"frontmost_before"`
+		FrontmostAfter     *int       `json:"frontmost_after"`
+		ElapsedMS          *float64   `json:"elapsed_ms"`
+		VirtualPointer     []*float64 `json:"virtual_pointer"`
 	}
 	if err := json.Unmarshal([]byte(text), &acknowledged); err != nil {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
@@ -909,6 +920,16 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"desktop: %s did not return a geometry-bound action_sent acknowledgement", spec.tool)
 	}
+	if acknowledged.InputSource != "private" || acknowledged.TargetPID != pid || acknowledged.EventsSent < 1 ||
+		(acknowledged.InputBackend != "cg_event_pid" && acknowledged.InputBackend != "ax_press" && acknowledged.InputBackend != "ax_selection") ||
+		len(acknowledged.PointerBefore) != 2 || len(acknowledged.PointerAfter) != 2 ||
+		acknowledged.PointerBefore[0] == nil || acknowledged.PointerBefore[1] == nil ||
+		acknowledged.PointerAfter[0] == nil || acknowledged.PointerAfter[1] == nil ||
+		acknowledged.FrontmostBefore == nil || acknowledged.FrontmostAfter == nil ||
+		acknowledged.ElapsedMS == nil || *acknowledged.ElapsedMS < 0 {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: helper did not return a valid private-input receipt; observe before another action")
+	}
 	result := map[string]any{
 		"did":                 capability,
 		"action_sent":         true,
@@ -918,6 +939,18 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		"window_id":           acknowledged.WindowID,
 		"dominant_display_id": acknowledged.DominantDisplayID,
 		"geometry_generation": acknowledged.GeometryGeneration,
+		"input": map[string]any{
+			"backend": acknowledged.InputBackend, "source": acknowledged.InputSource,
+			"target_pid": acknowledged.TargetPID, "events_sent": acknowledged.EventsSent,
+			"pointer_unchanged": *acknowledged.PointerBefore[0] == *acknowledged.PointerAfter[0] && *acknowledged.PointerBefore[1] == *acknowledged.PointerAfter[1],
+			"frontmost_before":  *acknowledged.FrontmostBefore, "frontmost_after": *acknowledged.FrontmostAfter,
+			"elapsed_ms": *acknowledged.ElapsedMS,
+		},
+	}
+	if len(acknowledged.VirtualPointer) == 2 && acknowledged.VirtualPointer[0] != nil && acknowledged.VirtualPointer[1] != nil {
+		input := result["input"].(map[string]any)
+		input["virtual_pointer_x"] = *acknowledged.VirtualPointer[0]
+		input["virtual_pointer_y"] = *acknowledged.VirtualPointer[1]
 	}
 	return contract.Outcome{
 		Result: result, Verdict: contract.VerdictOK,

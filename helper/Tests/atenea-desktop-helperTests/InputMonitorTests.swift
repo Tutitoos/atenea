@@ -2,11 +2,11 @@ import XCTest
 @testable import atenea_desktop_helper
 
 final class InputMonitorTests: XCTestCase {
-    func testMouseDragEventsAreMonitoredAsMovement() {
+    func testPointerTravelIsFreeButDirectInteractionIsMonitored() {
+        XCTAssertFalse(InputMonitor.monitoredEventTypes.contains(.mouseMoved))
         let dragTypes: [CGEventType] = [.leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         for type in dragTypes {
             XCTAssertTrue(InputMonitor.monitoredEventTypes.contains(type))
-            XCTAssertTrue(InputMonitor.isMovementEvent(type))
         }
     }
 

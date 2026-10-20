@@ -744,20 +744,63 @@ forgotten.
 
 `visual_feedback` is enabled by default on macOS 14 and later. It shows a
 click-through Atenea border, a virtual cursor and a movable live miniature while
-Computer Use is active. The cursor is visual only, not a second hardware
-pointer; a guarded fallback may briefly focus the target window. The miniature
+Computer Use is active. Input uses a private synthetic state table and events
+bound to the captured window and directed to its process; accessible buttons
+may use AXPress. Input actions never post to the HID/session stream, warp or
+restore the human pointer, borrow human modifiers, activate or raise the target.
+Only an explicit `desktop.open` requests foreground activation. The miniature
 is blurred after a short idle period, closes after 30 seconds and never writes
 frames, video or an interaction history to disk. Set it to `false` to hide the
-visuals while retaining frame validation and cross-window safety checks.
+visuals while retaining frame validation, cross-window safety checks and the
+mandatory passive human-input monitor.
+Input requires a logged-in console session with an available foreground app;
+it is refused when loginwindow owns the foreground. A disabled monitor requires
+checking permissions and explicitly restarting the helper; it is not replaced
+automatically within the process.
 
-If human mouse or keyboard activity is detected, the current action is
-cancelled and the preview shows `Paused` with a `Resume` button. Resume enables
-future actions but never retries the interrupted one. All six actions require
+Human input directed to the controlled application cancels the current action
+and the preview shows `Paused` with a `Resume` button. The passive annotated
+event tap uses the recipient PID, so typing, scrolling or clicking in another
+application does not pause CUA; physical pointer travel is also free. A direct
+interaction whose recipient cannot be established is refused conservatively.
+This is application isolation, not simultaneous writers within one application.
+The miniature's `Pause` button also blocks future actions while idle, until a
+physical `Resume`. Resume never retries an interrupted action. All six actions require
 the opaque `frame_id` returned by `desktop.screenshot`; no action implicitly
 reuses the latest frame. Expired frames and any window move, resize, display,
 scale, rotation, or topology change are refused until a fresh screenshot is
 taken. An action result says only `action_sent`; a later observation must
-verify the UI result.
+verify the UI result. The `input` receipt identifies the effective backend,
+private source, resolved PID, event count, sampled pointer/focus and measured
+elapsed time, plus the last dispatched logical CUA pointer position when known.
+The latter does not prove that an app accepted hover. Before/after equality does
+not prove absence of transients, and those samples may legitimately differ while
+the human works. Concurrent acceptance observes marked input at the global event
+tap and at a decoy app, target effects and any target activation separately.
+
+Keyboard actions query the target application, not global focus. Unknown or
+secure focused elements, unknown text-field subroles and ambiguous target windows
+are refused. A moved window still receives an emergency release at the last
+dispatched position, without moving to the intended destination; cancellation
+does not undo partial effects.
+For `Cmd+A` in an accessible text field, Atenea sets the selected-text range
+using its character count, without reading the text or activating the app.
+The receipt identifies this semantic operation as `ax_selection`. Other contexts
+and unsupported selections use private PID key events, whose effect still
+requires observation. A failed AX selection is never followed by a key replay.
+
+AppKit's ordinary `AXTextArea` explicitly reports that it does not support a
+subrole; that known response is accepted, while query failures and unknown roles
+are refused. Secure roles/subroles are checked along the complete ancestry up
+to the captured window. This relies on the application's accessibility model;
+it cannot recognize an application that mislabels its own password controls.
+
+Some apps ignore background gestures or activate themselves in response to
+input. PID delivery alone is not evidence of UI success or universal
+compatibility. Observe the requested effect and foreground state after each
+action; never retry automatically or fall back to the human input stream.
+Use role filters when inspecting a window. Default inspection omits the menu
+bar, and secure elements and their descendants omit attribute values.
 
 Neither list is a permission on its own. The capabilities behind them cause the
 `device` effect, which no floor grants by default, and the adapter refuses them

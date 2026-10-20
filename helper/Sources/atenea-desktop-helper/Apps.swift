@@ -18,6 +18,7 @@ enum Apps {
                   let bundle = Bundle(url: url), bundle.bundleIdentifier == bundleID else {
                 throw RPCError.invalidParams("no installed application matches that bundle identifier")
             }
+            guard Permissions.interactiveSession else { throw RPCError.denied("the interactive session is unavailable; no open request sent") }
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             configuration.promptsUserIfNeeded = false
@@ -39,6 +40,7 @@ enum Apps {
             let deadline = Date().addingTimeInterval(2)
             repeat {
                 try await ActionGate.shared.checkpoint()
+                guard Permissions.interactiveSession else { throw RPCError.denied("the interactive session became unavailable; observe before another action") }
                 guard let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier == bundleID,
                       app.activationPolicy == .regular, !app.isTerminated else {
                     throw RPCError.denied("the opened process does not match a regular application; observe before another action")

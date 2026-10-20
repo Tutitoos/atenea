@@ -16,10 +16,23 @@
 import Foundation
 import ApplicationServices
 import CoreGraphics
+import AppKit
 
 struct Permissions {
     let accessibility: Bool
     let screenRecording: Bool
+
+    @MainActor static var interactiveSession: Bool {
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        return sessionAvailable(onConsole: session?[kCGSessionOnConsoleKey as String] as? Bool,
+            loggedIn: session?[kCGSessionLoginDoneKey as String] as? Bool,
+            frontmostBundle: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            hasScreens: NSApp != nil && !NSScreen.screens.isEmpty)
+    }
+
+    static func sessionAvailable(onConsole: Bool?, loggedIn: Bool?, frontmostBundle: String?, hasScreens: Bool) -> Bool {
+        onConsole == true && loggedIn == true && hasScreens && frontmostBundle != nil && frontmostBundle != "com.apple.loginwindow"
+    }
 
     /// Reads current state without prompting. The prompting variant of the
     /// accessibility check puts a dialog on the user's screen, which is not

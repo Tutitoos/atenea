@@ -678,7 +678,8 @@ denied = [
 # redacted arguments of every device call.
 look_then_act = false
 # Show the native Atenea border, cursor and live miniature while desktop use
-# is active. This affects presentation only; window-safety checks remain on.
+# is active. Presentation only: private PID delivery, frame checks and the
+# passive human-input monitor remain mandatory even with visuals disabled.
 visual_feedback = true
 
 [android]
@@ -2511,6 +2512,8 @@ id = "desktop.open"
 version = "1.0.0"
 summary = "Open an installed application and bring it to the foreground."
 semantics = """
+This explicit operation changes focus. Concurrent input to a running app does not require it.\
+
 Accepts only an application bundle identifier, resolved by macOS rather than a \
 caller-supplied path, URL, executable or process id. Reuses an existing instance \
 or launches the installed application. The action_applications allow-list and \
@@ -2857,6 +2860,8 @@ id = "desktop.click"
 version = "2.0.0"
 summary = "Click inside one application's window."
 semantics = """
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+
 A button may delete something or send something, and nothing can know which before it is pressed. \
 
 Coordinates are in the space of the image desktop.screenshot returned, which \
@@ -2945,12 +2950,81 @@ effects = ["read", "device", "write", "external"]
   summary = "The display-topology generation bound to the frame."
 
 
+  [[capability.output]]
+  name = "input"
+  type = "record"
+  required = true
+  summary = "Private input backend, target PID, event count, sampled pointer/focus and elapsed milliseconds; UI effects require fresh observation."
+
+    [[capability.output.field]]
+    name = "backend"
+    type = "string"
+    required = true
+    summary = "AXPress, text selection, or a window-bound event directed to the target process."
+
+    [[capability.output.field]]
+    name = "source"
+    type = "string"
+    required = true
+    summary = "Private synthetic state; no session or HID posting."
+
+    [[capability.output.field]]
+    name = "target_pid"
+    type = "int"
+    required = true
+    summary = "Resolved process that received the request."
+
+    [[capability.output.field]]
+    name = "events_sent"
+    type = "int"
+    required = true
+    summary = "Number of dispatched events or semantic actions."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_x"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_y"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "pointer_unchanged"
+    type = "bool"
+    required = true
+    summary = "Before/after pointer equality; not a continuous isolation measurement."
+
+    [[capability.output.field]]
+    name = "frontmost_before"
+    type = "int"
+    required = true
+    summary = "Foreground process before preparation."
+
+    [[capability.output.field]]
+    name = "frontmost_after"
+    type = "int"
+    required = true
+    summary = "Foreground process after dispatch."
+
+    [[capability.output.field]]
+    name = "elapsed_ms"
+    type = "float"
+    required = true
+    summary = "Measured helper time including preparation."
+
+
 [[capability]]
 id = "desktop.move"
 version = "2.0.0"
 summary = "Move the pointer without pressing anything."
 semantics = """
-Moves the pointer and changes nothing else; it is here because hover reveals interface that is otherwise invisible. \
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+
+Moves the synthetic pointer within the captured target window without moving the human pointer; hover effects depend on the application. \
 
 Coordinates are in the space of the image desktop.screenshot returned, which \
 is already reduced from the display's real pixels -- nothing needs to be \
@@ -3032,11 +3106,80 @@ effects = ["read", "device"]
   summary = "The display-topology generation bound to the frame."
 
 
+  [[capability.output]]
+  name = "input"
+  type = "record"
+  required = true
+  summary = "Private input backend, target PID, event count, sampled pointer/focus and elapsed milliseconds; UI effects require fresh observation."
+
+    [[capability.output.field]]
+    name = "backend"
+    type = "string"
+    required = true
+    summary = "AXPress, text selection, or a window-bound event directed to the target process."
+
+    [[capability.output.field]]
+    name = "source"
+    type = "string"
+    required = true
+    summary = "Private synthetic state; no session or HID posting."
+
+    [[capability.output.field]]
+    name = "target_pid"
+    type = "int"
+    required = true
+    summary = "Resolved process that received the request."
+
+    [[capability.output.field]]
+    name = "events_sent"
+    type = "int"
+    required = true
+    summary = "Number of dispatched events or semantic actions."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_x"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_y"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "pointer_unchanged"
+    type = "bool"
+    required = true
+    summary = "Before/after pointer equality; not a continuous isolation measurement."
+
+    [[capability.output.field]]
+    name = "frontmost_before"
+    type = "int"
+    required = true
+    summary = "Foreground process before preparation."
+
+    [[capability.output.field]]
+    name = "frontmost_after"
+    type = "int"
+    required = true
+    summary = "Foreground process after dispatch."
+
+    [[capability.output.field]]
+    name = "elapsed_ms"
+    type = "float"
+    required = true
+    summary = "Measured helper time including preparation."
+
+
 [[capability]]
 id = "desktop.drag"
 version = "2.0.0"
 summary = "Press at one point, drag to another, release."
 semantics = """
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+
 Moves something from one place to another. It rearranges rather than sends, which is why it declares no external effect. \
 
 Coordinates are in the space of the image desktop.screenshot returned, which \
@@ -3131,11 +3274,80 @@ effects = ["read", "device", "write"]
   summary = "The display-topology generation bound to the frame."
 
 
+  [[capability.output]]
+  name = "input"
+  type = "record"
+  required = true
+  summary = "Private input backend, target PID, event count, sampled pointer/focus and elapsed milliseconds; UI effects require fresh observation."
+
+    [[capability.output.field]]
+    name = "backend"
+    type = "string"
+    required = true
+    summary = "AXPress, text selection, or a window-bound event directed to the target process."
+
+    [[capability.output.field]]
+    name = "source"
+    type = "string"
+    required = true
+    summary = "Private synthetic state; no session or HID posting."
+
+    [[capability.output.field]]
+    name = "target_pid"
+    type = "int"
+    required = true
+    summary = "Resolved process that received the request."
+
+    [[capability.output.field]]
+    name = "events_sent"
+    type = "int"
+    required = true
+    summary = "Number of dispatched events or semantic actions."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_x"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_y"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "pointer_unchanged"
+    type = "bool"
+    required = true
+    summary = "Before/after pointer equality; not a continuous isolation measurement."
+
+    [[capability.output.field]]
+    name = "frontmost_before"
+    type = "int"
+    required = true
+    summary = "Foreground process before preparation."
+
+    [[capability.output.field]]
+    name = "frontmost_after"
+    type = "int"
+    required = true
+    summary = "Foreground process after dispatch."
+
+    [[capability.output.field]]
+    name = "elapsed_ms"
+    type = "float"
+    required = true
+    summary = "Measured helper time including preparation."
+
+
 [[capability]]
 id = "desktop.scroll"
 version = "2.0.0"
 summary = "Scroll at a point."
 semantics = """
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+
 Changes what is visible rather than what is there, which is why it declares no external effect. \
 
 Coordinates are in the space of the image desktop.screenshot returned, which \
@@ -3230,11 +3442,80 @@ effects = ["read", "device", "write"]
   summary = "The display-topology generation bound to the frame."
 
 
+  [[capability.output]]
+  name = "input"
+  type = "record"
+  required = true
+  summary = "Private input backend, target PID, event count, sampled pointer/focus and elapsed milliseconds; UI effects require fresh observation."
+
+    [[capability.output.field]]
+    name = "backend"
+    type = "string"
+    required = true
+    summary = "AXPress, text selection, or a window-bound event directed to the target process."
+
+    [[capability.output.field]]
+    name = "source"
+    type = "string"
+    required = true
+    summary = "Private synthetic state; no session or HID posting."
+
+    [[capability.output.field]]
+    name = "target_pid"
+    type = "int"
+    required = true
+    summary = "Resolved process that received the request."
+
+    [[capability.output.field]]
+    name = "events_sent"
+    type = "int"
+    required = true
+    summary = "Number of dispatched events or semantic actions."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_x"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_y"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "pointer_unchanged"
+    type = "bool"
+    required = true
+    summary = "Before/after pointer equality; not a continuous isolation measurement."
+
+    [[capability.output.field]]
+    name = "frontmost_before"
+    type = "int"
+    required = true
+    summary = "Foreground process before preparation."
+
+    [[capability.output.field]]
+    name = "frontmost_after"
+    type = "int"
+    required = true
+    summary = "Foreground process after dispatch."
+
+    [[capability.output.field]]
+    name = "elapsed_ms"
+    type = "float"
+    required = true
+    summary = "Measured helper time including preparation."
+
+
 [[capability]]
 id = "desktop.type"
 version = "2.0.0"
-summary = "Type literal text into whatever has keyboard focus."
+summary = "Type literal text into the validated target application window with private synthetic input."
 semantics = """
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+
 Refused twice over: text that reads as a credential never leaves this process, and macOS's own secure text fields are refused at the moment of typing, because focus moves and an earlier check is a check about a different field. \
 
 Coordinates are in the space of the image desktop.screenshot returned, which \
@@ -3311,11 +3592,80 @@ effects = ["read", "device", "write", "external"]
   summary = "The display-topology generation bound to the frame."
 
 
+  [[capability.output]]
+  name = "input"
+  type = "record"
+  required = true
+  summary = "Private input backend, target PID, event count, sampled pointer/focus and elapsed milliseconds; UI effects require fresh observation."
+
+    [[capability.output.field]]
+    name = "backend"
+    type = "string"
+    required = true
+    summary = "AXPress, text selection, or a window-bound event directed to the target process."
+
+    [[capability.output.field]]
+    name = "source"
+    type = "string"
+    required = true
+    summary = "Private synthetic state; no session or HID posting."
+
+    [[capability.output.field]]
+    name = "target_pid"
+    type = "int"
+    required = true
+    summary = "Resolved process that received the request."
+
+    [[capability.output.field]]
+    name = "events_sent"
+    type = "int"
+    required = true
+    summary = "Number of dispatched events or semantic actions."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_x"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_y"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "pointer_unchanged"
+    type = "bool"
+    required = true
+    summary = "Before/after pointer equality; not a continuous isolation measurement."
+
+    [[capability.output.field]]
+    name = "frontmost_before"
+    type = "int"
+    required = true
+    summary = "Foreground process before preparation."
+
+    [[capability.output.field]]
+    name = "frontmost_after"
+    type = "int"
+    required = true
+    summary = "Foreground process after dispatch."
+
+    [[capability.output.field]]
+    name = "elapsed_ms"
+    type = "float"
+    required = true
+    summary = "Measured helper time including preparation."
+
+
 [[capability]]
 id = "desktop.key"
 version = "2.0.0"
 summary = "Press one key, with optional modifiers."
 semantics = """
+Input stays directed to this application with private state; it does not move the human pointer or change keyboard focus. Background compatibility requires observing the effect; do not activate the app to mask an ignored input.\
+
 A shortcut is a command with no label. cmd+w and cmd+q are one letter apart and neither asks first. \
 
 Coordinates are in the space of the image desktop.screenshot returned, which \
@@ -3634,6 +3984,73 @@ scope_guarantee = "confined"
   estimated_tokens = 300
 
 # ---------------------------------------------------------------------------
+  [[capability.output]]
+  name = "input"
+  type = "record"
+  required = true
+  summary = "Private input backend, target PID, event count, sampled pointer/focus and elapsed milliseconds; UI effects require fresh observation."
+
+    [[capability.output.field]]
+    name = "backend"
+    type = "string"
+    required = true
+    summary = "AXPress, text selection, or a window-bound event directed to the target process."
+
+    [[capability.output.field]]
+    name = "source"
+    type = "string"
+    required = true
+    summary = "Private synthetic state; no session or HID posting."
+
+    [[capability.output.field]]
+    name = "target_pid"
+    type = "int"
+    required = true
+    summary = "Resolved process that received the request."
+
+    [[capability.output.field]]
+    name = "events_sent"
+    type = "int"
+    required = true
+    summary = "Number of dispatched events or semantic actions."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_x"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "virtual_pointer_y"
+    type = "float"
+    required = false
+    summary = "Last dispatched CUA pointer position in global points."
+
+    [[capability.output.field]]
+    name = "pointer_unchanged"
+    type = "bool"
+    required = true
+    summary = "Before/after pointer equality; not a continuous isolation measurement."
+
+    [[capability.output.field]]
+    name = "frontmost_before"
+    type = "int"
+    required = true
+    summary = "Foreground process before preparation."
+
+    [[capability.output.field]]
+    name = "frontmost_after"
+    type = "int"
+    required = true
+    summary = "Foreground process after dispatch."
+
+    [[capability.output.field]]
+    name = "elapsed_ms"
+    type = "float"
+    required = true
+    summary = "Measured helper time including preparation."
+
+
 [[capability]]
 id = "symbol.source"
 version = "1.0.0"

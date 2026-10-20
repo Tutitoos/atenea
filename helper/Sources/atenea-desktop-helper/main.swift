@@ -57,32 +57,25 @@ func checkedPoint(_ args: [String: Any]) async throws -> (CGPoint, CaptureFrame,
     let (point, frame) = try await Capture.globalPoint(pid: target.pid, bundleID: target.bundleID,
                                                        appName: target.appName, frameID: frameID,
                                                        x: x, y: y)
-    try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
-    await MainActor.run {
-        VisualFeedbackController.shared.setEnabled(target.visualFeedback)
-    }
-    guard target.visualFeedback else { return (point, frame, target) }
-    await MainActor.run {
-        VisualFeedbackController.shared.show(target: frame.target, state: .acting)
-    }
-    await VisualFeedbackController.shared.animateCursor(globalPoint: point)
     return (point, frame, target)
 }
 
-func actionReceipt(_ frame: CaptureFrame) -> [String: Any] {
-    [
+func actionReceipt(_ frame: CaptureFrame, input: InputReceipt) -> [String: Any] {
+    var receipt: [String: Any] = [
         "action_sent": true,
         "frame_id": frame.id,
         "window_id": Int(frame.target.windowID),
         "dominant_display_id": Int(frame.target.dominantDisplayID),
         "geometry_generation": frame.target.geometryGeneration,
     ]
+    receipt.merge(input.dictionary) { _, new in new }
+    return receipt
 }
 
 func ensureInputMonitor(_ visualFeedback: Bool) async throws {
-    guard visualFeedback, !InputMonitor.shared.active else { return }
+    guard !InputMonitor.shared.active else { return }
     throw RPCError.denied(InputMonitor.shared.failure ??
-        "human input monitoring is unavailable; grant Input Monitoring or disable visual_feedback")
+        "human input monitoring is unavailable; no input sent")
 }
 
 // Immutable once built and read only from the serial loop at the bottom, which
@@ -104,8 +97,15 @@ let tools: [Tool] = [
             out["visual_feedback_enabled"] = visual.0
             out["input_monitor_active"] = InputMonitor.shared.active
             out["input_monitor_error"] = InputMonitor.shared.failure ?? ""
+            out["isolated_input"] = true
+            let virtual = await MainActor.run { (Input.virtualPointer, Input.virtualPointerPID) }
+            if let pointer = virtual.0, let pid = virtual.1 {
+                out["virtual_pointer_x"] = pointer.x
+                out["virtual_pointer_y"] = pointer.y
+                out["virtual_pointer_pid"] = Int(pid)
+            }
             out["overlay_state"] = visual.1
-            out["graphical_session"] = visual.2
+            out["graphical_session"] = await MainActor.run { Permissions.interactiveSession }
             return out
         }
     ),
@@ -115,7 +115,7 @@ let tools: [Tool] = [
         inputSchema: ["type": "object", "properties": [:] as [String: Any]],
         run: { _ in
             let answer = Permissions.request()
-            InputMonitor.shared.start()
+            await MainActor.run { InputMonitor.shared.start() }
             return answer
         }
     ),
@@ -254,19 +254,12 @@ let tools: [Tool] = [
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
             let (point, frame, target) = try await checkedPoint(args)
-            await MainActor.run { VisualFeedbackController.shared.setState(.clicking) }
-            let semantic = (args["clicks"] as? Int ?? 1) == 1
-                ? try await Input.semanticClick(pid: target.pid, at: point, visualFeedback: target.visualFeedback) : false
-            if !semantic {
-                // AX hit-testing can decline a canvas or emulator surface. It
-                // may also have yielded while the window changed, so repeat
-                // the foreground/coverage check immediately before the real
-                // pointer fallback.
-                try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
-                try await Input.click(at: point, clicks: args["clicks"] as? Int ?? 1, visualFeedback: target.visualFeedback)
+            let clicks = args["clicks"] as? Int ?? 1
+            guard (1...2).contains(clicks) else { throw RPCError.invalidParams("clicks must be one or two") }
+            let input = try await Input.perform(frame: frame, visualFeedback: target.visualFeedback, state: .clicking, point: point) {
+                try await $0.click(at: point, clicks: clicks)
             }
-            await MainActor.run { VisualFeedbackController.shared.setState(.observing) }
-            return actionReceipt(frame)
+            return actionReceipt(frame, input: input)
         }
     ),
     Tool(
@@ -277,12 +270,11 @@ let tools: [Tool] = [
                                      "app": ["type": "string"], "x": ["type": "number"], "y": ["type": "number"],
                                      "frame_id": ["type": "string"], "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            let (point, frame, _) = try await checkedPoint(args)
-            await MainActor.run { VisualFeedbackController.shared.setState(.moving) }
-            let target = try targetArguments(args)
-            try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
-            try await Input.move(to: point, visualFeedback: target.visualFeedback)
-            return actionReceipt(frame)
+            let (point, frame, target) = try await checkedPoint(args)
+            let input = try await Input.perform(frame: frame, visualFeedback: target.visualFeedback, state: .moving, point: point) {
+                try await $0.move(to: point)
+            }
+            return actionReceipt(frame, input: input)
         }
     ),
     Tool(
@@ -294,26 +286,17 @@ let tools: [Tool] = [
                                      "to_x": ["type": "number"], "to_y": ["type": "number"], "frame_id": ["type": "string"],
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            let identity = try targetArguments(args)
-            try await ensureInputMonitor(identity.visualFeedback)
+            let target = try targetArguments(args)
             guard let fx = args["from_x"] as? Double, let fy = args["from_y"] as? Double,
-                  let tx = args["to_x"] as? Double, let ty = args["to_y"] as? Double else {
-                throw RPCError.invalidParams("from_x, from_y, to_x and to_y are required")
+                  let tx = args["to_x"] as? Double, let ty = args["to_y"] as? Double,
+                  let frameID = args["frame_id"] as? String else { throw RPCError.invalidParams("drag points and frame_id are required") }
+            let (start, frame) = try await Capture.globalPoint(pid: target.pid, bundleID: target.bundleID,
+                appName: target.appName, frameID: frameID, x: fx, y: fy)
+            let end = try frame.target.globalPoint(forImagePoint: CGPoint(x: tx, y: ty))
+            let input = try await Input.perform(frame: frame, visualFeedback: target.visualFeedback, state: .dragging, point: start) {
+                try await $0.drag(from: start, to: end, visualFeedback: target.visualFeedback)
             }
-            guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
-                throw RPCError.invalidParams("frame_id is required")
-            }
-            let (start, frame) = try await Capture.globalPoint(pid: identity.pid, bundleID: identity.bundleID,
-                appName: identity.appName, frameID: frameID, x: fx, y: fy)
-            let (end, _) = try await Capture.globalPoint(pid: identity.pid, bundleID: identity.bundleID,
-                appName: identity.appName, frameID: frame.id, x: tx, y: ty)
-            if identity.visualFeedback {
-                await MainActor.run { VisualFeedbackController.shared.show(target: frame.target, state: .dragging) }
-                await VisualFeedbackController.shared.animateCursor(globalPoint: start)
-            }
-            try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID, point: start)
-            try await Input.drag(from: start, to: end, visualFeedback: identity.visualFeedback)
-            return actionReceipt(frame)
+            return actionReceipt(frame, input: input)
         }
     ),
     Tool(
@@ -325,43 +308,32 @@ let tools: [Tool] = [
                                      "dx": ["type": "integer"], "dy": ["type": "integer"], "frame_id": ["type": "string"],
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            let (point, frame, _) = try await checkedPoint(args)
-            await MainActor.run { VisualFeedbackController.shared.setState(.scrolling) }
-            let target = try targetArguments(args)
-            try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
-            try await Input.scroll(at: point, dx: args["dx"] as? Int ?? 0, dy: args["dy"] as? Int ?? 0,
-                                   visualFeedback: target.visualFeedback)
-            return actionReceipt(frame)
+            let (point, frame, target) = try await checkedPoint(args)
+            let dx = args["dx"] as? Int ?? 0
+            let dy = args["dy"] as? Int ?? 0
+            let input = try await Input.perform(frame: frame, visualFeedback: target.visualFeedback, state: .scrolling, point: point) {
+                try await $0.scroll(at: point, dx: dx, dy: dy)
+            }
+            return actionReceipt(frame, input: input)
         }
     ),
     Tool(
         name: "type",
-        description: "Type literal text into whatever has keyboard focus.",
+        description: "Type literal text into the validated target window using private PID-directed input.",
         inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "text", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
                                      "app": ["type": "string"], "text": ["type": "string"], "frame_id": ["type": "string"],
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            let identity = try targetArguments(args)
-            try await ensureInputMonitor(identity.visualFeedback)
-            guard let text = args["text"] as? String else {
-                throw RPCError.invalidParams("text is required")
+            let target = try targetArguments(args)
+            guard let value = args["text"] as? String, let frameID = args["frame_id"] as? String else {
+                throw RPCError.invalidParams("text and frame_id are required")
             }
-            guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
-                throw RPCError.invalidParams("frame_id is required")
+            let frame = try await Capture.validatedFrame(pid: target.pid, bundleID: target.bundleID, appName: target.appName, frameID: frameID)
+            let input = try await Input.perform(frame: frame, visualFeedback: target.visualFeedback, state: .typing) {
+                try await $0.type(value)
             }
-            let frame = try await Capture.validatedFrame(pid: identity.pid, bundleID: identity.bundleID,
-                                                         appName: identity.appName, frameID: frameID)
-            try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID,
-                                    point: CGPoint(x: frame.target.frame.midX, y: frame.target.frame.midY))
-            if identity.visualFeedback {
-                await MainActor.run { VisualFeedbackController.shared.show(target: frame.target, state: .typing) }
-            }
-            try await Input.type(text, visualFeedback: identity.visualFeedback)
-            // The length and not the text. A helper that echoed what it typed
-            // would put it in a log, a receipt and a model's context, which is
-            // three copies of something somebody may have meant to keep.
-            return actionReceipt(frame)
+            return actionReceipt(frame, input: input)
         }
     ),
     Tool(
@@ -373,24 +345,16 @@ let tools: [Tool] = [
                                      "modifiers": ["type": "array", "items": ["type": "string"]],
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            let identity = try targetArguments(args)
-            try await ensureInputMonitor(identity.visualFeedback)
-            guard let name = args["key"] as? String else {
-                throw RPCError.invalidParams("key is required")
+            let target = try targetArguments(args)
+            guard let value = args["key"] as? String, let frameID = args["frame_id"] as? String else {
+                throw RPCError.invalidParams("key and frame_id are required")
             }
-            guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
-                throw RPCError.invalidParams("frame_id is required")
+            let modifiers = args["modifiers"] as? [String] ?? []
+            let frame = try await Capture.validatedFrame(pid: target.pid, bundleID: target.bundleID, appName: target.appName, frameID: frameID)
+            let input = try await Input.perform(frame: frame, visualFeedback: target.visualFeedback, state: .typing) {
+                try await $0.key(value, modifiers: modifiers)
             }
-            let frame = try await Capture.validatedFrame(pid: identity.pid, bundleID: identity.bundleID,
-                                                         appName: identity.appName, frameID: frameID)
-            try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID,
-                                    point: CGPoint(x: frame.target.frame.midX, y: frame.target.frame.midY))
-            if identity.visualFeedback {
-                await MainActor.run { VisualFeedbackController.shared.show(target: frame.target, state: .typing) }
-            }
-            try await Input.key(name, modifiers: (args["modifiers"] as? [String]) ?? [],
-                                visualFeedback: identity.visualFeedback)
-            return actionReceipt(frame)
+            return actionReceipt(frame, input: input)
         }
     ),
 ]
@@ -486,20 +450,8 @@ func handle(_ message: [String: Any]) async {
     }
 }
 
-// One message at a time, and that is the exclusion this whole feature needs
-// rather than an accident of how the loop is written.
-//
-// There is one screen, one pointer and one keyboard on this machine, and two
-// calls landing on them at once would interleave into something neither caller
-// asked for. Above this process, `internal/mcpstdio` lets any number of
-// goroutines call at once and routes the answers back by id -- so the
-// serialization has to be HERE, where the desktop actually is. It is: the read
-// is synchronous, `handle` runs to completion before the next line is read,
-// and even the async capture blocks this loop on its semaphore rather than
-// returning to it.
-//
-// Anything added below that returns before its work is finished breaks this,
-// and nothing above would notice.
+// Execute input sequences serially. The separate reader records cancellation
+// immediately, including while an asynchronous action is awaiting its next step.
 let incoming = AsyncStream<String> { continuation in
     DispatchQueue.global(qos: .userInitiated).async {
         while let line = readLine(strippingNewline: true) {

@@ -31,7 +31,7 @@ func openAnswer() map[string]any {
 func TestOpenResolvesClosedAppsWithoutTrustingCallerTargets(t *testing.T) {
 	runner, err := desktop.New(desktop.Options{
 		Session: fakeHelper(t, map[string]any{
-			"health": map[string]any{"accessibility": true}, "open": openAnswer(),
+			"health": map[string]any{"accessibility": true, "input_monitor_active": true}, "open": openAnswer(),
 		}),
 		Allowed: []string{}, ActionAllowed: []string{"com.apple.calculator"},
 		Responsible: func() bool { return true },
@@ -72,7 +72,7 @@ func TestOpenEnforcesIndependentActionAllowListAndDeniedPrecedence(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner, err := desktop.New(desktop.Options{
-				Session: fakeHelper(t, map[string]any{"health": map[string]any{"accessibility": true}}),
+				Session: fakeHelper(t, map[string]any{"health": map[string]any{"accessibility": true, "input_monitor_active": true}}),
 				Allowed: tc.allowed, ActionAllowed: tc.actions, Denied: tc.denied,
 				Responsible: func() bool { return true },
 			})
@@ -101,7 +101,7 @@ func TestOpenRefusesUnconfirmedOrMismatchedReceiptsWithoutRetry(t *testing.T) {
 				answer[field] = "com.apple.finder"
 			}
 			runner, err := desktop.New(desktop.Options{
-				Session:       fakeHelper(t, map[string]any{"health": map[string]any{"accessibility": true}, "open": answer}),
+				Session:       fakeHelper(t, map[string]any{"health": map[string]any{"accessibility": true, "input_monitor_active": true}, "open": answer}),
 				ActionAllowed: []string{"*"}, Responsible: func() bool { return true },
 			})
 			if err != nil {
