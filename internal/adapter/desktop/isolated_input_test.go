@@ -120,6 +120,37 @@ func privateReceipt() map[string]any {
 		"frontmost_before": 77, "frontmost_after": 77, "elapsed_ms": 23.5, "virtual_pointer": []float64{30, 40}}
 }
 
+func TestInspectionSupportsRedactedNodes(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(cfg.Capabilities, func(c contract.Capability) bool { return c.ID == "desktop.inspect" })
+	req := request(t, cfg.Capabilities[idx], map[string]any{"application": "com.apple.Notes"})
+	req.Implementation.ID = "macos.inspect"
+	session := fakeHelper(t, map[string]any{
+		"health":    map[string]any{"accessibility": true},
+		"list_apps": map[string]any{"apps": []any{map[string]any{"pid": 42, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
+		"inspect": map[string]any{"nodes": []any{map[string]any{"role": "AXStaticText", "depth": 0,
+			"app": "Notes", "bundle_id": "com.apple.Notes", "redacted": true}}, "count": 1},
+	})
+	runner, err := desktop.New(desktop.Options{Session: session, Responsible: func() bool { return true }, Allowed: []string{"com.apple.Notes"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := req.Capability.ValidateOutput(out.Result); err != nil {
+		t.Fatalf("privacy indicator is incompatible with the advertised output: %v", err)
+	}
+	node := out.Result["nodes"].([]map[string]any)[0]
+	if node["redacted"] != true || node["value"] != nil {
+		t.Fatal("redaction status or omitted value was lost")
+	}
+}
+
 func TestPrivateInputRequiresMonitorAndNewHelperEvenWithoutVisuals(t *testing.T) {
 	for _, tc := range []struct {
 		name              string

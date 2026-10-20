@@ -786,6 +786,9 @@ allow-lists and grants unchanged. A legacy output without that record is
 refused before contacting the helper; otherwise output validation could reject
 an acknowledgement after the action already happened. Confirm the new record
 in all six MCP `tools/list` output schemas before functional acceptance.
+The `desktop.inspect` node output also needs the optional boolean `redacted`,
+which identifies values omitted by privacy checks. Copy that field from the
+matching default declaration when upgrading an explicit catalog.
 
 Keyboard actions query the target application, not global focus. Unknown or
 secure focused elements, unknown text-field subroles and ambiguous target windows

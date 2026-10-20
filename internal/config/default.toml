@@ -2650,6 +2650,12 @@ effects = ["read", "device"]
     required = false
     summary = "The node's description, when it has one."
 
+    [[capability.output.field]]
+    name = "redacted"
+    type = "bool"
+    required = false
+    summary = "True when privacy checks omitted this node's attribute values."
+
   [[capability.output]]
   name = "count"
   type = "int"
