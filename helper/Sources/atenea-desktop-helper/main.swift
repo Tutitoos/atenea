@@ -25,7 +25,8 @@ let version = "0.1.0"
 // LSUIElement keeps it out of the Dock.
 _ = NSApplication.shared
 NSApplication.shared.setActivationPolicy(.accessory)
-InputMonitor.shared.start()
+// Swift 5.10 does not infer main-actor isolation for synchronous top-level code.
+MainActor.assumeIsolated { InputMonitor.shared.start() }
 
 struct TargetArguments {
     let pid: pid_t
