@@ -3,6 +3,14 @@ import AppKit
 @testable import atenea_desktop_helper
 
 final class InputSafetyTests: XCTestCase {
+    func testTypingSeparatesCommandsWithoutSplittingUnicodeCharacters() {
+        let text = "\nCUA paralelo 20 octubre ñ 314\n"
+        XCTAssertEqual(Input.textChunks(text), ["\n", "CUA paralelo 20 octu", "bre ñ 314", "\n"])
+        XCTAssertEqual(Input.textChunks("a\tb\r\nc"), ["a", "\t", "b", "\r\n", "c"])
+        let emoji = String(repeating: "👩🏽‍💻", count: 4)
+        XCTAssertEqual(Input.textChunks(emoji).joined(), emoji)
+        XCTAssertEqual(Input.textChunks(""), [])
+    }
     func testInactiveOrUnknownConsoleSessionIsRefused() {
         XCTAssertTrue(Permissions.sessionAvailable(onConsole: true, loggedIn: true, frontmostBundle: "test", hasScreens: true))
         for (console, login, bundle, screens) in [
@@ -44,6 +52,10 @@ final class InputSafetyTests: XCTestCase {
             let event = try XCTUnwrap(session.mouse(type, at: CGPoint(x: -400, y: -100)))
             XCTAssertEqual(event.location, CGPoint(x: 100, y: 100))
             XCTAssertEqual(NSEvent(cgEvent: event)?.windowNumber, 919191)
+        }
+        for type in [CGEventType.leftMouseDown, .leftMouseDragged, .leftMouseUp] {
+            let event = try XCTUnwrap(session.mouse(type, at: CGPoint(x: -400, y: -100), eventNumber: 83))
+            XCTAssertEqual(event.getIntegerValueField(.mouseEventNumber), 83)
         }
         XCTAssertEqual(InputSession.dragPoint(from: .zero, to: CGPoint(x: 180, y: 90), step: 1), CGPoint(x: 10, y: 5))
     }

@@ -142,6 +142,22 @@ enum Input {
         "a": 0, "c": 8, "v": 9, "x": 7, "z": 6, "s": 1, "f": 3, "w": 13, "q": 12,
     ]
 
+    nonisolated static func textChunks(_ text: String) -> [String] {
+        var chunks: [String] = []
+        var current = ""
+        for character in text {
+            // AppKit interprets a leading newline/tab as a command for the entire event.
+            if character.isNewline || character == "\t" {
+                if !current.isEmpty { chunks.append(current); current = "" }
+                chunks.append(String(character))
+            } else {
+                current.append(character)
+                if current.utf16.count >= 20 { chunks.append(current); current = "" }
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
+    }
 
 }
 
@@ -182,7 +198,7 @@ final class InputSession {
         eventsSent += 1
     }
 
-    func mouse(_ type: CGEventType, at point: CGPoint, clicks: Int = 1) -> CGEvent? {
+    func mouse(_ type: CGEventType, at point: CGPoint, clicks: Int = 1, eventNumber: Int? = nil) -> CGEvent? {
         guard let eventType = NSEvent.EventType(rawValue: UInt(type.rawValue)) else { return nil }
         let local = CGPoint(x: point.x - target.frame.minX, y: point.y - target.frame.minY)
         // Foreign window IDs are not NSWindows owned by this helper. Build a
@@ -192,7 +208,7 @@ final class InputSession {
         guard let event = NSEvent.mouseEvent(with: eventType,
             location: CGPoint(x: local.x, y: height - local.y), modifierFlags: [],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: Int(target.windowID),
-            context: nil, eventNumber: eventsSent + 1, clickCount: clicks,
+            context: nil, eventNumber: eventNumber ?? eventsSent + 1, clickCount: clicks,
             pressure: type == .leftMouseDown || type == .leftMouseDragged ? 1 : 0)?.cgEvent,
             event.location == local, NSEvent(cgEvent: event)?.windowNumber == Int(target.windowID) else { return nil }
         event.setSource(source)
@@ -257,24 +273,26 @@ final class InputSession {
     func drag(from start: CGPoint, to end: CGPoint, visualFeedback: Bool) async throws {
         var last = start
         var down = false
+        // AppKit associates a mouse-up with its down by event number, including cancellation cleanup.
+        let eventNumber = eventsSent + 1
         // Cleanup stays in this PID at the last dispatched point, before the
         // gate finishes. A partial drag is not rolled back or replayed.
         defer {
-            if down { release(mouse(.leftMouseUp, at: last)) }
+            if down { release(mouse(.leftMouseUp, at: last, eventNumber: eventNumber)) }
         }
         try await checkpoint(at: start)
-        try post(mouse(.leftMouseDown, at: start), point: start)
+        try post(mouse(.leftMouseDown, at: start, eventNumber: eventNumber), point: start)
         down = true
         for step in 1...18 {
             let point = Self.dragPoint(from: start, to: end, step: step)
             try await checkpoint(at: point)
-            try post(mouse(.leftMouseDragged, at: point), point: point)
+            try post(mouse(.leftMouseDragged, at: point, eventNumber: eventNumber), point: point)
             last = point
             if visualFeedback { VisualFeedbackController.shared.setCursor(globalPoint: point) }
             try await Task.sleep(nanoseconds: 16_000_000)
         }
         try await checkpoint(at: end)
-        try post(mouse(.leftMouseUp, at: end), point: end)
+        try post(mouse(.leftMouseUp, at: end, eventNumber: eventNumber), point: end)
         down = false
     }
 
@@ -303,11 +321,15 @@ final class InputSession {
 
     func type(_ text: String) async throws {
         guard !text.isEmpty else { throw RPCError.invalidParams("text must not be empty") }
+        let field = try WindowSafety.focusedElement(target)
         var sent = 0
         do {
-            for chunk in text.chunked(20) {
+            for chunk in Input.textChunks(text) {
                 try await checkpoint()
                 try await Input.refuseIfSecureFieldFocused(target)
+                guard CFEqual(field, try WindowSafety.focusedElement(target)) else {
+                    throw RPCError.denied("the target field changed; no further text sent")
+                }
                 let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
                 let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
                 var utf16 = Array(chunk.utf16)
@@ -319,7 +341,7 @@ final class InputSession {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
         } catch {
-            if sent > 0 { throw RPCError.canceled("typing stopped after \(sent) characters; observe partial effects before another action") }
+            if sent > 0 { throw RPCError.canceled("typing stopped after dispatching \(sent) characters; observe partial effects before another action") }
             throw error
         }
     }
@@ -377,18 +399,5 @@ final class InputSession {
         backend = "ax_selection"
         eventsSent += 1
         return true
-    }
-}
-
-private extension String {
-    func chunked(_ size: Int) -> [String] {
-        var out: [String] = []
-        var current = ""
-        for character in self {
-            current.append(character)
-            if current.utf16.count >= size { out.append(current); current = "" }
-        }
-        if !current.isEmpty { out.append(current) }
-        return out
     }
 }

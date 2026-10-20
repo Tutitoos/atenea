@@ -54,11 +54,26 @@ expected and reported. `target` and `decoy` are optional static comparison modes
 that explicitly activate a fixture and require a separately coordinated quiet
 interval; do not use them for concurrent acceptance.
 
-The matrix covers a button, double click, logical CUA pointer, drag, scrolling,
-literal text, selection shortcut and replacement text. Hover is reported
-separately: a logical pointer position does not prove an app accepted hover.
+The matrix covers a button, double click, logical CUA pointer, hover, drag,
+scrolling, literal text, selection shortcut and replacement text. Hover must
+increment the canvas handler count; a logical pointer position alone passes
+only the pointer case. The matrix fails if either hover or drag has no effect.
 Some views ignore background mouse events. Keep that failure visible; do not
 add a global input fallback or change the fixture to accept first mouse.
+AppKit can consume the initial click in an inactive window and dispatch bare
+mouse movements to the first responder instead of the view under the point.
+The received window/coordinates and mouse event numbers are recorded to
+distinguish delivery from responder and tracking behavior. Private PID input
+does not provide a second system cursor that every application will consult.
+
+The observer also counts HID keyboard presses, mouse motion and button presses,
+without retaining key usages, typed contents or device identities. Check that
+the observer file is fresh and `hid_open_result` is zero. Non-CUA events at the
+annotated event tap are recorded by source and destination; those counts alone
+do not prove physical activity. For a concurrent acceptance, confirm real HID
+activity during the action interval and ask the person about interference.
+Human activation of the target ends a background-only test and is not proof
+that CUA activated it.
 
 Run the transport diagnostic checks with
 `python3 -m unittest discover -s helper/Fixtures/IsolatedInput -p 'test_*.py'`.

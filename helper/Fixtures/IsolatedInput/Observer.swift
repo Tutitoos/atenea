@@ -2,6 +2,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import IOKit.hid
 
 let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 let app = NSApplication.shared
@@ -37,6 +38,10 @@ var activations = 0
 var targetActivations = 0
 var globalMarkers = 0
 var destinations: [String: Int] = [:]
+var inputSources: [String: Int] = [:]
+var hardwareKeys = 0
+var hardwareMotion = 0
+var hardwareButtons = 0
 var maxGap = 0.0
 var previous = Date()
 let activation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
@@ -57,6 +62,8 @@ let annotatedTap = CGEvent.tapCreate(tap: .cgAnnotatedSessionEventTap, place: .h
     eventsOfInterest: mask, callback: { _, _, event, _ in
         if !phase.isEmpty && event.getIntegerValueField(.eventSourceUserData) != 0x4154454E4541 {
             destinations[String(event.getIntegerValueField(.eventTargetUnixProcessID)), default: 0] += 1
+            let source = "pid=\(event.getIntegerValueField(.eventSourceUnixProcessID)) state=\(event.getIntegerValueField(.eventSourceStateID)) type=\(event.type.rawValue)"
+            inputSources[source, default: 0] += 1
         }
         return Unmanaged.passUnretained(event)
     }, userInfo: nil)
@@ -67,11 +74,30 @@ for tap in [globalTap, annotatedTap].compactMap({ $0 }) {
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
     CGEvent.tapEnable(tap: tap, enable: true)
 }
+// Count HID activity without retaining key usages, values or device identity.
+let hid = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+let matching = [2, 6].map { [kIOHIDDeviceUsagePageKey: 1, kIOHIDDeviceUsageKey: $0] }
+IOHIDManagerSetDeviceMatchingMultiple(hid, matching as CFArray)
+IOHIDManagerRegisterInputValueCallback(hid, { _, result, _, value in
+    guard result == kIOReturnSuccess, !phase.isEmpty else { return }
+    let element = IOHIDValueGetElement(value)
+    let page = IOHIDElementGetUsagePage(element)
+    let usage = IOHIDElementGetUsage(element)
+    let value = IOHIDValueGetIntegerValue(value)
+    if page == 7 && value != 0 { hardwareKeys += 1 }
+    if page == 1 && [0x30, 0x31, 0x38].contains(usage) && value != 0 { hardwareMotion += 1 }
+    if page == 9 && value != 0 { hardwareButtons += 1 }
+}, nil)
+IOHIDManagerScheduleWithRunLoop(hid, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+let hidOpenResult = IOHIDManagerOpen(hid, IOOptionBits(kIOHIDOptionsTypeNone))
+let hidDeviceCount = (IOHIDManagerCopyDevices(hid) as? Set<IOHIDDevice>)?.count ?? 0
 func write() {
     let payload: [String: Any] = ["phase": phase, "samples": samples, "pointer_changes": pointerChanges,
         "frontmost_changes": frontChanges, "focus_changes": focusChanges, "state_changes": stateChanges,
         "activation_notifications": activations, "target_activations": targetActivations,
         "global_marker_events": globalMarkers, "human_destination_events": destinations,
+        "input_sources": inputSources, "hid_open_result": hidOpenResult, "hid_device_count": hidDeviceCount,
+        "hardware_key_presses": hardwareKeys, "hardware_motion_events": hardwareMotion, "hardware_button_presses": hardwareButtons,
         "taps_active": [globalTap, annotatedTap].allSatisfy { $0.map { CGEvent.tapIsEnabled(tap: $0) } ?? false },
         "max_sample_gap_ms": maxGap * 1000,
         "focus_readable": baselineFocus != nil, "trusted": AXIsProcessTrusted()]
@@ -90,6 +116,7 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.001, repeats: true) { _ in
         phase = name; baselinePointer = pointer; baselineFront = front; baselineFocus = focus(); baselineState = state
         samples = 0; pointerChanges = 0; frontChanges = 0; focusChanges = 0; stateChanges = 0; activations = 0
         targetActivations = 0; globalMarkers = 0; destinations = [:]; maxGap = 0; previous = now
+        inputSources = [:]; hardwareKeys = 0; hardwareMotion = 0; hardwareButtons = 0
     }
     maxGap = max(maxGap, now.timeIntervalSince(previous)); previous = now
     samples += 1

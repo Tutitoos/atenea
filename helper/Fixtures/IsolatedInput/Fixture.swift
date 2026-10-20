@@ -86,6 +86,8 @@ window.makeFirstResponder(editor)
 var events: [String: Int] = [:]
 var markedEvents: [String: Int] = [:]
 var markedMouse: [[Double]] = []
+var markedMouseNumbers: [Int] = []
+var markedMoves: [[String: Any]] = []
 var markedKeys: [[UInt64]] = []
 var wrongWindowEvents = 0
 let marker: Int64 = 0x4154454E4541
@@ -97,6 +99,14 @@ let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .lef
         if [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
             let p = canvas.convert(event.locationInWindow, from: nil)
             markedMouse.append([Double(event.type.rawValue), p.x, p.y])
+            markedMouseNumbers.append(event.eventNumber)
+        }
+        if event.type == .mouseMoved {
+            let point = event.locationInWindow
+            let cgPoint = event.cgEvent?.location ?? .zero
+            markedMoves.append(["window": event.windowNumber, "has_window": event.window != nil,
+                "x": point.x, "y": point.y, "cg_x": cgPoint.x, "cg_y": cgPoint.y,
+                "canvas_hit": window.contentView?.hitTest(point) === canvas])
         }
         if [.keyDown, .keyUp, .flagsChanged].contains(event.type) {
             markedKeys.append([UInt64(event.type.rawValue), UInt64(event.keyCode), UInt64(event.modifierFlags.rawValue)])
@@ -119,6 +129,7 @@ func snapshot() {
         "other_text": otherEditor.string, "secure_length": secure.stringValue.count,
         "count": actions.count, "events": events, "marked_events": markedEvents, "wrong_window_events": wrongWindowEvents,
         "marked_mouse": markedMouse, "marked_keys": markedKeys,
+        "marked_mouse_numbers": markedMouseNumbers, "marked_moves": markedMoves,
         "pointer": ["x": pointer.x, "y": pointer.y], "frontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
         "points": points, "drag_path": canvas.path, "releases": canvas.releases, "downs": canvas.downs, "moves": canvas.moves,
         "key_window_id": app.keyWindow?.windowNumber ?? 0, "second_window_id": second.windowNumber,

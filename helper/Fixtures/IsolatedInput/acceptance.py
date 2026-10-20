@@ -136,8 +136,9 @@ def main():
         else:
             h=r.get('receipt',{}).get('input',{});p=target()['points']['canvas']
             r['virtual_pointer_confirmed']=abs(h.get('virtual_pointer_x',-1)-p['x'])<.1 and abs(h.get('virtual_pointer_y',-1)-p['y'])<.1
-        r['hover_effect']=target()['moves']>b['moves']
         check('move',r,lambda:r['virtual_pointer_confirmed'])
+        check('hover',r,lambda:target()['moves']>b['moves'])
+        r['hover_effect']=matrix['hover']['effect_confirmed']
         b,r=action('drag','drag','dragStart');check('drag',r,lambda:len(target()['drag_path'])==18 and len(target()['releases'])==len(b['releases'])+1 and abs(target()['releases'][-1][0]-440)<2)
         b,r=action('scroll','scroll','scroll',dx=0,dy=-120);check('scroll',r,lambda:target()['scroll_y']!=b['scroll_y'])
         b,r=action('type','type',text='isolated lowercase ñ 123');check('type',r,lambda:'isolated lowercase ñ 123' in target()['text'])
@@ -148,6 +149,9 @@ def main():
         check('shift-left',r,lambda:target()['selection_length']==1)
         b,r=action('type','replace-character',text='Z')
         check('replace-character',r,lambda:target()['text']==b['text'][:-1]+'Z')
+        text='\nCUA paralelo 20 octubre ñ 314\na\tb\n👩🏽‍💻'
+        b,r=action('type','multiline-text',text=text)
+        check('multiline-text',r,lambda:target()['text']==b['text']+text)
     except Rejected as e:
         history.append({'phase':'aborted','error':e.payload,'no_replay':True})
         raise

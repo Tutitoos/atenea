@@ -61,6 +61,8 @@ def main():
             assert until(lambda:any(p[0]==2 for p in target()['marked_mouse'][offset:]))
             mouse=target()['marked_mouse'][offset:];path=[p for p in mouse if p[0]==6];releases=[p for p in mouse if p[0]==2]
             assert 2<=len(path)<18 and len(releases)==1 and releases[0][1:]==path[-1][1:] and releases[0][1]<440
+            numbers=target()['marked_mouse_numbers'][offset:]
+            assert len(numbers)==len(mouse) and len(set(numbers))==1,'drag release must match its down event number'
             results.append({'case':'canceled-drag','last_dispatched_release_confirmed':True,'no_destination_jump':True,'events':mouse,'error':response['error']})
 
         button('secure');s=shot()
