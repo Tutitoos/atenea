@@ -36,6 +36,9 @@ func TestClaimRemovesAStaleLockButRefusesAnUnreadableOne(t *testing.T) {
 		t.Fatalf("Claim stale lock: %v", err)
 	}
 	release()
+	if kernelLock {
+		return // the file's contents never refuse a claim here; see the next test
+	}
 
 	if err := os.WriteFile(path, []byte("not-a-pid"), 0o600); err != nil {
 		t.Fatal(err)
@@ -54,6 +57,27 @@ func TestClaimRemovesAStaleLockButRefusesAnUnreadableOne(t *testing.T) {
 	_, err = Claim(path)
 	if !errors.Is(err, ErrHeld) {
 		t.Fatalf("Claim live lock error = %v, want ErrHeld", err)
+	}
+}
+
+// A pid left in the file that now belongs to some unrelated live process (the
+// normal state after a reboot) must not keep the service down; only the
+// kernel's lock says who holds it, and a second claim while it is held fails.
+func TestKernelLockDecidesNotTheRecycledPid(t *testing.T) {
+	if !kernelLock {
+		t.Skip("no advisory lock on this system")
+	}
+	path := filepath.Join(t.TempDir(), "recycled.lock")
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getppid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := Claim(path)
+	if err != nil {
+		t.Fatalf("Claim over a lock naming a live but unrelated pid: %v", err)
+	}
+	defer release()
+	if _, err := Claim(path); !errors.Is(err, ErrHeld) {
+		t.Fatalf("second Claim while held = %v, want ErrHeld", err)
 	}
 }
 

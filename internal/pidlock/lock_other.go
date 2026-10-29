@@ -4,6 +4,10 @@ package pidlock
 
 import "os"
 
+// kernelLock is false: with no advisory lock the pid check in Claim is the
+// whole exclusion.
+const kernelLock = false
+
 // lockFile has no advisory lock to take outside the two systems Atenea
 // installs itself on, so it reports success and leaves the exclusion to the
 // pid check in Claim -- the cooperative protocol this package used everywhere

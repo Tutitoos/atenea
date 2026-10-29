@@ -41,12 +41,11 @@ var ErrHeld = errors.New("held by a live process")
 // Claim takes the lock at path for this process and returns the release. The
 // directory is created if it is missing.
 //
-// A lock left behind by a pid that no longer exists is taken over, because the
-// kernel already dropped that process's hold on it when it died; nothing has
-// to be removed and re-created for that to be safe. A lock whose pid is still
-// alive is refused with ErrHeld even when the advisory lock is somehow free,
-// which is what keeps the refusal honest on a system that has no advisory lock
-// at all and against a holder from an older build of this binary.
+// Where the kernel offers an advisory lock it alone decides: the pid in the
+// file is a name, not a verdict. After a reboot or a crash the pid left in the
+// file is routinely recycled by an unrelated process, and refusing on it kept
+// the service down until somebody deleted the file by hand. Only on a system
+// with no advisory lock does a live pid in the file refuse the claim.
 func Claim(path string) (release func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("lock directory: %w", err)
@@ -62,7 +61,7 @@ func Claim(path string) (release func(), err error) {
 		_ = f.Close()
 		return nil, ErrHeld
 	}
-	if occupied(path) {
+	if !kernelLock && occupied(path) {
 		_ = f.Close()
 		return nil, ErrHeld
 	}
