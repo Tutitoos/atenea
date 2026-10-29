@@ -68,7 +68,7 @@ final class VisualFeedbackController: NSObject {
         ensureMiniature()
         overlay?.setFrame(appKitFrame(target.frame), display: true)
         overlay?.orderFrontRegardless()
-        miniature?.orderFrontRegardless()
+        if let miniature, !miniature.isMiniaturized { miniature.orderFrontRegardless() }
         self.state = state
         stateLabel?.stringValue = "\(target.appName) • \(state.rawValue)"
         if let imageData, let image = NSImage(data: imageData) {
@@ -172,7 +172,7 @@ final class VisualFeedbackController: NSObject {
         ensureMiniature()
         state = .pausedByUser
         stateLabel?.stringValue = (target?.appName ?? "Atenea") + " • " + VisualState.pausedByUser.rawValue
-        miniature?.orderFrontRegardless()
+        if let miniature, !miniature.isMiniaturized { miniature.orderFrontRegardless() }
         preview?.alphaValue = 0.45
         resumeButton?.isHidden = false
         resumeButton?.title = "Resume"
@@ -316,7 +316,7 @@ final class VisualFeedbackController: NSObject {
         let defaultScreen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = saved.flatMap { NSRectFromString($0) } ?? NSRect(
             x: defaultScreen.maxX - 376, y: defaultScreen.maxY - 256, width: 360, height: 240)
-        let panel = NSPanel(contentRect: frame, styleMask: [.titled, .resizable, .nonactivatingPanel],
+        let panel = NSPanel(contentRect: frame, styleMask: [.titled, .miniaturizable, .resizable, .nonactivatingPanel],
                             backing: .buffered, defer: false)
         panel.title = "Atenea"
         panel.minSize = NSSize(width: 280, height: 180)
