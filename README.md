@@ -45,7 +45,7 @@ describe behavior that is still unavailable or depends on external providers.
 
 ### Build the current source
 
-Use Linux or macOS with Go **1.26.9 or newer** and a C/C++ toolchain for DuckDB's
+Use Linux or macOS with Go **1.26.10 or newer** and a C/C++ toolchain for DuckDB's
 cgo bindings. The supported release targets are `amd64` and `arm64` on both
 systems. External providers are installed separately.
 
