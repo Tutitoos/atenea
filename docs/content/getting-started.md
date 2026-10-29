@@ -7,7 +7,7 @@ weight: 1
 
 ## Requirements
 
-Go 1.26.9 or newer. Nothing else: Atenea is a single binary and its settings file.
+Go 1.26.10 or newer. Nothing else: Atenea is a single binary and its settings file.
 
 ## Build and run
 
