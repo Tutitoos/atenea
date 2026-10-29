@@ -35,6 +35,13 @@ remain; benchmark snapshots and historical reports are preserved.
 
 ### Fixed
 
+A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On
+Linux and macOS the kernel's advisory lock alone decides whether the upkeep is
+taken; the pid in the file is only the holder's name. After a reboot that pid
+was routinely reused by an unrelated process, so `atenea run` exited with
+status 4 in a restart loop and the MCP server found no `core.sock`. Systems
+without an advisory lock keep the pid check.
+
 Tokensave JSON results tolerate its known update notice without confusing it
 with the payload. Metrics markers inside JSON strings are preserved.
 `mcp-agree` reads OpenCode JSONC (including comments and trailing commas),

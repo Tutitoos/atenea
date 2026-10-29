@@ -7,6 +7,10 @@ import (
 	"syscall"
 )
 
+// kernelLock says lockFile is a real exclusion, so the pid written in the file
+// is only a name for the holder and never decides who may claim.
+const kernelLock = true
+
 // lockFile takes the kernel's exclusive hold on f, without blocking, and
 // reports whether it got it. The hold lasts until this file is closed or the
 // process dies, which is the property the whole package rests on: a holder

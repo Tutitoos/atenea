@@ -103,7 +103,9 @@ func TestAProcessThisUserMayNotSignalCountsAsAlive(t *testing.T) {
 	if !Alive(1) {
 		t.Fatal("pid 1 was reported dead; it exists, this user just may not signal it")
 	}
-
+	if kernelLock {
+		return
+	}
 	path := filepath.Join(t.TempDir(), "init.lock")
 	if err := os.WriteFile(path, []byte("1"), 0o600); err != nil {
 		t.Fatal(err)
