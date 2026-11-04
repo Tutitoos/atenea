@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -63,8 +62,7 @@ Commands:
                          --budget USD replaces what remains of the grant.
                          resume --list shows every run still worth it
   catalog                List capabilities, providers and repositories in full
-  dashboard ID            Check and open a dashboard; 'atenea' is the live panel
-  dashboard publish tailscale  Preview/publish the panel through Tailscale
+  dashboard ID            Check and open the dashboard declared by an MCP server
   intent [--json]        Read the client config this repo carries and say how
                          Atenea answers it; launches nothing from it
   detect [--repo ID]     Ask attached providers whether they already hold a
@@ -228,7 +226,6 @@ List every capability, its providers, and every registered repository.
 `,
 	"dashboard": `Usage: atenea dashboard ID [--check]
        atenea dashboard hosts [--dry-run] [--check] [--remove-obsolete]
-       atenea dashboard publish tailscale [--apply]
 
 Check and open the configured dashboard for one MCP. Opening is always manual;
 starting or probing an MCP never opens a browser.
@@ -236,9 +233,7 @@ starting or probing an MCP never opens a browser.
 Flags for an ID:
   --check       check accessibility without opening the browser
 
-The 'atenea' ID targets the embedded read-only observability panel. The
-'publish tailscale' form previews the Serve command; --apply is required to
-change Tailscale. The hosts form manages only Atenea's marked block in /etc/hosts. Use --dry-run
+The hosts form manages only Atenea's marked block in /etc/hosts. Use --dry-run
 to preview changes, and --check to inspect the file without writing it.
 `,
 	"detect": `Usage: atenea detect [flags]
@@ -479,7 +474,7 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
-	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|answer|cancel|resume|redo|native-fork|list|status|export|compare|panel
+	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|answer|cancel|resume|redo|native-fork|list|status|export|compare
 
 Run a graph of agent steps. The graph comes from a TOML file and is executed
 exactly as written: nothing here plans, splits or grows it.
@@ -524,7 +519,7 @@ limits.max_tokens is carried and validated as an advisory declaration. The
 model client can use its separate ReadTokens allowance to stop an observed
 conversation, but no provider-independent hard token ceiling is promised.
 
-Status, compare and panel accept their documented flags before or after ids.
+Status and compare accept their documented flags before or after ids.
 
   create PATH           write the graph down and print the plan; spawn nothing
   launch ID             commit the grant and run it
@@ -543,7 +538,6 @@ Status, compare and panel accept their documented flags before or after ids.
   compare A B           compare recorded tokens and duration between workflows
   native-fork inspect   inspect a pending or completed Codex child relationship
   native-fork bind      bind a verified child after an uncertain fork outcome
-  panel ID              print the read-only dashboard deep link; --open opens it
 
 Flags:
   --traces PATH         state database (workflows live beside the traces)
@@ -844,7 +838,8 @@ func main() {
 // commission that worked from one that did not, and the exit code is the only
 // channel it can read without parsing the screen.
 var errCommissionFailed = errors.New(
-	"the commission failed; the verdict above says which step and why")
+	"the commission failed; the verdict above says which step and why",
+)
 
 // exitCode maps the failure bins onto shell exit codes so a script can tell a
 // broken settings file from a provider that is simply down.
@@ -1070,10 +1065,12 @@ func cmdVersion(out io.Writer) error {
 
 // dashboardHostsPath is a seam for tests. The production value is the system
 // hosts file, but tests must be able to prove idempotency without touching it.
-var dashboardHostsPath = dashboard.HostsPath
-var dashboardOpen = func(rawURL string) error {
-	return dashboard.DefaultLauncher().Open(rawURL)
-}
+var (
+	dashboardHostsPath = dashboard.HostsPath
+	dashboardOpen      = func(rawURL string) error {
+		return dashboard.DefaultLauncher().Open(rawURL)
+	}
+)
 
 func cmdDashboard(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 {
@@ -1086,12 +1083,6 @@ func cmdDashboard(settingsPath string, args []string, out io.Writer) error {
 	}
 	if args[0] == "hosts" {
 		return cmdDashboardHosts(cfg, args[1:], out)
-	}
-	if args[0] == "publish" {
-		return cmdDashboardPublish(cfg, args[1:], out)
-	}
-	if args[0] == "atenea" {
-		return cmdAteneaDashboard(cfg, args[1:], out)
 	}
 	if args[0] == "--check" || args[0] == "--dry-run" {
 		return contract.Fail(contract.FailureInvalidInput,
@@ -1124,72 +1115,6 @@ func cmdDashboard(settingsPath string, args []string, out io.Writer) error {
 			"could not open dashboard %s at %s: %v", entry.ID, entry.URL, err)
 	}
 	fmt.Fprintf(out, "opened dashboard %s at %s\n", entry.ID, entry.URL)
-	return nil
-}
-
-func cmdAteneaDashboard(cfg config.Config, args []string, out io.Writer) error {
-	flags := flag.NewFlagSet("dashboard atenea", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	check := flags.Bool("check", false, "check without opening")
-	if err := flags.Parse(args); err != nil || len(flags.Args()) != 0 {
-		return contract.Fail(contract.FailureInvalidInput, "dashboard atenea takes only --check")
-	}
-	if !cfg.Dashboard.Enabled {
-		return contract.Fail(contract.FailureUnavailable, "the Atenea dashboard is disabled in settings")
-	}
-	_, port, err := net.SplitHostPort(cfg.Dashboard.Listen)
-	if err != nil {
-		return contract.Fail(contract.FailureInvalidInput, "invalid dashboard listener: %v", err)
-	}
-	url := "http://127.0.0.1:" + port + "/"
-	if err := dashboard.Check(context.Background(), url); err != nil {
-		return contract.Fail(contract.FailureUnavailable, "dashboard atenea is not accessible at %s: %v", url, err)
-	}
-	if *check {
-		fmt.Fprintf(out, "dashboard atenea accessible at %s\n", url)
-		return nil
-	}
-	if err := dashboardOpen(url); err != nil {
-		return contract.Fail(contract.FailureUnavailable, "could not open dashboard atenea at %s: %v", url, err)
-	}
-	fmt.Fprintf(out, "opened dashboard atenea at %s\n", url)
-	return nil
-}
-
-var dashboardPublishRun = func(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).CombinedOutput()
-}
-
-func cmdDashboardPublish(cfg config.Config, args []string, out io.Writer) error {
-	if len(args) == 0 || args[0] != "tailscale" {
-		return contract.Fail(contract.FailureInvalidInput, "dashboard publish needs 'tailscale'")
-	}
-	flags := flag.NewFlagSet("dashboard publish tailscale", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	apply := flags.Bool("apply", false, "apply the Serve configuration")
-	if err := flags.Parse(args[1:]); err != nil || len(flags.Args()) != 0 {
-		return contract.Fail(contract.FailureInvalidInput, "dashboard publish tailscale takes only --apply")
-	}
-	if !cfg.Dashboard.Enabled {
-		return contract.Fail(contract.FailureUnavailable, "the Atenea dashboard is disabled in settings")
-	}
-	_, port, err := net.SplitHostPort(cfg.Dashboard.Listen)
-	if err != nil {
-		return contract.Fail(contract.FailureInvalidInput, "invalid dashboard listener: %v", err)
-	}
-	serveArgs := []string{"serve", "--https=443", "http://127.0.0.1:" + port}
-	fmt.Fprintf(out, "tailscale command: tailscale %s\n", strings.Join(serveArgs, " "))
-	if !*apply {
-		fmt.Fprintln(out, "dry-run: use --apply to modify Tailscale Serve")
-		return nil
-	}
-	body, err := dashboardPublishRun("tailscale", serveArgs...)
-	if err != nil {
-		return contract.Fail(contract.FailureUnavailable, "tailscale serve failed: %s", strings.TrimSpace(string(body)))
-	}
-	if len(body) > 0 {
-		fmt.Fprint(out, string(body))
-	}
 	return nil
 }
 

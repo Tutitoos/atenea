@@ -28,5 +28,5 @@ Refs #<!-- exactly one primary issue while work remains. Use Closes only when th
 - [ ] `Closes` is used only if the issue checklist and QA are complete
 - [ ] Acceptance criteria are satisfied
 - [ ] No credentials, personal data, temporary evidence, or unintended files are included
-- [ ] Tests, documentation, and embedded dashboard assets are current
+- [ ] Tests and documentation are current
 - [ ] Breaking changes and unsupported evidence are explicit

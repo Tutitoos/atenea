@@ -78,7 +78,6 @@ trap rollback EXIT
 
 echo "building"
 cd "$root"
-bash "$root/scripts/dashboard-build.sh"
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/atenea-install.XXXXXX")"
 chmod 0700 "$build_dir"
 build_bin="$build_dir/atenea"

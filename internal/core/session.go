@@ -9,12 +9,37 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+// safeText redacts and truncates untrusted text on a rune boundary before it
+// becomes a session name, an origin label or a notification.
+func safeText(raw string, limit int) string {
+	raw = contract.RedactRaw(strings.TrimSpace(raw))
+	if limit <= 0 {
+		return ""
+	}
+	if len(raw) > limit {
+		if limit <= len("…") {
+			cut := limit
+			for cut > 0 && !utf8.RuneStart(raw[cut]) {
+				cut--
+			}
+			return raw[:cut]
+		}
+		cut := limit - len("…")
+		for cut > 0 && !utf8.RuneStart(raw[cut]) {
+			cut--
+		}
+		return raw[:cut] + "…"
+	}
+	return raw
+}
 
 // Session is one chat's view of Atenea.
 //
@@ -183,13 +208,13 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 			"session %s is already open", id)
 	}
 	project := c.projectForWorkspace(opts.Workspace)
-	name := safeDashboardText(opts.Title, 120)
+	name := safeText(opts.Title, 120)
 	basis := "unknown"
 	priority := 0
 	if name != "" {
 		basis, priority = "provided", 4
 	} else if opts.Origin.Surface != "" || project != "" {
-		surface := cmp.Or(safeDashboardText(opts.Origin.Surface, 40), safeDashboardText(opts.Client, 40), "cliente")
+		surface := cmp.Or(safeText(opts.Origin.Surface, 40), safeText(opts.Client, 40), "cliente")
 		projectName := cmp.Or(project, "proyecto desconocido")
 		name, basis, priority = "Sesión de "+surface+" · "+projectName, "derived", 1
 	}
@@ -203,7 +228,7 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 		opened: time.Now(),
 		name:   name, nameBasis: basis, namePriority: priority,
 		primaryProject:   project,
-		origin:           SessionOrigin{Surface: safeDashboardText(opts.Origin.Surface, 40), Transport: safeDashboardText(opts.Origin.Transport, 40)},
+		origin:           SessionOrigin{Surface: safeText(opts.Origin.Surface, 40), Transport: safeText(opts.Origin.Transport, 40)},
 		externalObserved: strings.TrimSpace(opts.ExternalID) != "",
 	}
 	c.sessions[id] = session
@@ -369,8 +394,8 @@ func (c *Core) projectForWorkspace(workspace string) string {
 }
 
 func (s *Session) deriveName(objective, project string) {
-	objective = safeDashboardText(objective, 120)
-	project = safeDashboardText(project, 80)
+	objective = safeText(objective, 120)
+	project = safeText(project, 80)
 	if objective == "" {
 		return
 	}

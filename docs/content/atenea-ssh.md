@@ -104,7 +104,7 @@ Development compiler/SDK requirements belong in the build matrix, separately fro
 ### Processes and trust boundaries
 
 1. `atenea-ssh` is a local launcher. It activates the current user's installed graphical app. Repeated launch must reuse that app, not create a second controller or probe any host.
-2. The Wails app renders packaged React/TypeScript assets. It has no durable history keys, remote credentials, shell API or production browser control listener. The published Atenea dashboard remains read-only.
+2. The Wails app renders packaged React/TypeScript assets. It has no durable history keys, remote credentials, shell API or production browser control listener.
 3. A separate unprivileged per-user controller owns inventory, vault access, encrypted history, outbox and remote request coordination. It starts on demand under a single-instance OS lock and persists independently of window close or Quit UI. Explicit Stop controller drains local admissions and preserves receipts; it does not cancel remote work.
 4. The controller uses the selected trusted SSH route to call a fixed connector protocol entry point. Prompts travel in bounded protocol input, never shell command text, arguments or environment. The target connector owns encrypted receipts, account/session admission and Codex interaction.
 5. Native notification adapters or a narrowly scoped same-user helper receive generic notices and opaque lookup IDs. They do not own history or execute remote requests.

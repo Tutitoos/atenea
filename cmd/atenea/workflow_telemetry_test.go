@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,43 +78,6 @@ func TestWorkflowCompareRequiresExistingMeasuredWorkflows(t *testing.T) {
 	out.Reset()
 	if err := workflowCompare([]string{"wf-a", "missing", "--traces", tracePath}, &out); err == nil {
 		t.Fatal("nonexistent workflow was accepted as a zero-valued comparison")
-	}
-}
-
-func TestWorkflowPanelRequiresEnabledDashboardAndExistingWorkflow(t *testing.T) {
-	settingsPath := filepath.Join(t.TempDir(), "atenea.toml")
-	body := settings + "\n[dashboard]\nenabled = true\nlisten = \"127.0.0.1:8788\"\naccess = \"tailscale\"\n"
-	if err := os.WriteFile(settingsPath, []byte(body), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	store, err := workflow.Open(t.Context(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := workflow.Plan{Graph: workflow.Graph{Task: "panel", Steps: []workflow.Step{{ID: "one", PointID: "P06", PointTitle: "Panel", TypeName: "worker", Task: contract.Task{Objective: "show"}}}}, Pools: map[string]config.Pool{"one": config.PoolAgent}}
-	if err := store.CreateWithFingerprint(t.Context(), "wf-panel", plan, "repo", "tree", time.Now(), 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := workflowPanel(settingsPath, []string{"wf-panel"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "/workflows/wf-panel") {
-		t.Fatalf("panel url = %q", out.String())
-	}
-	if err := workflowPanel(settingsPath, []string{"missing"}, &out); err == nil {
-		t.Fatal("missing workflow received a panel URL")
-	}
-	disabled := filepath.Join(t.TempDir(), "atenea.toml")
-	if err := os.WriteFile(disabled, []byte(settings), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := workflowPanel(disabled, []string{"wf-panel"}, &out); err == nil {
-		t.Fatal("disabled dashboard received a panel URL")
 	}
 }
 

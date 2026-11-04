@@ -6,12 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/Tutitoos/atenea/internal/config"
-	"github.com/Tutitoos/atenea/internal/dashboard"
 	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -76,6 +73,7 @@ func aggregateMeasurement(measured, estimated, partial, unknown int) workflow.Me
 	}
 	return workflow.MeasurementMeasured
 }
+
 func telemetryTotals(rows []workflow.PlanPointTelemetry) (int64, time.Duration, workflow.MeasurementState, workflow.MeasurementState) {
 	var tokens int64
 	var duration time.Duration
@@ -97,6 +95,7 @@ func durationMeasurement(duration time.Duration) workflow.MeasurementState {
 	}
 	return workflow.MeasurementUnknown
 }
+
 func measuredValue(value int64, state workflow.MeasurementState) string {
 	if state == workflow.MeasurementUnknown {
 		return "unknown"
@@ -106,6 +105,7 @@ func measuredValue(value int64, state workflow.MeasurementState) string {
 	}
 	return fmt.Sprintf("%d(%s)", value, state)
 }
+
 func measuredDuration(value time.Duration, state workflow.MeasurementState) string {
 	if state == workflow.MeasurementUnknown {
 		return "unknown"
@@ -191,49 +191,6 @@ func workflowCompare(args []string, out io.Writer) error {
 	}
 	_, err = fmt.Fprintf(out, "workflow_a=%s tokens=%s duration=%s\nworkflow_b=%s tokens=%s duration=%s\ndelta_tokens=%s delta_duration=%s\n", flags.Arg(0), measuredValue(aTok, aState), measuredDuration(aDur, aDurationState), flags.Arg(1), measuredValue(bTok, bState), measuredDuration(bDur, bDurationState), deltaTokens, deltaDuration)
 	return err
-}
-
-func workflowPanel(settingsPath string, args []string, out io.Writer) error {
-	open := false
-	var id string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--open" {
-			open = true
-		} else if id == "" {
-			id = arg
-		} else {
-			return contract.Fail(contract.FailureInvalidInput, "workflow panel takes one workflow id")
-		}
-	}
-	if id == "" {
-		return contract.Fail(contract.FailureInvalidInput, "workflow panel takes one workflow id")
-	}
-	cfg, err := config.LoadEffective(settingsPath)
-	if err != nil {
-		return err
-	}
-	if !cfg.Dashboard.Enabled {
-		return contract.Fail(contract.FailureUnavailable, "workflow panel requires [dashboard] enabled = true")
-	}
-	store, err := workflow.Open(context.Background(), "")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = store.Close() }()
-	if _, err := store.Load(context.Background(), id); err != nil {
-		return err
-	}
-	address := cfg.Dashboard.Listen
-	if address == "" {
-		address = "127.0.0.1:8788"
-	}
-	raw := "http://" + address + "/workflows/" + url.PathEscape(id)
-	fmt.Fprintln(out, raw)
-	if open {
-		return dashboard.DefaultLauncher().Open(raw)
-	}
-	return nil
 }
 
 func cmdAgents(args []string, out io.Writer) error {

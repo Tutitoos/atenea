@@ -35,7 +35,7 @@ documentation at its release tag. Contract 3.x configurations require the
   one MCP connection. Clients discover the actual tool surface at runtime.
 - Applies effect permissions and spending grants, records attempts and run
   receipts, and supports diagnostics, resumable work and state backups.
-- Provides terminal activity reports and an optional embedded dashboard.
+- Provides terminal activity reports.
 
 The [architecture guide](docs/content/architecture.md) explains the selector,
 orchestrator and adapter boundaries. [Current limits](docs/content/not-built-yet.md)
@@ -57,9 +57,8 @@ export PATH="$PWD/bin:$PATH"
 atenea version
 ```
 
-The generated dashboard assets are committed, so building the Go binary does
-not require Bun. Bun is needed when changing the dashboard; Swift and the macOS
-permissions setup are needed for the optional desktop helper.
+Swift and the macOS permissions setup are needed for the optional desktop
+helper.
 
 ### Install a published release
 
@@ -242,11 +241,10 @@ launchctl kickstart -k "gui/$(id -u)/com.tutitoos.atenea"
 
 Use `atenea service status` and `atenea mcp --check` to inspect it. The service
 runs as your user. Its MCP socket is mode `0600` inside a `0700` directory.
-The optional dashboard has a separate HTTP listener.
 
 For an installation using macOS desktop control, use
-`bash scripts/install-dev.sh` from the checkout. It rebuilds the dashboard,
-builds Atenea and the Swift helper, signs them when an identity is available,
+`bash scripts/install-dev.sh` from the checkout. It builds Atenea and
+the Swift helper, signs them when an identity is available,
 installs them and restarts the service. See the
 [helper guide](helper/README.md) for signing and permission requirements.
 
@@ -298,12 +296,9 @@ provider probes; a successful handshake does not prove every tool works.
 Calendar periods, filters and historical limits are in the
 [stats guide](docs/content/stats.md).
 
-The optional dashboard displays service activity, runs, sessions, metrics,
-catalog and incidents. It is disabled by default and listens on
-`127.0.0.1:8788` when enabled. Configure `[dashboard]` and its access settings,
-restart the service, then open it with `atenea dashboard atenea`.
-`atenea dashboard publish tailscale` previews private publication;
-`--apply` performs it. See the [settings reference](docs/content/settings.md).
+`atenea dashboard ID` checks and opens the web UI that a declared provider or MCP
+server publishes in its own `dashboard` setting; see the
+[settings reference](docs/content/settings.md).
 
 Measurements are stored in DuckDB; run receipts, agent traces and incidents
 provide separate execution evidence. State normally lives under
@@ -337,23 +332,13 @@ go test -race ./...
 ```
 
 Pre-commit checks Go formatting, vet, lint and host-footer compatibility;
-pre-push runs the race suite. [CI](.github/workflows/ci.yml) also checks the
-dashboard, native platform builds, dependencies, provider contracts and helper
+pre-push runs the race suite. [CI](.github/workflows/ci.yml) also checks native
+platform builds, dependencies, provider contracts and helper
 code. The [release workflow](.github/workflows/release.yml) validates a tagged
 tree before publishing its artifacts. Passing local checks does not publish a
 release.
 
-For dashboard changes, use Bun **1.4.0** from the repository root:
-
-```sh
-bun ci --cwd dashboard
-bun run --cwd dashboard check
-bun run --cwd dashboard build
-```
-
-Commit the generated `internal/dashboard/web/dist/` assets with the source
-changes. [Dashboard development](dashboard/README.md) describes the dev server
-and API proxy. Optional Go hot reload uses [Air](https://github.com/air-verse/air)
+Optional Go hot reload uses [Air](https://github.com/air-verse/air)
 and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 
 ### Repository layout
@@ -363,7 +348,6 @@ and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 | [`cmd/`](cmd/) | CLI and benchmark entry points |
 | [`internal/`](internal/) | Core, adapters, runners, agents, workflows, storage and transports |
 | [`pkg/contract/`](pkg/contract/) | Versioned capability and adapter contracts |
-| [`dashboard/`](dashboard/) | React dashboard source, built with Bun and embedded in Go |
 | [`helper/`](helper/) | Swift desktop helper |
 | [`docs/`](docs/) | Hugo documentation sources and configuration |
 | [`benchmarks/`](benchmarks/) | Recorded runs and reproducible benchmark evidence |
@@ -379,6 +363,5 @@ Atenea builds on [ripgrep](https://github.com/BurntSushi/ripgrep),
 configured by its users. Documentation uses [Hugo](https://github.com/gohugoio/hugo)
 and [hugo-book](https://github.com/alex-shpak/hugo-book).
 
-Imported Go dependencies are listed in [go.mod](go.mod); dashboard dependencies
-are in [dashboard/package.json](dashboard/package.json). External CLIs, MCP
+Imported Go dependencies are listed in [go.mod](go.mod). External CLIs, MCP
 servers and helper runtimes are installed separately.

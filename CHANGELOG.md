@@ -50,6 +50,21 @@ or declared backends: `tools/mcp-agree` stops expecting them, `scripts/v1-policy
 no longer requires Context7 in the final audit, and tests use neutral server ids.
 Dated audit evidence that measured them is kept and marked as such (#209).
 
+Atenea's own embedded web dashboard is removed: the `dashboard/` Bun app, the
+committed `internal/dashboard/web/dist` assets, the HTTP server in
+`internal/dashboard`, the `[dashboard]` settings table, the Tailscale
+publication path (`atenea dashboard publish tailscale`), the `atenea` target of
+`atenea dashboard` and `atenea workflow panel`. The `dashboard / frontend` CI
+job, the release "Verify embedded dashboard" step, the AGENTS.md `bun run`
+rule and the `dashboard-build.sh` calls in the install and readiness scripts go
+with it; building Atenea no longer involves Bun and nothing listens on port
+8788 or 4444. A settings file that still has a `[dashboard]` table is refused at
+load with `unknown key(s): dashboard...`; delete the table. `atenea dashboard
+ID` and `atenea dashboard hosts` for a provider or MCP server that declares its
+own `dashboard` URL are unchanged. The contract version is unchanged. Dated
+audit evidence that measured the embedded dashboard is kept and marked as such
+(#211).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

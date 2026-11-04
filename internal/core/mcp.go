@@ -74,14 +74,18 @@ const (
 // nothing about which one to run against -- deliberately, because that is the
 // orchestrator's question. A caller at a terminal answers it with `--repo`. A
 // model has no equivalent unless the tool asks, so the tool asks.
-const repositoryArg = "repository"
-const routePreferArg = "_atenea_prefer"
+const (
+	repositoryArg  = "repository"
+	routePreferArg = "_atenea_prefer"
+)
 
 // toolListRepositories is Atenea's own discovery tool: no repository required,
 // no capability backing it, and no orchestrator in the path.
-const toolListRepositories = "catalog.repositories"
-const toolWorkspaceContext = workspacecontext.Capability
-const toolKnowledgeContext = "knowledge.context"
+const (
+	toolListRepositories = "catalog.repositories"
+	toolWorkspaceContext = workspacecontext.Capability
+	toolKnowledgeContext = "knowledge.context"
+)
 
 // conversation is one connection's worth of state, which is exactly one chat.
 //
@@ -508,8 +512,10 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 		for _, name := range *raw {
 			effect, err := contract.ParseEffect(name)
 			if err != nil {
-				return nil, &rpcError{Code: codeInvalidParams,
-					Message: "initialize: capabilities.experimental.atenea.grant: " + err.Error()}
+				return nil, &rpcError{
+					Code:    codeInvalidParams,
+					Message: "initialize: capabilities.experimental.atenea.grant: " + err.Error(),
+				}
 			}
 			asked = append(asked, effect)
 		}
@@ -625,13 +631,17 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		}
 		input, err := capability.InputSchema()
 		if err != nil {
-			return nil, &rpcError{Code: codeInternal,
-				Message: fmt.Sprintf("%s: input schema: %v", capability.ID, err)}
+			return nil, &rpcError{
+				Code:    codeInternal,
+				Message: fmt.Sprintf("%s: input schema: %v", capability.ID, err),
+			}
 		}
 		output, err := capability.OutputSchema()
 		if err != nil {
-			return nil, &rpcError{Code: codeInternal,
-				Message: fmt.Sprintf("%s: output schema: %v", capability.ID, err)}
+			return nil, &rpcError{
+				Code:    codeInternal,
+				Message: fmt.Sprintf("%s: output schema: %v", capability.ID, err),
+			}
 		}
 		tools = append(tools, map[string]any{
 			"name":         capability.ID,
@@ -1006,7 +1016,8 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		repos := v.core.catalog.Repositories()
 		if len(repos) != 1 {
 			return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
-				"%s is required: %d repositories are registered", repositoryArg, len(repos))}
+				"%s is required: %d repositories are registered", repositoryArg, len(repos),
+			)}
 		}
 		repository = repos[0].ID
 	}
@@ -1067,11 +1078,13 @@ func (v *conversation) knowledgeContextTool() map[string]any {
 		"inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
-				"scope": map[string]any{"type": "object", "additionalProperties": false,
+				"scope": map[string]any{
+					"type": "object", "additionalProperties": false,
 					"properties": map[string]any{
 						"project_id":    map[string]any{"type": "string"},
 						"repository_id": map[string]any{"type": "string"},
-					}, "required": []string{"project_id", "repository_id"}},
+					}, "required": []string{"project_id", "repository_id"},
+				},
 			},
 			"required": []string{"scope"},
 		},
@@ -1171,7 +1184,8 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 				"Call tools/list and verify that the raw MCP backend is available."), nil
 		}
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
-			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
+			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server,
+		)}
 	}
 	observedBackend = backend.Backend
 	if timeout := backend.declared.ToolTimeoutOf(tool); timeout > 0 {
@@ -1260,7 +1274,8 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	var out map[string]any
 	if err := json.Unmarshal(result, &out); err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: fmt.Sprintf(
-			"%s: the backend's answer is not an object: %v", params.Name, err)}
+			"%s: the backend's answer is not an object: %v", params.Name, err,
+		)}
 	}
 	if server == "agent-device" && out["isError"] != true {
 		v.rememberDeviceContext(tool, arguments)
@@ -1383,9 +1398,11 @@ func (v *conversation) workspaceContextTool() map[string]any {
 				},
 				"payload": map[string]any{"type": "object", "description": "Shared code.context inputs; each target remains a separate child."},
 				"continuations": map[string]any{
-					"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false,
+					"type": "array", "items": map[string]any{
+						"type": "object", "additionalProperties": false,
 						"properties": map[string]any{"repository": map[string]any{"type": "string"}, "cursor": map[string]any{"type": "string"}},
-						"required":   []string{"repository", "cursor"}},
+						"required":   []string{"repository", "cursor"},
+					},
 				},
 				"budget_usd":   map[string]any{"type": "number", "minimum": 0},
 				"max_parallel": map[string]any{"type": "integer", "minimum": 1, "maximum": workspacecontext.DefaultMaxParallel},
@@ -1427,7 +1444,7 @@ func (v *conversation) workspaceContext(ctx context.Context, arguments map[strin
 		if v.notify == nil {
 			return nil
 		}
-		id := safeDashboardText(target.ID, 80)
+		id := safeText(target.ID, 80)
 		markdown := "> **ATENEA · code.context** — busco contexto en el repositorio " + id + " para responder la consulta del espacio de trabajo."
 		return v.notify("notifications/message", map[string]any{
 			"level": "info", "logger": "atenea.activity", "data": markdown,
@@ -1570,6 +1587,8 @@ func booleanResult(value any) bool { out, _ := value.(bool); return out }
 // the work would have nothing to be attributed to -- invisible on the status
 // screen and outside the isolation every other caller runs inside.
 func notInitialized() *rpcError {
-	return &rpcError{Code: codeInvalid,
-		Message: "initialize must come first: there is no chat to work on behalf of yet"}
+	return &rpcError{
+		Code:    codeInvalid,
+		Message: "initialize must come first: there is no chat to work on behalf of yet",
+	}
 }
