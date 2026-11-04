@@ -12,9 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -113,9 +111,8 @@ type Report struct {
 }
 
 var productGates = []Gate{
-	{ID: "context", Title: "Repository, workspace and language context", ScenarioIDs: []string{"S01", "S02", "S03", "S04", "S05", "S06", "S07"}, Packages: []string{"./internal/adapter/kivgraph", "./internal/workspacecontext", "./internal/dartcoverage"}},
+	{ID: "context", Title: "Workspace context scope", ScenarioIDs: []string{"S04"}, Packages: []string{"./internal/workspacecontext"}},
 	{ID: "mcp", Title: "Legacy and modern MCP contracts", ScenarioIDs: []string{"S08", "S09"}, Packages: []string{"./internal/mcpcompat", "./internal/mcphttp", "./internal/mcpstdio", "./internal/mcpprobe", "./internal/passthrough"}},
-	{ID: "quality", Title: "Outcome-backed provider quality", ScenarioIDs: []string{"S01", "S02", "S05", "S06"}, Packages: []string{"./internal/selector", "./internal/orchestrator"}},
 }
 
 // GateInput is part of ATENEA's public orchestration contract.
@@ -145,13 +142,7 @@ type probeSpec struct {
 }
 
 var scenarioProbes = map[string]probeSpec{
-	"S01": {Package: "./internal/adapter/kivgraph", Tests: []string{"TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows"}},
-	"S02": {Package: "./internal/adapter/kivgraph", Tests: []string{"TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows"}},
-	"S03": {Package: "./internal/dartcoverage", Tests: []string{"TestRunRevalidatesS03S07WithoutChangingCorpus"}},
 	"S04": {Package: "./internal/workspacecontext", Tests: []string{"TestRunPreservesInputOrderAndSeparatesRepositories"}},
-	"S05": {Package: "./internal/adapter/kivgraph", Tests: []string{"TestImplementationsP13AcceptsGoAndTypeScriptExactRelations"}},
-	"S06": {Package: "./internal/adapter/kivgraph", Tests: []string{"TestImplementationsP13AcceptsGoAndTypeScriptExactRelations"}},
-	"S07": {Package: "./internal/dartcoverage", Tests: []string{"TestDartImplementationPreflightDoesNotDispatch"}},
 	"S08": {Package: "./internal/mcpcompat", Tests: []string{"TestParseAcceptsOnlyExactSupportedVersions"}},
 	"S09": {Package: "./internal/mcpcompat", Tests: []string{"TestParseAcceptsOnlyExactSupportedVersions"}},
 }
@@ -164,7 +155,7 @@ func Run(ctx context.Context, root string, run RunFunc) (Report, error) {
 // RunWith is part of ATENEA's public orchestration contract.
 func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Report, error) {
 	started := time.Now().UTC()
-	corpusRoot := filepath.Join(root, "benchmarks", "corpus", "v2")
+	corpusRoot := filepath.Join(root, "benchmarks", "corpus", "v3")
 	snapshot, err := corpus.LoadSnapshot(corpusRoot)
 	if err != nil {
 		return Report{}, err
@@ -190,7 +181,6 @@ func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Re
 		probe = runScenarioProbe
 	}
 	report := Report{SchemaVersion: 2, StartedAt: started, Commit: strings.TrimSpace(commit), SourceDirty: dirty, SourceDigest: digest, SourceFiles: files, CorpusHash: snapshot.Hash, Summary: map[string]int{}, Limits: []string{"Provider-real evidence remains pending unless a gate says real_provider.", "Unknown metrics stay unknown and are never converted to zero.", "No improvement percentage is claimed."}}
-	productBefore, productAfter := -1, -1
 	probed := make(map[string]ScenarioEvidence, len(snapshot.Manifest.Scenarios))
 	for _, scenario := range snapshot.Manifest.Scenarios {
 		if _, duplicate := probed[scenario.ID]; duplicate {
@@ -223,9 +213,6 @@ func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Re
 		}
 		begin := time.Now()
 		output, runErr := run(ctx, root, GateInput{GateID: gate.ID, Scenarios: append([]ScenarioEvidence(nil), gate.Scenarios...), Packages: append([]string(nil), gate.Packages...)})
-		if gate.ID == "context" {
-			productBefore, productAfter = contextCallMeasurement(output)
-		}
 		gate.Duration = time.Since(begin).Milliseconds()
 		gate.Passed, gate.MeasurementState, gate.EvidenceScope = runErr == nil, Measured, Local
 		gate.Evidence = clip(output, 1200)
@@ -245,7 +232,7 @@ func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Re
 			report.Summary["failed"]++
 		}
 	}
-	report.Comparison = compareCorpusAccess(snapshot, digest, productBefore, productAfter)
+	report.Comparison = compareCorpusAccess(snapshot, digest)
 	if !report.Comparison.Passed {
 		report.Summary["failed"]++
 		report.Summary["comparison_failed"]++
@@ -357,22 +344,7 @@ func requireExecutedTests(output string, expected []string) error {
 	return nil
 }
 
-var contextCalls = regexp.MustCompile(`code\.context fixture calls: before=([0-9]+) after=([0-9]+)`)
-
-func contextCallMeasurement(output string) (int, int) {
-	match := contextCalls.FindStringSubmatch(output)
-	if len(match) != 3 {
-		return -1, -1
-	}
-	before, err1 := strconv.Atoi(match[1])
-	after, err2 := strconv.Atoi(match[2])
-	if err1 != nil || err2 != nil {
-		return -1, -1
-	}
-	return before, after
-}
-
-func compareCorpusAccess(snapshot corpus.Snapshot, sourceDigest string, productBefore, productAfter int) Comparison {
+func compareCorpusAccess(snapshot corpus.Snapshot, sourceDigest string) Comparison {
 	result := Comparison{BeforeID: "unbatched-fixture-reads", AfterID: "snapshot-deduplicated-reads", CorpusHash: snapshot.Hash, SourceDigest: sourceDigest, Passed: true}
 	loops, beforeCalls := 200, 0
 	start := time.Now()
@@ -401,9 +373,7 @@ func compareCorpusAccess(snapshot corpus.Snapshot, sourceDigest string, productB
 	afterNS, afterCalls := float64(time.Since(start).Nanoseconds()), len(unique)*loops
 	callOK, latencyOK := afterCalls <= beforeCalls, afterNS <= beforeNS
 	zero := float64(0)
-	productKnown := productBefore >= 0 && productAfter >= 0
 	result.Metrics = []Metric{
-		{ID: "code_context_provider_calls", Unit: "calls", Before: optionalFloat(productBefore), After: optionalFloat(productAfter), MeasurementState: map[bool]MeasurementState{true: Partial, false: Unknown}[productKnown], EvidenceScope: map[bool]EvidenceScope{true: Local, false: Pending}[productKnown], Comparable: false, Evidence: "before is a code-derived historical estimate; after is observed from the productive twenty-row route"},
 		{ID: "fixture_read_calls", Unit: "calls", Before: f64(float64(beforeCalls)), After: f64(float64(afterCalls)), MeasurementState: Measured, EvidenceScope: Local, Comparable: true, NonRegression: boolp(callOK), Evidence: "same sealed scenarios; unbatched references versus deduplicated snapshot keys"},
 		{ID: "fixture_access_latency", Unit: "ns", Before: f64(beforeNS), After: f64(afterNS), MeasurementState: Measured, EvidenceScope: Local, Comparable: true, NonRegression: boolp(latencyOK), Evidence: "200 local iterations over the same sealed corpus; absolute durations only"},
 		{ID: "human_interventions", Unit: "count", Before: &zero, After: &zero, MeasurementState: Measured, EvidenceScope: Local, Comparable: true, NonRegression: boolp(true), Evidence: "provider-free harness required no interaction"},
@@ -415,13 +385,6 @@ func compareCorpusAccess(snapshot corpus.Snapshot, sourceDigest string, productB
 }
 func f64(v float64) *float64 { return &v }
 func boolp(v bool) *bool     { return &v }
-func optionalFloat(v int) *float64 {
-	if v < 0 {
-		return nil
-	}
-	value := float64(v)
-	return &value
-}
 
 func sourceIdentity(ctx context.Context, root, commit string) (string, int, bool, error) {
 	diff, err := command(ctx, root, []string{"git", "diff", "--binary", "HEAD", "--", "."}, nil)

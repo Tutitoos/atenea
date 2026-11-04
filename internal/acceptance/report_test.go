@@ -93,9 +93,6 @@ func TestProductReportKeepsCorpusFixedAndSeparatesLimits(t *testing.T) {
 			seen[scenario.ID] = true
 		}
 		output := "ok " + strings.Join(input.Packages, ",")
-		if input.GateID == "context" {
-			output += "\ncode.context fixture calls: before=22 after=2"
-		}
 		return output, nil
 	}, func(_ context.Context, _ string, input ScenarioInput) (string, error) {
 		probes++
@@ -107,10 +104,10 @@ func TestProductReportKeepsCorpusFixedAndSeparatesLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.CorpusHash == "" || report.SourceDigest == "" || calls != len(productGates) || probes != 9 || len(seen) != 9 || len(report.Limits) != 3 {
+	if report.CorpusHash == "" || report.SourceDigest == "" || calls != len(productGates) || probes != 3 || len(seen) != 3 || len(report.Limits) != 3 {
 		t.Fatalf("report = %+v calls=%d", report, calls)
 	}
-	if !report.Comparison.Passed || len(report.Comparison.Metrics) < 6 || report.Summary["passed"] != len(productGates)+1 {
+	if !report.Comparison.Passed || len(report.Comparison.Metrics) < 5 || report.Summary["passed"] != len(productGates)+1 {
 		t.Fatalf("comparison = %+v summary=%+v", report.Comparison, report.Summary)
 	}
 	if !strings.Contains(Markdown(report), "Provider-real evidence remains pending") {

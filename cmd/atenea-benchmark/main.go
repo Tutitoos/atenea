@@ -60,7 +60,7 @@ func main() {
 	profile := flag.String("profile", "quick", "quick, standard, qualification or stress")
 	runs := flag.Int("benchmark-runs", 3, "independent process runs per benchmark")
 	corpusOnly := flag.Bool("corpus-only", false, "validate the fixed provider-free acceptance corpus and write corpus evidence")
-	corpusRoot := flag.String("corpus-root", "benchmarks/corpus/v2", "fixed acceptance corpus root")
+	corpusRoot := flag.String("corpus-root", "benchmarks/corpus/v3", "fixed acceptance corpus root")
 	expectedCorpusHash := flag.String("expected-corpus-sha256", corpus.CanonicalCorpusSHA256, "independent SHA-256 pin for the acceptance corpus")
 	renderOnly := flag.Bool("render-only", false, "render docs from an existing summary")
 	validateOnly := flag.Bool("validate-only", false, "validate an existing summary")

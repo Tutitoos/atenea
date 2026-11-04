@@ -9,15 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"go/types"
 	"html"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -32,10 +26,11 @@ const (
 	ManifestName = "manifest.json"
 	// SchemaName is part of ATENEA's public orchestration contract.
 	SchemaName = "schema.json"
-	// CanonicalCorpusSHA256 pins benchmarks/corpus/v2 (S01-S09). Corpus v1 had
-	// twelve scenarios and the pin bb57b855...98a5; the code verifies only the
-	// pinned version, so v1 stays on disk as historical evidence.
-	CanonicalCorpusSHA256 = "d642cd100829353a9483dc1c1824c55798aafae633ce0c43a771f5f05cd26490"
+	// CanonicalCorpusSHA256 pins benchmarks/corpus/v3 (S04, S08, S09). Corpus v2
+	// had nine scenarios and the pin d642cd10...6490, and v1 twelve with the pin
+	// bb57b855...98a5; the code verifies only the pinned version, so older
+	// versions stay on disk as historical evidence.
+	CanonicalCorpusSHA256 = "ceed1238cfa16eb9b9718b5ef6a896638e16bdaad9a35ab26b35349e2beb5208"
 )
 
 // State is part of ATENEA's public orchestration contract.
@@ -86,13 +81,7 @@ type ScenarioSpec struct {
 }
 
 var canonicalCatalog = []ScenarioSpec{
-	{ID: "S01", Title: "Go repository context", Capability: "code.context", Language: "go", Check: "go_context", Fixture: "fixtures/go/repository.go", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S02", Title: "TypeScript repository context", Capability: "code.context", Language: "typescript", Check: "typescript_context", Fixture: "fixtures/typescript/repository.ts", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S03", Title: "Dart repository context", Capability: "code.context", Language: "dart", Check: "dart_context", Fixture: "fixtures/dart/repository.dart", AllowedStates: []State{Passed, Failed, Unsupported}},
 	{ID: "S04", Title: "Workspace context scope", Capability: "workspace.context", Language: "workspace", Check: "workspace_context", Fixture: "fixtures/workspace.json", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S05", Title: "Go implementation relation", Capability: "symbol.implementations", Language: "go", Check: "go_implementations", Fixture: "fixtures/go/repository.go", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S06", Title: "TypeScript implementation relation", Capability: "symbol.implementations", Language: "typescript", Check: "typescript_implementations", Fixture: "fixtures/typescript/repository.ts", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S07", Title: "Dart semantic implementation coverage", Capability: "symbol.implementations", Language: "dart", Check: "dart_implementations", Fixture: "fixtures/dart/repository.dart", AllowedStates: []State{Passed, Failed, Unsupported}},
 	{ID: "S08", Title: "MCP legacy protocol declaration", Capability: "mcp.compatibility", Language: "protocol", Check: "protocol_schema", Fixture: "fixtures/protocol-2025.json", ProtocolVersion: "2025-06-18", Transport: "stdio", AllowedStates: []State{Passed, Failed, Unsupported}},
 	{ID: "S09", Title: "MCP current protocol declaration", Capability: "mcp.compatibility", Language: "protocol", Check: "protocol_schema", Fixture: "fixtures/protocol-2026.json", ProtocolVersion: "2026-07-28", Transport: "streamable-http", AllowedStates: []State{Passed, Failed, Unsupported}},
 }
@@ -133,53 +122,6 @@ type ScenarioResult struct {
 	Evidence      string  `json:"evidence,omitempty"`
 	Failure       string  `json:"failure,omitempty"`
 	DurationMS    float64 `json:"duration_ms"`
-}
-
-// DartBaselineResult is the read-only result of revalidating the two Dart
-// scenarios in the fixed acceptance corpus. It deliberately exposes only the
-// baseline checks needed by the Dart coverage report; it does not run a
-// provider or modify the corpus.
-type DartBaselineResult struct {
-	ID         string `json:"id"`
-	Capability string `json:"capability"`
-	Language   string `json:"language"`
-	Preflight  State  `json:"fixture_preflight"`
-	State      State  `json:"state"`
-	Valid      bool   `json:"valid"`
-	Evidence   string `json:"evidence,omitempty"`
-}
-
-// RevalidateDartBaseline checks S03 and S07 against the pinned, provider-free
-// corpus. The snapshot is read once and the expected hash is required, so a
-// report cannot accidentally claim evidence from a changed corpus.
-func RevalidateDartBaseline(root, expectedHash string) ([]DartBaselineResult, string, error) {
-	if strings.TrimSpace(expectedHash) == "" {
-		expectedHash = CanonicalCorpusSHA256
-	}
-	snapshot, err := LoadSnapshot(root)
-	if err != nil {
-		return nil, "", err
-	}
-	if err := ValidateSHA256(expectedHash); err != nil {
-		return nil, "", err
-	}
-	if !strings.EqualFold(snapshot.Hash, expectedHash) {
-		return nil, "", fmt.Errorf("corpus sha256 mismatch: got %s, want %s", snapshot.Hash, strings.ToLower(expectedHash))
-	}
-	results := make([]DartBaselineResult, 0, 2)
-	for _, spec := range canonicalCatalog {
-		if spec.ID != "S03" && spec.ID != "S07" {
-			continue
-		}
-		preflight, detail := checkScenario(snapshot, spec)
-		valid := slices.Contains(spec.AllowedStates, preflight)
-		state := preflight
-		results = append(results, DartBaselineResult{
-			ID: spec.ID, Capability: spec.Capability, Language: spec.Language,
-			Preflight: preflight, State: state, Valid: valid, Evidence: detail,
-		})
-	}
-	return results, snapshot.Hash, nil
 }
 
 // Counts is part of ATENEA's public orchestration contract.
@@ -436,101 +378,13 @@ func checkScenario(snapshot Snapshot, spec ScenarioSpec) (State, string) {
 		return Failed, "fixture is absent from the snapshot"
 	}
 	switch spec.Check {
-	case "go_context":
-		return checkGo(data, false)
-	case "typescript_context":
-		return checkTypeScript(data, false)
-	case "dart_context":
-		return checkDart(data, false)
 	case "workspace_context":
 		return checkWorkspace(snapshot, data)
-	case "go_implementations":
-		return checkGo(data, true)
-	case "typescript_implementations":
-		return checkTypeScript(data, true)
-	case "dart_implementations":
-		return Unsupported, "Dart semantic implementation evidence is not supported locally"
 	case "protocol_schema":
 		return checkProtocol(data, spec)
 	default:
 		return Failed, "unknown canonical check " + spec.Check
 	}
-}
-
-func checkGo(data []byte, implementation bool) (State, string) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "repository.go", data, parser.AllErrors)
-	if err != nil {
-		return Failed, "parse Go fixture: " + err.Error()
-	}
-	var hasRepository, hasMemory, hasStruct bool
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch declaration := node.(type) {
-		case *ast.TypeSpec:
-			switch declaration.Name.Name {
-			case "Repository":
-				_, hasRepository = declaration.Type.(*ast.InterfaceType)
-			case "MemoryRepository":
-				hasMemory = true
-				_, hasStruct = declaration.Type.(*ast.StructType)
-			}
-		}
-		return true
-	})
-	if !hasRepository || !hasMemory || !hasStruct {
-		return Failed, "Go AST is missing Repository, MemoryRepository, or its struct declaration"
-	}
-	if implementation {
-		pkg, err := new(types.Config).Check("fixturego", fset, []*ast.File{file}, nil)
-		if err != nil {
-			return Failed, "type-check Go fixture: " + err.Error()
-		}
-		repository, ok := pkg.Scope().Lookup("Repository").Type().Underlying().(*types.Interface)
-		if !ok {
-			return Failed, "Repository is not an interface"
-		}
-		memoryObject := pkg.Scope().Lookup("MemoryRepository")
-		if memoryObject == nil || !types.Implements(memoryObject.Type(), repository.Complete()) {
-			return Failed, "MemoryRepository does not implement Repository with a compatible method set"
-		}
-		return Passed, "Go type checker confirms MemoryRepository implements Repository"
-	}
-	return Passed, "Go AST contains the repository interface and concrete declaration"
-}
-
-var (
-	tsInterfaceRE  = regexp.MustCompile(`(?m)\bexport\s+interface\s+Repository\s*\{`)
-	tsClassRE      = regexp.MustCompile(`(?m)\bexport\s+class\s+MemoryRepository(?:\s+implements\s+Repository)?\s*\{`)
-	tsImplementsRE = regexp.MustCompile(`(?m)\bclass\s+MemoryRepository\s+implements\s+Repository\b`)
-	tsGetRE        = regexp.MustCompile(`(?m)\bget\s*\(\s*id\s*:\s*string\s*\)\s*:\s*string\s*\|\s*undefined`)
-	dartAbstractRE = regexp.MustCompile(`(?m)\babstract\s+class\s+Repository\s*\{`)
-	dartClassRE    = regexp.MustCompile(`(?m)\bclass\s+MemoryRepository\s+implements\s+Repository\s*\{`)
-	dartGetRE      = regexp.MustCompile(`(?m)\bString\?\s+get\s*\(\s*String\s+id\s*\)`)
-)
-
-func checkTypeScript(data []byte, implementation bool) (State, string) {
-	text := string(data)
-	if !tsInterfaceRE.MatchString(text) || !tsClassRE.MatchString(text) || !tsGetRE.MatchString(text) {
-		return Failed, "TypeScript declaration probe is missing the interface, class, or typed method"
-	}
-	if implementation && !tsImplementsRE.MatchString(text) {
-		return Failed, "TypeScript class has no explicit Repository implementation relation"
-	}
-	if implementation {
-		return Passed, "TypeScript declaration probe contains the implements relation and typed method"
-	}
-	return Passed, "TypeScript declaration probe contains the interface and concrete class"
-}
-
-func checkDart(data []byte, implementation bool) (State, string) {
-	text := string(data)
-	if !dartAbstractRE.MatchString(text) || !dartClassRE.MatchString(text) || !dartGetRE.MatchString(text) {
-		return Failed, "Dart declaration probe is missing the abstract class, concrete class, or typed method"
-	}
-	if implementation {
-		return Unsupported, "Dart declarations are present, but semantic implementation evidence is not supported locally"
-	}
-	return Passed, "Dart declaration probe contains the repository contract and concrete class"
 }
 
 type workspaceFixture struct {

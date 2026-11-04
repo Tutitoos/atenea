@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "atenea-acceptance",
+  "version": "3.0.0",
+  "description": "Fixed provider-free acceptance corpus for workspace scope and MCP compatibility. Version 3 drops the six scenarios (S01-S03, S05-S07) that only the removed Kivgraph provider and the Dart coverage matrix probed. The Go, TypeScript and Dart files under fixtures/ exist only as the file scopes fixtures/workspace.json names for S04; no scenario probes them.",
+  "scenarios": [
+    {
+      "id": "S04",
+      "title": "Workspace context scope",
+      "capability": "workspace.context",
+      "language": "workspace",
+      "check": "workspace_context",
+      "fixture": "fixtures/workspace.json",
+      "description": "The workspace fixture names two repositories and keeps their file identities explicit."
+    },
+    {
+      "id": "S08",
+      "title": "MCP legacy protocol declaration",
+      "capability": "mcp.compatibility",
+      "language": "protocol",
+      "check": "protocol_schema",
+      "fixture": "fixtures/protocol-2025.json",
+      "description": "The legacy MCP target is represented in the fixed compatibility corpus."
+    },
+    {
+      "id": "S09",
+      "title": "MCP current protocol declaration",
+      "capability": "mcp.compatibility",
+      "language": "protocol",
+      "check": "protocol_schema",
+      "fixture": "fixtures/protocol-2026.json",
+      "description": "The current MCP target is represented in the fixed compatibility corpus."
+    }
+  ]
+}

@@ -19,7 +19,7 @@ func testCorpusRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "benchmarks", "corpus", "v2")
+	return filepath.Join(filepath.Dir(file), "..", "..", "..", "benchmarks", "corpus", "v3")
 }
 
 func testManifest(t *testing.T) benchmark.Manifest {
@@ -33,16 +33,16 @@ func testManifest(t *testing.T) benchmark.Manifest {
 	}
 }
 
-func TestLoadFixedCorpusHasNineScenariosAndHashes(t *testing.T) {
+func TestLoadFixedCorpusHasThreeScenariosAndHashes(t *testing.T) {
 	manifest, artifacts, err := Load(testCorpusRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ID != "atenea-acceptance" || len(manifest.Scenarios) != 9 {
+	if manifest.ID != "atenea-acceptance" || len(manifest.Scenarios) != 3 {
 		t.Fatalf("manifest = %+v", manifest)
 	}
 	if len(artifacts) != 8 {
-		t.Fatalf("artifact count = %d, want manifest, schema, and six unique fixtures", len(artifacts))
+		t.Fatalf("artifact count = %d, want manifest, schema, three scenario fixtures and the three workspace file scopes", len(artifacts))
 	}
 	for _, artifact := range artifacts {
 		if len(artifact.SHA256) != 64 || artifact.Path == "" {
@@ -59,10 +59,10 @@ func TestRunProducesProviderFreeInitialEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.Counts.Total != 9 || evidence.Counts.Passed != 0 || evidence.Counts.Unsupported != 9 || evidence.Counts.Failed != 0 {
+	if evidence.Counts.Total != 3 || evidence.Counts.Passed != 0 || evidence.Counts.Unsupported != 3 || evidence.Counts.Failed != 0 {
 		t.Fatalf("counts = %+v", evidence.Counts)
 	}
-	if evidence.ManifestHash == "" || evidence.CorpusHash == "" || len(evidence.Results) != 9 {
+	if evidence.ManifestHash == "" || evidence.CorpusHash == "" || len(evidence.Results) != 3 {
 		t.Fatalf("evidence identity = %+v", evidence)
 	}
 	if strings.Contains(strings.ToLower(Markdown(evidence)), "provider invoked") {
@@ -78,12 +78,12 @@ func TestRunProducesProviderFreeInitialEvidence(t *testing.T) {
 func TestRunMarksAChangedFixtureFailed(t *testing.T) {
 	root := t.TempDir()
 	copyCorpus(t, testCorpusRoot(t), root)
-	path := filepath.Join(root, "fixtures", "go", "repository.go")
+	path := filepath.Join(root, "fixtures", "workspace.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(strings.Replace(string(data), "type Repository interface", "type Missing interface", 1)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), `"fixture-go"`, `"fixture-missing"`, 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := LoadSnapshot(root)
@@ -98,14 +98,14 @@ func TestRunMarksAChangedFixtureFailed(t *testing.T) {
 		t.Fatalf("changed fixture was accepted: %+v", evidence.Counts)
 	}
 	for _, result := range evidence.Results {
-		if result.ID == "S01" {
+		if result.ID == "S04" {
 			if result.State != Failed || result.Valid || result.Failure == "" {
-				t.Fatalf("S01 result = %+v", result)
+				t.Fatalf("S04 result = %+v", result)
 			}
 			return
 		}
 	}
-	t.Fatal("S01 result missing")
+	t.Fatal("S04 result missing")
 }
 
 func TestRunUsesOneSnapshotAfterDiskChanges(t *testing.T) {
@@ -115,13 +115,13 @@ func TestRunUsesOneSnapshotAfterDiskChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, "fixtures", "go", "repository.go")
-	if err := os.WriteFile(path, []byte("package broken\n"), 0o644); err != nil {
+	path := filepath.Join(root, "fixtures", "workspace.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	evidence := runSnapshot(context.Background(), snapshot, testManifest(t), timeNowForTest())
 	for _, result := range evidence.Results {
-		if result.ID == "S01" && (result.Preflight != Passed || result.State != Unsupported) {
+		if result.ID == "S04" && (result.Preflight != Passed || result.State != Unsupported) {
 			t.Fatalf("snapshot was reread after disk change: %+v", result)
 		}
 	}
@@ -157,7 +157,7 @@ func TestManifestCannotChangeCanonicalCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := strings.Replace(string(data), `"check": "go_context"`, `"check": "typescript_context"`, 1)
+	changed := strings.Replace(string(data), `"check": "workspace_context"`, `"check": "protocol_schema"`, 1)
 	if err := os.WriteFile(path, []byte(changed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -252,9 +252,9 @@ func TestValidateManifestRejectsWrongScenarioCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Scenarios = manifest.Scenarios[:8]
+	manifest.Scenarios = manifest.Scenarios[:2]
 	if err := ValidateManifest(manifest); err == nil {
-		t.Fatal("manifest with eight scenarios was accepted")
+		t.Fatal("manifest with two scenarios was accepted")
 	}
 }
 
