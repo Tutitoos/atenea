@@ -59,12 +59,7 @@ const DefaultTimeout = 120 * time.Second
 
 // Options configures the Codex executable and the implementations it serves.
 type Options struct {
-	Binary string
-	// HookBinary is the host-owned executable Codex starts for PreToolUse.
-	// Empty resolves to the current Atenea executable, so no helper has to be
-	// installed globally. Tests and embedded callers may provide an explicit
-	// executable.
-	HookBinary      string
+	Binary          string
 	Source          string
 	TerminalBinary  string
 	AppBinary       string
@@ -76,7 +71,6 @@ type Options struct {
 // Runner adapts one Codex executable to Atenea's runner contract.
 type Runner struct {
 	binary          string
-	hookBinary      string
 	source          string
 	terminalBinary  string
 	appBinary       string
@@ -100,21 +94,12 @@ func New(opts Options) (*Runner, error) {
 	}
 	runner := &Runner{
 		binary:          strings.TrimSpace(opts.Binary),
-		hookBinary:      strings.TrimSpace(opts.HookBinary),
 		source:          strings.TrimSpace(opts.Source),
 		terminalBinary:  strings.TrimSpace(opts.TerminalBinary),
 		appBinary:       strings.TrimSpace(opts.AppBinary),
 		implementations: slices.Clone(opts.Implementations),
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         opts.Timeout,
-	}
-	if runner.hookBinary == "" {
-		hookBinary, hookErr := os.Executable()
-		if hookErr != nil || strings.TrimSpace(hookBinary) == "" {
-			return nil, contract.Fail(contract.FailureUnavailable,
-				"codex adapter: Atenea hook executable is unavailable")
-		}
-		runner.hookBinary = hookBinary
 	}
 	if runner.terminalBinary == "" {
 		runner.terminalBinary = DefaultTerminalBinary
@@ -253,7 +238,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	outcome.OutOfScope = dropped
 	if dropped > 0 {
 		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
-			"%d match(es) fell outside the requested scope and were dropped", dropped))
+			"%d match(es) fell outside the requested scope and were dropped", dropped,
+		))
 	}
 	if !answer.CostSeen {
 		outcome.Notices = append(outcome.Notices,
@@ -265,7 +251,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	}
 	if answer.Unreadable > 0 {
 		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
-			"%d line(s) of the Codex event stream were not JSON and were skipped", answer.Unreadable))
+			"%d line(s) of the Codex event stream were not JSON and were skipped", answer.Unreadable,
+		))
 	}
 	return outcome, nil
 }

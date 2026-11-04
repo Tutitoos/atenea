@@ -24,7 +24,6 @@ import (
 	"syscall"
 	"time"
 
-	adaptercodex "github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
@@ -605,12 +604,6 @@ func run(args []string, out io.Writer) error {
 	if help, ok := commandHelp[command]; ok && helpRequested(command, commandArgs) {
 		fmt.Fprint(out, help)
 		return nil
-	}
-	if command == "codex-hook" {
-		// Internal host-owned PreToolUse command. Codex starts this same
-		// executable with an invocation-scoped state file; it must never read
-		// Atenea or Codex user configuration here.
-		return adaptercodex.RunHook(commandArgs, os.Stdin, out)
 	}
 	switch command {
 	case "codex":
