@@ -112,7 +112,7 @@ A compatible client may optionally provide a display identity during
 
 The title is untrusted display text and is redacted and bounded before it is
 stored. The external identifier is never returned or written to a checkpoint;
-the dashboard records only that one was observed. Profile, transport and the
+the checkpoint records only that one was observed. Profile, transport and the
 workspace used to resolve a repository id are supplied by the local bridge,
 not accepted from the client. Local paths are discarded after resolution.
 

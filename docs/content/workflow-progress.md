@@ -15,7 +15,6 @@ atenea workflow status WORKFLOW_ID --format compact
 atenea workflow status WORKFLOW_ID --format markdown
 atenea workflow export WORKFLOW_ID --format json
 atenea workflow compare BASELINE_ID CANDIDATE_ID
-atenea workflow panel WORKFLOW_ID
 atenea agents scorecard
 ```
 
@@ -32,15 +31,6 @@ only when observed. Missing usage is `unknown`, partial usage is `partial`, and
 estimates remain separate from measured values. Internal tool notices count as
 tool uses after the parent turn closes; their duration stays unknown when the
 client exposes no completion event.
-
-The read-only dashboard deep link `/workflows/WORKFLOW_ID` shows the persisted
-checklist and expandable sections for agents, models, effort, tools, duration,
-tokens, evidence and published notices. The first activity page is bounded to
-200 rows and says when more data remains after its cursor.
-`workflow panel` verifies that the workflow exists in the same default store
-served by the dashboard and that the dashboard is enabled before printing or
-opening its URL. Event-stream updates invalidate that workflow snapshot by
-its durable run id.
 
 Telemetry older than 90 days is pruned opportunistically when a new receipt is
 written. Checklist and evidence remain part of the workflow record.

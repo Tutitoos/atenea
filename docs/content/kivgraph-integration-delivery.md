@@ -3,6 +3,8 @@ title: Kivgraph integration delivery — 2026-09-04
 weight: 7
 ---
 
+The embedded dashboard was measured at the time of this audit; it is no longer part of Atenea (see #211).
+
 ## Implemented
 
 Contract 4.0 remains additive. The provider matrix now has 39 implementations.

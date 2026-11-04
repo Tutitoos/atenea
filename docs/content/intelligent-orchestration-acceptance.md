@@ -2,6 +2,8 @@
 
 Fecha de cierre local: 7 de septiembre de 2026.
 
+The embedded dashboard was measured at the time of this audit; it is no longer part of Atenea (see #211).
+
 Esta entrega se preparó en un worktree aislado, sobre la rama `feat/atenea-intelligent-orchestration`. La rama parte del commit `9ab1c03e9dca5e2167f582d9f860aae14e23424d`. El checkout principal permaneció limpio en `main` y en el mismo commit durante la implementación.
 
 Se instalaron localmente las dependencias del dashboard con autorización para ejecutar sus pruebas y build. En el momento de cerrar la aceptación local aún no se había realizado commit ni push. No se instaló ATENEA ni se realizó merge, despliegue o migración.
