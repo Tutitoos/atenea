@@ -123,7 +123,7 @@ a later reader could find. One pattern, not three incidents:
   spawns**: 67 log files from that day, zero lines mentioning a server
   starting. The proof that two backends existed rather than one came from
   `/proc` — live parentage and start times — and would have vanished with the
-  next restart.
+  next restart. claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207).
 
 The open question is not how to log more. It is which of these channels should
 be *required* to leave a trace, and which are honestly unobservable and must

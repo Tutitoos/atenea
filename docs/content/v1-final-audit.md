@@ -70,6 +70,8 @@ pero ningún corpus, ningún resultado de memoria para las búsquedas realizadas
 `src/server.ts`. Esto clasifica `claude-mem` como disponible pero funcionalmente
 degradado para ese objetivo.
 
+claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207). Every claude-mem row and mention in this document is dated evidence.
+
 ## Herramientas y MCP externos
 
 | Herramienta | Código del repo | Configuración del equipo | Estado real de esta auditoría |
