@@ -37,11 +37,6 @@ ttl = "5m"
 # traces.db in that same directory.
 enabled = false
 
-[decision]
-# Reserved. Nothing writes captures since the MCP decision.plan tool was removed
-# (#212); the key is still accepted so existing settings files keep loading.
-capture_dir = ""
-
 [orchestrator]
 # The agent that receives a commission, explores the repositories in scope,
 # splits the work into a graph of steps and hands them out.

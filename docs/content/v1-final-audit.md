@@ -17,6 +17,8 @@ cobertura de código ni una promesa de compatibilidad universal.
 > El estado vigente de la rama y las comprobaciones posteriores se mantienen en
 > [v1 readiness]({{< relref "v1-readiness" >}}), actualmente para 1.1.0.
 
+> La pila de decisión (`atenea decide`) se midió en el momento de esta auditoría; ya no forma parte de Atenea (véase #212).
+
 El contenido de esta auditoría es un snapshot histórico. El estado fechado
 posterior a la integración de Kivgraph 0.9.2 (incluidos contratos dormidos,
 supervisor, Scrapling y deudas abiertas) está en la sección **Current

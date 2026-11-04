@@ -362,7 +362,7 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	// command refuses -- so what it prints is what the real run would price,
 	// not a guess written beside it.
 	//
-	// --confirm is the same boundary `task`, `ask`, `decide --run` and `agent`
+	// --confirm is the same boundary `task`, `ask` and `agent`
 	// already offer, on the one command that spends by definition. It stays
 	// opt-in for the same reason it is opt-in there: a prompt nobody asked for
 	// blocks a script forever, and confirmTTY refuses outright when stdin is

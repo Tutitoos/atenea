@@ -54,9 +54,6 @@ Commands:
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
                          funds this one above the settings file
-  decide "TEXT"          Coordinate a durable, explainable workflow;
-                         --run executes repository-scoped children; status,
-                         cancel and resume accept its persistent id
   ask CAPABILITY         Dispatch one capability against one repository
   resume RUN_ID          Pick an interrupted or failed commission back up;
                          --budget USD replaces what remains of the grant.
@@ -257,40 +254,6 @@ Flags:
   --trace         print the plan, the funnel and every review
   --json          print the result as json instead of prose (always
                   complete, ignores --trace)
-`,
-	"decide": `Usage: atenea decide "TEXT" [flags]
-
-Build and explain the complete decision plan without executing it. The plan
-shows intent, model role, native tools, raw MCP tools, capability providers,
-permissions, budget shares and workflow dependencies.
-
-Flags:
-  --repo ID       repository to plan for (default: every declared repository)
-  --file PATH     named file; repeatable and enables the cheaper reader agent
-  --allow EFFECT  effect beyond reading to grant this commission; repeatable
-  --prefer ID     one-call provider preference
-  --tool ID       explicit raw MCP tool to include
-  --budget USD    what this commission may spend (default: the settings file)
-  --json          print the complete plan as json
-  --trace         include the decision reasons
-  --run           execute the compiled plan, one isolated workflow per repository
-  --criterion TEXT acceptance criterion for the complete commission
-  --max-duration D active duration limit, e.g. 30m
-  --max-tokens N   model token limit per assigned turn
-  --confirm       require a TTY confirmation before --run
-  --traces PATH   workflow state database
-  --decision-context JSON  caller-attested semantic context (never an effect grant)
-  --accepted-plan ID       locally accepted context; requires --repo and --accepted-revision
-  --accepted-revision SHA  exact receipt revision; cannot combine with --decision-context
-
-Accept a reviewed implementation objective locally (never executes or grants effects):
-  atenea decide accept-plan ID --decision-context JSON
-
-Lifecycle:
-  atenea decide status COORDINATOR_ID [--traces PATH]
-  atenea decide cancel COORDINATOR_ID [--traces PATH]
-  atenea decide resume COORDINATOR_ID [--traces PATH]
-  atenea decide answer WORKFLOW_ID --ordinal N --digest DIGEST --decision approved|rejected
 `,
 	"ask": `Usage: atenea ask CAPABILITY [flags]
 
@@ -920,8 +883,6 @@ func run(args []string, out io.Writer) error {
 		return cmdSelect(settingsPath, commandArgs, out)
 	case "task":
 		return cmdTask(settingsPath, commandArgs, out)
-	case "decide":
-		return cmdDecide(settingsPath, commandArgs, out)
 	case "ask":
 		return cmdAsk(settingsPath, commandArgs, out)
 	case "resume":

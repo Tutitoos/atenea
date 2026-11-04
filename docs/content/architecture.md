@@ -272,13 +272,6 @@ are one contract and one wire -- two JSON objects on stdin and stdout -- which
 is why a script and a model-backed agent differ only in what they do between
 reading and writing.
 
-The decision router now provides the missing explainable front door as
-`atenea decide`: it classifies the request, chooses the agent/model role,
-surfaces native and raw MCP tools, asks the existing funnel for providers and
-compiles the resulting workflow. The existing `task` path remains compatible
-with multi-repository commissions while the new graph execution path is bound
-to one repository workspace per run.
-
 ### One capability, directly
 
 A workflow is several capabilities chained; the single capability is the atom

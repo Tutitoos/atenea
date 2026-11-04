@@ -64,7 +64,6 @@ type Config struct {
 	Contract     contract.Version
 	Core         Core
 	Orchestrator Orchestrator
-	Decision     DecisionSettings
 	// Model fixes which model backs each of the two model-backed built-in
 	// agents, explore and plan, by role.
 	Model Model
@@ -121,11 +120,6 @@ type Knowledge struct {
 	Enabled      bool
 	Path         string
 	WorkflowPath string
-}
-
-// DecisionSettings configures optional private planning capture.
-type DecisionSettings struct {
-	CaptureDir string
 }
 
 // MCPServer is one MCP endpoint a client should be pointed at instead of
@@ -1267,7 +1261,6 @@ type file struct {
 	Contract         string                `toml:"contract"`
 	Core             fileCore              `toml:"core"`
 	Orchestrator     fileOrchestrator      `toml:"orchestrator"`
-	Decision         fileDecision          `toml:"decision"`
 	Model            fileModel             `toml:"model"`
 	Workflow         fileWorkflow          `toml:"workflow"`
 	WorkflowProfiles []fileWorkflowProfile `toml:"workflow_profile"`
@@ -1299,10 +1292,6 @@ type fileKnowledge struct {
 	Enabled      bool   `toml:"enabled"`
 	Path         string `toml:"path"`
 	WorkflowPath string `toml:"workflow_path"`
-}
-
-type fileDecision struct {
-	CaptureDir string `toml:"capture_dir"`
 }
 
 // fileModel is [model] as written.
@@ -1967,9 +1956,6 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
-		return Config{}, err
-	}
-	if cfg.Decision, err = decoded.Decision.build(source); err != nil {
 		return Config{}, err
 	}
 	if cfg.Model, err = decoded.Model.build(source); err != nil {
@@ -3238,15 +3224,6 @@ func (c fileCore) build(source string) (Core, error) {
 			"settings %s: core.health_probe_every must not be negative", source)
 	}
 	out.HealthProbeEvery = healthEvery
-	return out, nil
-}
-
-func (d fileDecision) build(source string) (DecisionSettings, error) {
-	out := DecisionSettings{CaptureDir: strings.TrimSpace(d.CaptureDir)}
-	if out.CaptureDir != "" && !filepath.IsAbs(out.CaptureDir) {
-		return DecisionSettings{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: decision: capture_dir must be an absolute path", source)
-	}
 	return out, nil
 }
 

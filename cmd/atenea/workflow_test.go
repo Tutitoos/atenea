@@ -378,10 +378,10 @@ func TestWorkflowRenderingAndFlagValueHelpers(t *testing.T) {
 		t.Fatalf("stringList.Set = %v, %q", err, redo.String())
 	}
 	// The refusal has to name the flag that was typed. One type serves --redo
-	// here, --replaces in propose and --file in decide, and the message was
-	// hard-coded to --redo for all three: `atenea decide --file ""` was told
+	// here and --replaces in propose, and the message was
+	// hard-coded to --redo for both: `atenea propose --replaces ""` was told
 	// about a flag its command line never carried.
-	for _, flag := range []string{"redo", "replaces", "file"} {
+	for _, flag := range []string{"redo", "replaces"} {
 		list := newStringList(flag)
 		err := list.Set(" ")
 		if err == nil {

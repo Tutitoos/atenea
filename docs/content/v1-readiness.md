@@ -10,6 +10,8 @@ weight: 7
 
 Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). Every Scrapling mention in this document is dated evidence.
 
+The decision stack (`atenea decide`) was measured at the time of this audit; it is no longer part of Atenea (see #212).
+
 This page is the acceptance record for the published releases. The evidence below the
 "Latest 1.0.5 verification" heading was measured against that release and stays
 filed under it; what was checked for 1.1.0 has a section of its own at the end.

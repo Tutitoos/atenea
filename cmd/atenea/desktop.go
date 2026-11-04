@@ -22,8 +22,8 @@ import (
 //
 // The plan it comes from said desktop actions would be CLI-only, so that a
 // human sat at a terminal would confirm each one. That turned out to be
-// impossible as stated, and the reason is worth keeping: `ask` and
-// `decide --run` run the core IN THIS PROCESS, and this process was started
+// impossible as stated, and the reason is worth keeping: `ask` runs the core
+// IN THIS PROCESS, and this process was started
 // from a shell. macOS attributes a device permission to the responsible
 // ancestor, so the permissions in play here belong to the terminal -- which is
 // exactly what internal/adapter/desktop refuses to spend.
