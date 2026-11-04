@@ -519,6 +519,8 @@ shim keeps alive for its web UI with a replayed `initialize` and a FIFO -- so
 somebody already needed one shared instance and solved it once, for one server,
 outside Atenea.
 
+claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207).
+
 The goal is that a client declares Atenea and nothing else. Nine tools of fifty
 have a capability and an adapter, so the question is what happens to the rest,
 and the answer cannot be "write forty capabilities": most of those tools have
@@ -729,6 +731,8 @@ the minute.
 
 ### What cannot move, so the goal is Atenea plus two
 
+claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207). The paragraphs below are dated evidence.
+
 `headroom` compresses *this session's* tool output and hands back a hash to
 retrieve later: its state is the session, and centralising it either leaks one
 chat's content into another's retrieve or needs a session key Atenea cannot
@@ -837,8 +841,8 @@ field is a major, and the contract then read `3.0.0`. At that historical
 checkpoint it was still not a `1.0.0` conversation; the current release status
 is recorded in [the final audit]({{< relref "v1-final-audit" >}}).
 
-**Done when:** a client's configuration names `atenea`, `headroom` and
-`claude-mem` and nothing else; the backend process count reports one with
+**Done when:** a client's configuration names `atenea` and `headroom` and
+nothing else; the backend process count reports one with
 two chats attached; and a raw call that Atenea cannot interpret still leaves a
 receipt that says, in its own field, that it had no funnel because it never had a
 choice.

@@ -2653,6 +2653,7 @@ the same name.
     2026-08-13 `mcp-agree` reported four clients in agreement. It reads
     declarations, and the declarations were correct: 45 tools provable from
     config — atenea 28, claude-mem 14, headroom 3. The wire carried **126**.
+    claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207).
     The missing 81 were 32 Claude Code built-ins, which no config declares, and
     49 `mcp__claude_ai_*` connectors — Gmail, Google Calendar, Google Drive,
     Spotify — attached to the claude_max OAuth session and named in no file on

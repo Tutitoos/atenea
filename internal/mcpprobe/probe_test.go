@@ -224,7 +224,7 @@ func TestAStdioServerAnswersOverThePipe(t *testing.T) {
 	}
 }
 
-// This is the live shape of claude-mem: it starts, dies, and the client
+// This is a common live failure shape: a server starts, dies, and the client
 // reports "MCP error -32000: Connection closed" -- which sends a reader to
 // the network for a process that never got off the ground. The probe has to
 // say what actually happened and hand over what the server said on its way

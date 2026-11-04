@@ -33,6 +33,10 @@ see [the migration guide](docs/content/migration-4.md). The catalog retains
 so they are not exposed in `tools/list`. Negative Headroom registration guards
 remain; benchmark snapshots and historical reports are preserved.
 
+The `claude-mem` MCP server is no longer a supported or declared backend, so
+`tools/mcp-agree` and `scripts/v1-policy-check.sh` stop expecting it. Dated
+audit evidence that measured it is kept and marked as such (#207).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

@@ -84,6 +84,8 @@ agent-device `0.20.10`, Maestro `1.0.0`, Headroom `1.29.0` and Chrome DevTools
 MCP `1.7.0`. That handshake-only check performed no model turn, scan, write or
 device action; the later provider validation is recorded below.
 
+claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207). Every claude-mem mention in this document is dated evidence.
+
 Claude Code and Codex remain optional provider surfaces. The earlier minimal
 `code.search` for `CapabilityIndex` passed through each wrapper within the
 configured `0.25 USD` ceiling: Claude reported `0.210193 USD` and Codex did
