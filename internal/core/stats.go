@@ -32,7 +32,7 @@ func statsCatalog(cfg config.Config) []toolstats.Tool {
 	for _, c := range cfg.Capabilities {
 		out = append(out, toolstats.Tool{Level: "request", Name: c.ID, Provider: "atenea", State: "declared"})
 	}
-	for _, name := range []string{toolListRepositories, commandTool, "orchestrator.task"} {
+	for _, name := range []string{toolListRepositories, commandTool} {
 		out = append(out, toolstats.Tool{Level: "request", Name: name, Provider: "atenea", State: "declared"})
 	}
 	for _, i := range cfg.Implementations {

@@ -316,28 +316,6 @@ func TestAChatMayStillBeGrantedInsideTheFloor(t *testing.T) {
 	}
 }
 
-// A chat has two doors and the floor has to be on both. `Session.Ask` is the
-// one an MCP `tools/call` arrives at today, so it is the one every other test
-// here uses -- which is exactly why this one exists. A commission from a chat
-// goes through `Session.Do` and composes its permission somewhere else
-// entirely, in Run rather than Ask, and a floor stamped on one and forgotten
-// on the other would leave the wider door open with every test still green.
-func TestACommissionFromAChatRunsOnTheClientFloorToo(t *testing.T) {
-	atenea := floors(t, "effects = [\"process\", \"write\"]\nclient_effects = [\"process\"]")
-	defer func() { _ = atenea.Shutdown() }()
-
-	result, err := openChat(t, atenea).Do(t.Context(), orchestrator.Task{
-		Text:         "TODO",
-		Repositories: []string{"work"},
-	})
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if got := granted(t, result); slices.Contains(got, contract.EffectWrite) {
-		t.Errorf("effects = %v, want no write: the commission door skipped the floor", got)
-	}
-}
-
 // device is the effect the operator holds and a client does not, and that
 // asymmetry is the whole permission story for desktop control. It is checked
 // here rather than trusted because the two floors are separate numbers that

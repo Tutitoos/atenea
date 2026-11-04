@@ -31,7 +31,7 @@ there would either hang the run or be answered by nobody. Introducing one would
 require a separate UI/session contract.
 
 What does exist is an interactive permission gate the caller asks for by name.
-`--confirm` on `task` and `ask` prints the execution
+`--confirm` on `ask` prints the execution
 summary -- the budget and the effects about to be granted -- and requires a
 confirmation on a TTY before anything is dispatched; without a TTY it refuses
 rather than proceeding. It is a floor for one command, opted into per

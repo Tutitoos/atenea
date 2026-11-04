@@ -95,7 +95,7 @@ func metered(t *testing.T, runner contract.Runner) (*orchestrator.Agent, *tally)
 // be read back per capability and per implementation, which is what it is for.
 func TestEveryClosedStepIsMeasured(t *testing.T) {
 	agent, counter := metered(t, &fakeRunner{})
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestTheDurationRecordedIsTheCoresNotTheAdapters(t *testing.T) {
 		},
 	}
 	agent, counter := metered(t, runner)
-	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestAFailedStepIsMeasuredWithItsBinAndReason(t *testing.T) {
 		},
 	}
 	agent, counter := metered(t, runner)
-	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestABlockedStepIsNotMeasured(t *testing.T) {
 		},
 	}
 	agent, counter := metered(t, runner)
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestTheToolVersionTravelsWithTheMeasurement(t *testing.T) {
 		},
 	}
 	agent, counter := metered(t, runner)
-	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	rows, _ := counter.taken()
@@ -305,7 +305,7 @@ func TestTheToolVersionTravelsWithTheMeasurement(t *testing.T) {
 // measurements with it.
 func TestAClosingPhasePushesTheBatch(t *testing.T) {
 	agent, counter := metered(t, &fakeRunner{})
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestAClosingPhasePushesTheBatch(t *testing.T) {
 // still dispatches, reviews and answers; it simply learns nothing.
 func TestACoreWithNoMeterStillWorks(t *testing.T) {
 	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

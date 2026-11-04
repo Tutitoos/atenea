@@ -30,7 +30,7 @@ a new contract or an external provider decision. The normative policy is in
 | --- | --- | --- |
 | Core, registry, selector and orchestrator | `pkg/contract/`, `internal/registry/`, `internal/selector/`, `internal/orchestrator/` | Implemented and covered |
 | Permission effects | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | Explicit grants and `--allow` are enforced |
-| Budget boundary and plan execution | `internal/core/commission.go`, `internal/orchestrator/orchestrator.go`, `pkg/contract/workflow.go` | Reported over-budget results are rejected centrally; reviewed multi-capability DAGs run through `RunPlan` and resume from `KindPlan` checkpoints |
+| Budget boundary | `internal/core/commission.go`, `internal/orchestrator/orchestrator.go`, `pkg/contract/workflow.go` | Reported over-budget results are rejected centrally. The `RunPlan` path and `KindPlan` checkpoints this row once listed were removed with the commission flow (see #212) |
 | Measurements and wandering | `internal/metrics/summary.go`, `internal/metrics/compact.go`, migrations `0006` and `0007` | `out_of_scope` is persisted, rolled up and reported |
 | Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
 | MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/`, `internal/core/mcp.go` | Shared and per-chat lifecycle, raw allow-list and effects are validated |
@@ -337,7 +337,7 @@ dated entry is the active status after the Kivgraph 0.9.2 integration:
 | Checkpoint IDs | 128-bit cryptographic suffix; PID, nanoseconds and atomic counter are the entropy fallback | Closed; 5,000-ID collision campaign is covered |
 | Web surface | Scrapling extract and crawl implementations plus the Python 3.12 Spider helper are declared in the active configuration | Closed in configuration and provider gates |
 | Kivgraph | 0.9.2 daemon is supported over authenticated HTTP, with stdio retained as an explicit alternative | Replaced the old stdio-only snapshot |
-| Remaining debt | `task` planning still emits only `code.search`; out-of-scope ranking, redirect/provider limits remain explicit | Open by design; not part of this hardening pass |
+| Remaining debt | out-of-scope ranking, redirect/provider limits remain explicit | Open by design; not part of this hardening pass |
 
 ## Deliberately deferred
 
@@ -349,7 +349,7 @@ decisions or later contracts:
   be asked on, so such a prompt would hang the run or wait for nobody; the
   security model stays explicit grant/refusal through policy and `--allow`.
   The *explicit* confirmation is not deferred and already ships: `--confirm` on
-  `task` and `ask` prints the budget and the effects about to be granted and
+  `ask` prints the budget and the effects about to be granted and
   refuses outright without a TTY, and `backup discard` takes no other word for
   an answer;
 - exact provider-side hard per-turn token enforcement: no supported external

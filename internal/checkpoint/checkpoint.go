@@ -33,9 +33,8 @@ type Run struct {
 	RequestID string `json:"request_id,omitempty"`
 	AttemptID string `json:"attempt_id,omitempty"`
 	ErrorCode string `json:"error_code,omitempty"`
-	// Kind tells a task-shaped commission apart from a single ask or a
-	// caller-supplied plan: task rebuilds explore-then-split, ask is one step,
-	// and plan resumes directly from its supplied DAG.
+	// Kind tells an ask from a raw call. Receipts of the removed task and
+	// plan commissions carry "task" and "plan" and still decode.
 	Kind string `json:"kind"`
 	// Session is the chat this run belongs to, when one owns it. History is
 	// common property across chats; knowing whose it was is what keeps it
@@ -51,52 +50,36 @@ type Run struct {
 	SessionOriginTransport  string `json:"session_origin_transport,omitempty"`
 	SessionExternalObserved bool   `json:"session_external_observed,omitempty"`
 	Task                    string `json:"task"`
-	// Repositories is the commission's own narrowing, kept so a resumed run
-	// can rebuild the exploration it lost rather than guessing at it from
-	// the catalog as it stands today. Empty means every repository, exactly
-	// as it does on the commission itself.
+	// Repositories is the repository the run was about; empty means every
+	// repository, as it did on a legacy task receipt.
 	Repositories []string `json:"repositories,omitempty"`
-	// Effects the commission authorized beyond reading. Kept for the same
-	// reason as Repositories: rebuilding a step's permission on resume has
-	// to match what was actually granted, not what a fresh commission would
-	// default to.
+	// Effects the run authorized beyond reading.
 	Effects []contract.Effect `json:"effects,omitempty"`
 	// BudgetUSD is the grant this commission opened with, not what is left
 	// of it. What remains is this minus what the steps on file were
 	// charged, so this number plus the receipt is the whole story.
 	BudgetUSD float64 `json:"budget_usd"`
-	// ContractVersion is stamped once, when the run opens. Resuming checks
-	// it the same way a peer adapter is checked: the core continuing this
-	// receipt has to still understand the shape the one that opened it used.
+	// ContractVersion is stamped once, when the run opens.
 	ContractVersion string    `json:"contract_version,omitempty"`
 	Started         time.Time `json:"started"`
 	Updated         time.Time `json:"updated"`
 	Closed          bool      `json:"closed"`
 	Verdict         string    `json:"verdict"`
-	// Plan is the graph as currently known. A resumed run dispatches
-	// straight from this instead of replanning: once a step's payload is
-	// computed it is fixed here, because recomputing it would mean reading
-	// what a step this plan depends on discovered, and that answer only
-	// lives in memory for as long as the process that found it stays up.
+	// Plan is the graph as currently known: one step for an ask, none for a
+	// raw call. Steps are fixed here once dispatched.
 	Plan  contract.Plan `json:"plan"`
 	Steps []StepState   `json:"steps"`
 }
 
-// The four values Kind takes.
+// The values Kind takes. Receipts written by the removed task and plan
+// commissions carry "task" and "plan"; Kind is a plain string, so those files
+// keep loading and nothing here needs to name them.
 const (
-	// KindTask is part of ATENEA's public orchestration contract.
-	KindTask = "task"
 	// KindAsk is part of ATENEA's public orchestration contract.
 	KindAsk = "ask"
-	// KindPlan is a caller-supplied multi-capability DAG. It resumes directly
-	// from the graph on file; unlike KindTask it has no implicit exploration
-	// phase to reconstruct.
-	// KindPlan is part of ATENEA's public orchestration contract.
-	KindPlan = "plan"
 	// KindRaw is a passthrough: one tool on a declared backend, forwarded
-	// verbatim. It resumes like neither of the others because it does not
-	// resume at all -- there is no plan to rebuild and no step to redispatch,
-	// so a raw receipt is written once, already closed.
+	// verbatim. There is no plan or step to redispatch, so a raw receipt is
+	// written once, already closed.
 	// KindRaw is part of ATENEA's public orchestration contract.
 	KindRaw = "raw"
 )
@@ -136,10 +119,8 @@ type StepState struct {
 	Raw string `json:"raw,omitempty"`
 	// Discoveries is what the far side reported finding, carried over from
 	// contract.Outcome. A step that already passed review is never
-	// redispatched on resume, so this is the only copy of what it found that
-	// survives the process that ran it -- without it, a crash between two
-	// steps would cost the discoveries of every step that had already
-	// closed, not just the ones still to come.
+	// redispatched after a crash, so this is the only copy of what it found that
+	// survives the process that ran it.
 	Discoveries []contract.Discovery `json:"discoveries,omitempty"`
 	DurationMS  int64                `json:"duration_ms"`
 	// Runtime measurements are copied onto the durable receipt so session
@@ -434,14 +415,13 @@ func (s *Store) Load(id string) (Run, error) {
 		// than deleted, precisely so somebody can read what was lost.
 		// Reporting the missing .json sends that reader to a file that was
 		// never there and says nothing about the one that is. Measured:
-		// `atenea resume <id>` on a torn receipt answered "no such file or
-		// directory" with the evidence sitting beside it in the same
-		// directory.
+		// loading a torn receipt answered "no such file or directory" with
+		// the evidence sitting beside it in the same directory.
 		if errors.Is(err, fs.ErrNotExist) {
 			aside := filepath.Join(s.dir, id+".json.torn")
 			if _, statErr := os.Stat(aside); statErr == nil {
 				return Run{}, contract.Fail(contract.FailureNotFound,
-					"run %s was torn by an ugly close and cannot be resumed; what survived it is at %s",
+					"run %s was torn by an ugly close and cannot be read; what survived it is at %s",
 					id, aside)
 			}
 		}
@@ -458,7 +438,7 @@ func (s *Store) Load(id string) (Run, error) {
 		// same shape as reporting the missing .json above: honest, and no use
 		// to the person reading it. One sentence closes it.
 		return Run{}, contract.Fail(contract.FailureInvalidInput,
-			"run %s was torn by an ugly close and cannot be resumed: %v; the service sets a torn receipt aside on its next start (atenea run), and what survived it will be at %s",
+			"run %s was torn by an ugly close and cannot be read: %v; the service sets a torn receipt aside on its next start (atenea run), and what survived it will be at %s",
 			id, err, filepath.Join(s.dir, id+".json.torn"))
 	}
 	return run, nil
@@ -467,11 +447,10 @@ func (s *Store) Load(id string) (Run, error) {
 // Prune removes closed receipts that stopped being updated before cutoff, and
 // reports how many went.
 //
-// Closed only. An open receipt is a commission somebody may still resume --
-// Candidates is built out of exactly those -- so removing one by age would
-// take away the resume rather than the record of it. A run left open by a
-// machine that died is recovered by Recover, which closes it with a reason;
-// after that it ages like any other.
+// Closed only. An open receipt may still be in flight, so removing one by
+// age would take away the record of a run that has not finished. A run left
+// open by a machine that died is recovered by Recover, which closes it with a
+// reason; after that it ages like any other.
 //
 // Read before removed, and read fully. A receipt whose age is judged from its
 // file mtime would be judged from whenever the disk last touched it -- a
@@ -492,9 +471,8 @@ func (s *Store) Prune(cutoff time.Time) (int, error) {
 		if err != nil || !run.Closed || !run.Updated.Before(cutoff) {
 			continue
 		}
-		// Under the same lock a writer takes. A receipt being resumed right
-		// now is one somebody is about to write to, and deleting it from
-		// under them would turn a resume into a run with no record.
+		// Under the same lock a writer takes: deleting a receipt from under
+		// somebody about to write to it would leave a run with no record.
 		release, err := s.Lock(id)
 		if err != nil {
 			continue

@@ -130,41 +130,6 @@ func TestAStepWithinItsShareMentionsNoOverspendInJSON(t *testing.T) {
 	}
 }
 
-// Matches are counted out of a split-up commission. A direct ask -- no work
-// phase in the receipt -- has an answer rather than a tally, and the key has
-// to be gone, not zero: printResult skips the line for exactly this reason.
-func TestJSONMatchesOmittedForADirectAsk(t *testing.T) {
-	result := receipt(0)
-	result.Phases = []orchestrator.Phase{{Name: orchestrator.PhaseAsk, Steps: 1}}
-
-	body, decoded := jsonOf(t, result)
-
-	if strings.Contains(body, `"matches"`) {
-		t.Errorf("a direct ask wrote a matches key:\n%s", body)
-	}
-	if decoded.Matches != nil {
-		t.Errorf("matches = %v, want nil (omitted)", *decoded.Matches)
-	}
-}
-
-// A split commission that genuinely found nothing still writes matches: 0 --
-// the pointer is what tells "counted, zero" apart from "not counted", which a
-// plain int zero value could never do once decoded.
-func TestJSONMatchesPresentAndZeroForASplitCommissionWithNoHits(t *testing.T) {
-	result := receipt(0)
-	result.Phases = []orchestrator.Phase{{Name: orchestrator.PhaseWork, Steps: 1}}
-	result.Matches = 0
-
-	body, decoded := jsonOf(t, result)
-
-	if !strings.Contains(body, `"matches": 0`) {
-		t.Errorf("a split commission with no hits omitted matches:\n%s", body)
-	}
-	if decoded.Matches == nil || *decoded.Matches != 0 {
-		t.Errorf("matches = %v, want a present 0", decoded.Matches)
-	}
-}
-
 // A canceled step has no review to report: there was no opinion on either
 // side, and printResult skips the whole block for the same reason. The json
 // twin has to leave the key out rather than write zero-value verdicts that

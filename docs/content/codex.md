@@ -175,7 +175,7 @@ schema, `--json`, `--ephemeral`, `--sandbox read-only`, `--ignore-user-config`,
 and `--ignore-rules`; it does not reuse Claude Code flags.
 
 Codex CLI currently does not report a monetary cost in its JSONL completion
-event. Atenea therefore gates the dispatch on the commission's budget and
+event. Atenea therefore gates the dispatch on the call's budget and
 records the absence of a Codex price as a notice; it cannot enforce a native
 per-call dollar ceiling that Codex does not expose. The 120-second timeout is
 enforced by Atenea and kills the process tree.

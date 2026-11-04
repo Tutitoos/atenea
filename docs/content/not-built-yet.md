@@ -8,6 +8,8 @@ weight: 6
 
 # What is not built yet
 
+The commission flow (`atenea task` and `atenea resume`) was measured at the time of this audit; it is no longer part of Atenea (see #212).
+
 The design was written before the code, in twenty-eight sheets, and it ordered the
 work as nine bricks laid one at a time — core first, then the registry and the
 funnel, then the orchestrator, then one adapter, then a second, then the remaining

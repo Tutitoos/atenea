@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/core"
-	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -115,10 +114,9 @@ func TestAChatCannotAuthorizeWhatItWasNotGranted(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	_, err = chat.Do(t.Context(), orchestrator.Task{
-		Text:    "TODO",
-		Effects: []contract.Effect{contract.EffectWrite},
-	})
+	denied := question()
+	denied.Effects = []contract.Effect{contract.EffectWrite}
+	_, err = chat.Ask(t.Context(), denied)
 	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
 		t.Fatalf("kind = %v, want permission_denied", got)
 	}
@@ -140,10 +138,9 @@ func TestAChatCanAuthorizeWhatItHolds(t *testing.T) {
 
 	// The run itself may still fail on the way -- what must not happen is a
 	// refusal at the gate for an effect the chat was handed.
-	_, err = chat.Do(t.Context(), orchestrator.Task{
-		Text:    "TODO",
-		Effects: []contract.Effect{contract.EffectWrite},
-	})
+	granted := question()
+	granted.Effects = []contract.Effect{contract.EffectWrite}
+	_, err = chat.Ask(t.Context(), granted)
 	if got := contract.KindOf(err); got == contract.FailurePermissionDenied {
 		t.Fatalf("a granted effect was refused: %v", err)
 	}
@@ -163,7 +160,7 @@ func TestAnEmptyGrantStillReads(t *testing.T) {
 	if chat.Allows(contract.EffectExternal) {
 		t.Error("a fresh chat can reach outside the machine")
 	}
-	if _, err := chat.Do(t.Context(), orchestrator.Task{Text: "TODO"}); err != nil {
+	if _, err := chat.Ask(t.Context(), question()); err != nil {
 		t.Fatalf("an ordinary search needs no grant: %v", err)
 	}
 }
@@ -172,56 +169,8 @@ func TestAnEmptyGrantStillReads(t *testing.T) {
 // The context entitlement
 // ---------------------------------------------------------------------------
 
-// What a chat is told is not what the run found. The run still discovers it
-// and the history still records it; the chat is handed the heights it holds.
-func TestAChatIsToldOnlyWhatItMayRead(t *testing.T) {
-	atenea := chats(t)
-
-	near, err := atenea.Open(core.SessionOptions{
-		ID: "near", Client: "omp",
-		Context: []contract.ContextLevel{contract.ContextRepository},
-	})
-	if err != nil {
-		t.Fatalf("Open near: %v", err)
-	}
-	far, err := atenea.Open(core.SessionOptions{
-		ID: "far", Client: "claude-code",
-		Context: []contract.ContextLevel{contract.ContextGlobal},
-	})
-	if err != nil {
-		t.Fatalf("Open far: %v", err)
-	}
-
-	inside, err := near.Do(t.Context(), orchestrator.Task{Text: "TODO"})
-	if err != nil {
-		t.Fatalf("near: %v", err)
-	}
-	if len(inside.Discoveries) == 0 {
-		t.Fatal("a chat entitled to the repository level was told nothing about it")
-	}
-	for _, found := range inside.Discoveries {
-		if found.Level != contract.ContextRepository {
-			t.Errorf("a %v fact reached a chat entitled to the repository only", found.Level)
-		}
-	}
-
-	outside, err := far.Do(t.Context(), orchestrator.Task{Text: "TODO"})
-	if err != nil {
-		t.Fatalf("far: %v", err)
-	}
-	if len(outside.Discoveries) != 0 {
-		t.Errorf("a chat with no right to the repository level was told %d fact(s) about it",
-			len(outside.Discoveries))
-	}
-	// The same commission, the same work: only the telling differed.
-	if outside.Matches != inside.Matches {
-		t.Errorf("withholding changed the work: %d matches vs %d",
-			outside.Matches, inside.Matches)
-	}
-}
-
-// The floor is shared on purpose. A fact withheld from one chat is still worth
-// writing down, or the next commission pays to learn it again.
+// A fact the chat may not read is not withheld from the shared history: the
+// run is still written down, or the next ask pays to learn it again.
 func TestWhatOneChatIsNotShownIsStillWrittenDown(t *testing.T) {
 	atenea := chats(t)
 	chat, err := atenea.Open(core.SessionOptions{
@@ -232,14 +181,10 @@ func TestWhatOneChatIsNotShownIsStillWrittenDown(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	result, err := chat.Do(t.Context(), orchestrator.Task{Text: "TODO"})
+	result, err := chat.Ask(t.Context(), question())
 	if err != nil {
-		t.Fatalf("Do: %v", err)
+		t.Fatalf("Ask: %v", err)
 	}
-	if len(result.Discoveries) != 0 {
-		t.Fatalf("the fixture stopped withholding, so this proves nothing")
-	}
-
 	ids, err := atenea.Checkpoints().List()
 	if err != nil {
 		t.Fatalf("List: %v", err)

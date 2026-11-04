@@ -83,17 +83,15 @@ It is off by default because it is the only far side that costs money per call:
 ```toml
 [orchestrator]
 runners = ["omp", "claudecode"]
-budget_usd = 0.25            # what ONE COMMISSION may spend, across every step
+budget_usd = 0.25            # what ONE CALL may spend
 ```
 
 No API key is involved. Atenea never sees a credential — it speaks to a client
 that is already authenticated, and the session lives inside that client.
 
-`budget_usd` is granted per commission, not per call: a task that dispatches
-four steps splits that quarter between them rather than spending it four times.
-`atenea task "..." --budget 3` funds one commission above the standing grant.
-When a commission runs out, paid steps come back `permission_denied` and free
-providers keep working.
+`budget_usd` is granted per call. `atenea ask ... --budget 3` funds one call above the standing grant. When a
+call runs out, paid steps come back `permission_denied` and free providers keep
+working.
 
 With both attached, `ripgrep` still answers an ordinary search: the funnel
 ranks on cost, and a flat text search is two orders of magnitude cheaper
@@ -186,70 +184,54 @@ it. `constraints` asks whether a provider can work on this repository at all;
 it is well. What is left, `cost` ranks — and the word `estimated` in the reason
 is the trace admitting that no measurement exists yet, so the number is the one
 the catalog declared rather than one Atenea observed. Hand it some work and
-that word changes; [the base](#hand-it-a-commission) is where it comes from.
+that word changes; [the base](#hand-it-a-question) is where it comes from.
 
-## Hand it a commission
+## Hand it a question
 
-`select` asks who *would* answer. `task` hands the whole job over: the
-orchestrator looks at every repository in scope, splits the work, dispatches it
-and reviews what comes back.
+`select` asks who *would* answer. `ask` dispatches one capability against one
+repository, and the funnel's choice is reviewed before the answer comes back.
 
 ```sh
-./bin/atenea task "ValidateOutput" --trace
+./bin/atenea ask code.search --repo current --set query=ValidateOutput --trace
 ```
 
 ```text
-run       20260808T172133-fcb614
-task      ValidateOutput
+run       20261104T201544-c367002313066135d7dff0dee86cd9eb
+task      code.search in current
 verdict   ok
-matches   30
-spent     1.205s of tool time over 2 step(s), 1.276s elapsed
-  explore  1 step(s), 778ms in 797ms
-  work     1 step(s), 426ms in 442ms
-
-discovered
-  [repository] current: 30 hit(s) for "ValidateOutput"
+spent     9ms of tool time over 1 step(s), 41ms elapsed
+  ask      1 step(s), 9ms in 32ms
 
 plan
-  wave 1  explore-current
-  wave 2  search-current
+  wave 1  ask-current
 
 steps
-  explore-current      explore  ripgrep                  778ms
+  ask-current          ask      ripgrep                  9ms
       review   child=ok parent=ok (output matches the capability)
-      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/kivgraph/kivgraph.go
-               and 9 more file(s): atenea ask code.search --repo current --json
-  search-current       work     ripgrep                  426ms
-      review   child=ok parent=ok (output matches the capability)
-      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/kivgraph/kivgraph.go
-               and 9 more file(s): atenea ask code.search --repo current --json
+      found    pkg/a.go, pkg/b.go
+      dropped  claude.search: no attached runner serves it
+      dropped  codex.search: no attached runner serves it
 
-dropped in every step
-  claude.search: no attached runner serves it
-  codex.search: no attached runner serves it
+answer
+  matches (2)
+    ...
 ```
 
 Two heights, like the status screen: the summary always, the full trace only
-when asked for. Drop `--trace` and everything from `plan` down disappears.
+when asked for. Drop `--trace` and everything from `plan` down to `answer`
+disappears.
 
 Each step names the files it found, capped at eight, and when it caps it gives
-you the command that prints the rest: a count is all that composes across
-repositories, but a count is not something anybody can act on. The two drops
-are identical in both steps, so they print once at the end rather than twice
-each — a fact about this machine's catalog, not about either step.
+you the command that prints the rest. A drop that is identical in every step
+prints once at the end instead of under each one: it is a fact about this
+machine's catalog, not about any step.
 
-That run is Atenea's own repository, and it shows the one case that cannot be
-narrowed: this page and the README quote the search term, and a hit with no
-directory above it has no area to narrow to. So the work ran wide — no `scope`
-line — rather than quietly dropping it. Against a repository where the hits sit
-under `internal` and `pkg` only, the work that follows is narrowed to those two
-areas instead of walking the tree again.
+The timings are those of the runner that answered. Every other implementation
+of `code.search` is dropped for a reason the trace states.
 
-The timings are omp's, the one runner the shipped settings attach. Every other
-implementation of `code.search` is dropped here for a reason the trace states.
-
-`--repo` narrows the commission; repeat it for several. Every run leaves a
-receipt under `$XDG_STATE_HOME/atenea/runs`, including one that was cut short.
+`--repo` names the repository; it can be left out when only one is registered.
+Every run leaves a receipt under `$XDG_STATE_HOME/atenea/runs`, including one
+that was cut short.
 
 What each step cost lands beside it, in `metrics.duckdb`: one row per attempt,
 including the ones that failed. That base is what the funnel ranks on. Nothing
@@ -257,7 +239,7 @@ has to be switched on for it, and `enabled = false` under `[metrics]` stops it.
 
 Run the same ask a few times and watch the reason on `select` change. It opens
 at `(estimated)`, passes through `break-in turn` while each provider is handed
-the work often enough to earn its own numbers, and settles at `(measured)` —
+the work often enough to earn its own numbers, and settles at `(measured)` --
 at which point the estimates in the settings file stop mattering for that
 repository. A provider the file guessed was expensive can win here, and that
 is the entire point of handing out those turns.
@@ -281,8 +263,8 @@ did: `answered current for $0.10 of its $0.90 ceiling`.
 
 ## Ask for one capability
 
-`task` is a commission: explore, split, dispatch. `ask` is the atom underneath
-it — one capability, one repository, no planning:
+`ask` is the one capability, one repository case, and a position is something
+only the caller has:
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
@@ -323,11 +305,9 @@ repeat the flag for each entry:
   --set scope=internal --set scope=cmd
 ```
 
-There is no `matches` line: a commission counts hits across repositories, an
-ask has an answer. Printing a zero nobody counted would read as "found
-nothing" rather than "did not count".
+There is no `matches` line: an ask has an answer, not a tally.
 
-Everything above prints for a person. `task`, `ask`, `resume` and `detect` also
+Everything above prints for a person. `ask` and `detect` also
 take `--json`, which prints the whole result as one JSON object instead — always
 complete, and it ignores `--trace` rather than interleaving prose into it. That
 is the mode to parse; the prose layout above is not a format anything should
@@ -895,7 +875,7 @@ The three counts sit together because the gap between them is the diagnosis.
 in: a provider that refuses instantly — not logged in, no index, no server —
 would otherwise record a stream of very fast, very cheap calls and become the
 cheapest thing on the machine, and the funnel would hand it everything while
-every commission failed. Failing cheaply must not pay. `ripgrep` above failed
+every call failed. Failing cheaply must not pay. `ripgrep` above failed
 nine of its hundred and thirteen attempts, and not one of those nine moved the
 966ms it is ranked on. A provider with attempts but nothing priced has no
 measured cost at all, so it ranks on whatever estimate the settings file
@@ -988,7 +968,7 @@ simply down, so the failure bins map onto distinct codes.
 | `3` | `not_found` — unknown capability, repository, or nothing fits |
 | `4` | `unavailable` / `timeout` |
 | `5` | `permission_denied` / `external_denied` |
-| `6` | the commission ran and came back `failed` |
+| `6` | the call ran and came back `failed` |
 | `130` | you stopped it — `128 + SIGINT`, which is the number a shell reports for ctrl-c on its own |
 | `1` | anything unsorted, which means a bug |
 

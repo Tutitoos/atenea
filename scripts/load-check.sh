@@ -4,8 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-output="$(go test ./internal/orchestrator -run '^$' -bench '^BenchmarkRunPlanConcurrentMediumDAG$' -benchtime=1x -count=1 -benchmem)"
-line="$(awk '$1 ~ /^BenchmarkRunPlanConcurrentMediumDAG-/ { print; exit }' <<<"$output")"
+output="$(go test ./internal/orchestrator -run '^$' -bench '^BenchmarkDispatchConcurrentMediumDAG$' -benchtime=1x -count=1 -benchmem)"
+line="$(awk '$1 ~ /^BenchmarkDispatchConcurrentMediumDAG-/ { print; exit }' <<<"$output")"
 test -n "$line" || {
 	echo "load benchmark did not produce a result" >&2
 	exit 1

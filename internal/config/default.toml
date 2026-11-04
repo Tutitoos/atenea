@@ -32,28 +32,28 @@ max_bytes = 4194304
 ttl = "5m"
 
 [orchestrator]
-# The agent that receives a commission, explores the repositories in scope,
-# splits the work into a graph of steps and hands them out.
+# The agent that dispatches a capability call and reviews the answer.
 #
-# How many steps of one wave run at a time. 0 lifts the ceiling. The real brake
-# is the memory of the machine, which arrives with the metrics base.
+# How many repositories one workspace.context call asks at once. 0 lifts the
+# ceiling. The real brake is the memory of the machine, which arrives with the
+# metrics base.
 max_parallel = 4
 
-# What ONE COMMISSION may spend, across every step and every paid provider it
+# What ONE CALL may spend, across every step and every paid provider it
 # dispatches to. Money is a permission, not a cost: this is the user saying how
 # much a piece of work may draw, in the same breath as saying which effects it
 # may cause.
 #
-# The commission, not the call. A run that splits into four steps divides this
+# The call, not the step. A plan that splits into four steps divides this
 # between them and gives back what it did not use; it does not hand each of
 # them a fresh one. Same trap as match_limit above, with money instead of
-# matches: 0 reads as "no ceiling" and is refused, because a commission with
+# matches: 0 reads as "no ceiling" and is refused, because a call with
 # nothing stopping it is a runaway. A grant that reaches zero WHILE running is
 # a different thing and perfectly ordinary -- from there on the paid providers
 # refuse and whoever charges nothing keeps working.
 budget_usd = 0.90
 
-# Granted, standing, to every commission and question this core dispatches --
+# Granted, standing, to every call this core dispatches --
 # on top of the read that is always free. Shipped ON, not off: code.search's
 # only implementations today (ripgrep, and the local stand-in) are both a
 # binary, not a library, so refusing process by default would not make
@@ -155,8 +155,8 @@ runners = ["omp"]
   # answer at the same price, and the funnel has to be able to tell them apart.
   implementations = ["claude.search"]
   # This adapter has no ceiling of its own. What a call may spend arrives with
-  # the commission, from budget_usd under [orchestrator] above -- money is a
-  # permission, and permissions are granted per commission.
+  # the request, from budget_usd under [orchestrator] above -- money is a
+  # permission, and permissions are granted per call.
   #
   # How long one call may take. A model turn is slower than a tool call by
   # nature, so this sits above omp's ceiling; past it the turn is stuck rather
@@ -432,7 +432,7 @@ compact = "1h"
 # has a retention ladder of its own, folding attempts into hours and hours into
 # days, so it grows in detail rather than in rows.
 #
-# A receipt is the only record that a commission happened, and it carries the
+# A receipt is the only record that a call happened, and it carries the
 # sentence somebody typed and what the run found. So this is a decision about
 # what this machine is allowed to forget, and ninety days is a choice rather
 # than the absence of one: long enough to answer "what did I ask last quarter",
@@ -449,7 +449,7 @@ keep = "2160h"
 every = "24h"
 
 # Only closed receipts are removed, and by when they last changed. An open
-# receipt is a commission somebody may still resume, so it is kept past its
+# receipt may still be in flight, so it is kept past its
 # age.
 
 [backup]

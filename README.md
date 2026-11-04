@@ -1,7 +1,7 @@
 # Atenea
 
-A local orchestration core that connects agents, CLI clients and MCP tools through
-one capability catalog. omp, Claude Code, Codex and OpenCode can share the same
+A local core that connects agents, CLI clients and MCP tools through one
+capability catalog. omp, Claude Code, Codex and OpenCode can share the same
 service, provider configuration and execution history.
 
 > **Atenea decides and delegates.** A request names a capability; Atenea selects
@@ -28,13 +28,18 @@ documentation at its release tag. Contract 3.x configurations require the
 
 - Routes capabilities such as `code.search` through repository constraints,
   attached runners, provider health and measured time, tokens and memory.
-- Runs one capability with `ask`, or explores, plans, dispatches and reviews
-  a commission with `task`.
+- Answers one capability call at a time, from the CLI with `ask` or from an MCP
+  client. Each call is dispatched to the selected implementation, reviewed
+  and written to a receipt.
 - Exposes configured capabilities and explicitly declared raw MCP tools through
   one MCP connection. Clients discover the actual tool surface at runtime.
 - Applies effect permissions and spending grants, records attempts and run
-  receipts, and supports diagnostics, resumable work and state backups.
+  receipts, and supports diagnostics and state backups.
 - Provides terminal activity reports.
+
+Atenea no longer plans multi-step work itself: `atenea task` and
+`atenea resume` were removed. Callers that need several steps chain `ask` or
+MCP calls.
 
 The [architecture guide](docs/content/architecture.md) explains the selector,
 orchestrator and adapter boundaries. [Current limits](docs/content/not-built-yet.md)
@@ -117,13 +122,12 @@ atenea status
 atenea select code.search --repo current
 atenea ask code.search --repo current \
   --set query=ValidateOutput --set scope=pkg
-atenea task "ValidateOutput" --repo current --trace
 ```
 
 `select` explains who would answer without dispatching the capability. `ask`
-executes one request; `task` performs the exploration and work steps. Change
-the query and scope for a different repository. Add `--json` to `ask` or `task`
-for structured output.
+executes one request. Change the query and scope for a different repository.
+Add `--json` to `ask` for structured output; `--trace` prints the funnel and
+the review of the step.
 
 ### Configuration
 
@@ -192,11 +196,11 @@ building an index. See [graph freshness](docs/content/kivgraph-freshness.md) and
 `process` in addition to read access. Interactive desktop capabilities are also
 blocked for MCP clients by the default `client_denied_capabilities` list.
 
-`budget_usd` is a grant for the whole commission, shared across its steps.
-`--budget` sets a grant for one run, `--allow EFFECT` adds an effect to one CLI
-request, and `--confirm` requests human review in a TTY before `ask` or `task`
-dispatches. Provider-reported spending is checked after execution; this is not
-a guarantee that every external provider can stop at the exact monetary limit.
+`budget_usd` is a grant for one `ask` or MCP call. `--budget` sets a grant for
+one run, `--allow EFFECT` adds an effect to one CLI request, and `--confirm`
+requests human review in a TTY before `ask` dispatches. Provider-reported
+spending is checked after execution; this is not a guarantee that every
+external provider can stop at the exact monetary limit.
 
 For desktop setup and interaction rules, see
 [Computer Use](docs/content/computer-use.md) and the [helper guide](helper/README.md).

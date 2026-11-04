@@ -71,7 +71,6 @@ health line and in the incident record.
 For a human-reviewed direct execution, add the explicit TTY confirmation:
 
 ```sh
-atenea task "find every TODO" --confirm
 atenea ask code.search --repo current --set query=TODO --confirm
 ```
 

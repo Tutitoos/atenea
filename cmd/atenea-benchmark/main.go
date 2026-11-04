@@ -363,7 +363,7 @@ func runBenchmarks(ctx context.Context, output string, runs int, profile string)
 		{Name: "record-measurement", Category: "micro", Package: "./internal/metrics", Function: "BenchmarkRecord", Benchtime: "1x"},
 		{Name: "flush-persisted-measurement", Category: "persistence", Package: "./internal/metrics", Function: "BenchmarkFlushMeasurement", Benchtime: "100ms"},
 		{Name: "plan-layers-medium-dag", Category: "micro", Package: "./pkg/contract", Function: "BenchmarkPlanLayersMediumDAG", Benchtime: "100ms"},
-		{Name: "run-plan-concurrent-medium-dag", Category: "load", Package: "./internal/orchestrator", Function: "BenchmarkRunPlanConcurrentMediumDAG", Benchtime: "100ms"},
+		{Name: "dispatch-concurrent-medium-dag", Category: "load", Package: "./internal/orchestrator", Function: "BenchmarkDispatchConcurrentMediumDAG", Benchtime: "100ms"},
 	}
 	profileDir := filepath.Join(output, "profiles")
 	if profile == "qualification" || profile == "stress" {

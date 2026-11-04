@@ -8,6 +8,8 @@ weight: 6
 
 # When the instrument is the bug
 
+The commission flow (`atenea task` and `atenea resume`) was measured at the time of this audit; it is no longer part of Atenea (see #212).
+
 The workflow engine (`atenea workflow`, recovery pilot and the knowledge store) was measured at the time of this audit; it is no longer part of Atenea (see #212).
 
 The built-in agents, floor and traces (`atenea agent`, `atenea floor`, `atenea traces`) were measured at the time of this audit; they are no longer part of Atenea (see #212).

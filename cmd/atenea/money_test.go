@@ -14,7 +14,7 @@ import (
 func receipt(usd float64) *orchestrator.Result {
 	step := orchestrator.StepResult{
 		Step:  contract.Step{ID: "search-current", Capability: "code.search", Repository: "current", Permission: contract.Permission{BudgetUSD: usd}},
-		Phase: orchestrator.PhaseWork,
+		Phase: orchestrator.PhaseAsk,
 		Spent: contract.Sample{Duration: 2 * time.Second, Tokens: 160},
 		// Known follows the amount, which is what a real run looks like:
 		// ripgrep reports nothing and charges nothing, and the two providers

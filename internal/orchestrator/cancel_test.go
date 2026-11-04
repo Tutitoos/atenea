@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -28,7 +27,7 @@ func stoppedRunner(waited time.Duration) *fakeRunner {
 func TestACanceledStepIsNotMeasured(t *testing.T) {
 	agent, counter := metered(t, stoppedRunner(27*time.Second))
 
-	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := askLogin(context.Background(), agent, "api"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -50,7 +49,7 @@ func TestATimedOutStepIsStillMeasured(t *testing.T) {
 	}
 	agent, counter := metered(t, runner)
 
-	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := askLogin(context.Background(), agent, "api"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -79,7 +78,7 @@ func TestTheBatchIsFlushedEvenWhenTheCallerIsGone(t *testing.T) {
 	// Canceled before a single step runs, which is the harshest version of
 	// the same story: whatever the run manages to earn still has to land.
 	cancel()
-	_, _ = agent.Run(ctx, orchestrator.Task{Text: "find TODO"})
+	_, _ = askLogin(ctx, agent, "api")
 
 	if _, settled := counter.taken(); settled == 0 {
 		t.Fatal("the batch was never pushed: a canceled run takes its measurements with it")
@@ -101,7 +100,7 @@ func TestStoppingARunIsNotATimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := agent.Run(ctx, orchestrator.Task{Text: "find TODO"})
+	_, err := askLogin(ctx, agent, "api")
 
 	if err == nil {
 		t.Fatal("a stopped run came back clean")
@@ -120,7 +119,7 @@ func TestARunThatRanOutOfTimeIsStillATimeout(t *testing.T) {
 	defer cancel()
 	time.Sleep(5 * time.Millisecond)
 
-	_, err := agent.Run(ctx, orchestrator.Task{Text: "find TODO"})
+	_, err := askLogin(ctx, agent, "api")
 
 	if got := contract.KindOf(err); got != contract.FailureTimeout {
 		t.Errorf("kind = %v, want timeout", got)

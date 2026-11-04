@@ -76,7 +76,7 @@ stand on one transport**.
 
 Now break that transport.
 
-`code.search` never touched it. `ripgrep` answers, commissions finish, and
+`code.search` never touched it. `ripgrep` answers, calls finish, and
 nothing is reported — correctly, because nothing failed.
 
 All five symbol capabilities lose their only reachable implementation at the

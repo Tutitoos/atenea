@@ -1,7 +1,6 @@
 package orchestrator_test
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -54,7 +53,7 @@ func readRun(t *testing.T, dir string) checkpoint.Run {
 func TestAStepClosesWhenItFinishedNotWhenTheWaveDid(t *testing.T) {
 	dir := t.TempDir()
 	agent, _ := build(t, slowFor("api", 300*time.Millisecond, 20*time.Millisecond), 0, dir)
-	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
+	if _, err := agent.DispatchPlan(t.Context(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -84,7 +83,7 @@ func TestAStepClosesWhenItFinishedNotWhenTheWaveDid(t *testing.T) {
 // point of the wave.
 func TestARunReportsTheTimeItActuallyTook(t *testing.T) {
 	agent, _ := build(t, &fakeRunner{delay: 150 * time.Millisecond}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := agent.DispatchPlan(t.Context(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -107,14 +106,12 @@ func TestARunReportsTheTimeItActuallyTook(t *testing.T) {
 	}
 }
 
-// Every way into the orchestrator closes a result, and each one has to stamp
-// the wall. A single question is the cheap case and a resumed commission is the
-// one that catches a stamp written in only one of the three: resume dispatches
-// real work in a new process and reported 0s elapsed beside a step that took
-// 714ms, which reads as a run that took no time at all.
+// A single question is the cheap case and a plan of several steps is the
+// other one, and each has to stamp the wall: a result closed without it
+// reports 0s elapsed beside a step that took 714ms, which reads as a run that
+// took no time at all.
 func TestEveryWayIntoTheOrchestratorReportsTheWall(t *testing.T) {
-	dir := t.TempDir()
-	agent, _ := build(t, &fakeRunner{delay: 40 * time.Millisecond}, 0, dir)
+	agent, _ := build(t, &fakeRunner{delay: 40 * time.Millisecond}, 0, t.TempDir())
 
 	asked, err := agent.Ask(t.Context(), orchestrator.Question{
 		Capability: "code.search", Repository: "api", Payload: map[string]any{"query": "login"},
@@ -126,27 +123,11 @@ func TestEveryWayIntoTheOrchestratorReportsTheWall(t *testing.T) {
 		t.Error("a question does not report how long it took")
 	}
 
-	// A run interrupted mid-flight, then resumed: the resumed attempt does the
-	// remaining work, so it has a wall of its own to report.
-	ctx, cancel := context.WithCancel(t.Context())
-	slow, _ := build(t, &fakeRunner{delay: time.Minute}, 0, dir)
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		cancel()
-	}()
-	stopped, _ := slow.Run(ctx, orchestrator.Task{Text: "login"})
-	if stopped == nil || stopped.Verdict != contract.VerdictCanceled {
-		t.Skipf("nothing was interrupted, so there is nothing to resume: %v", stopped)
-	}
-
-	back, err := agent.Resume(t.Context(), stopped.RunID, orchestrator.ResumeOptions{})
+	planned, err := agent.DispatchPlan(t.Context(), everyRepository(), 0)
 	if err != nil {
-		t.Fatalf("Resume: %v", err)
+		t.Fatalf("DispatchPlan: %v", err)
 	}
-	if len(back.Steps) == 0 {
-		t.Skip("the resumed attempt had nothing left to dispatch")
-	}
-	if back.Elapsed <= 0 {
-		t.Errorf("a resumed run redispatched %d step(s) and reports no time at all", len(back.Steps))
+	if planned.Elapsed <= 0 {
+		t.Error("a plan does not report how long it took")
 	}
 }

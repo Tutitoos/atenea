@@ -70,7 +70,7 @@ Write `implementations = []` to disable all of that adapter's implementations.
 nobody wrote down is a grant nobody made. Leave it out and you have none, not
 the shipped `["process"]` — and since every implementation of `code.search` is
 a binary, a file that omits it answers `permission_denied: code.search causes
-process, which the commission does not cover`.
+process, which the call does not cover`.
 
 So the way to change one setting is still to start from the whole file:
 
@@ -152,9 +152,9 @@ file that still has the table is refused at load, like any unknown key:
 
 ```toml
 [orchestrator]
-max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
-budget_usd = 0.90           # what ONE COMMISSION may spend, across every step
-effects = ["process"]       # granted standing to every commission and question
+max_parallel = 4            # repositories one workspace.context asks at once; 0 lifts the ceiling
+budget_usd = 0.90           # what ONE CALL may spend
+effects = ["process"]       # granted standing to every call
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
 client_denied_capabilities = ["desktop.move", "desktop.click"] # MCP kill switch
   runners = ["omp"]           # any of omp, claudecode, codex, kivgraph, tokensave, desktop, local; [] dispatches nowhere
@@ -176,7 +176,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   source = "auto"                      # terminal or auto; Claude.app is a GUI client
   terminal_binary = "claude"            # Claude Code headless executable
   implementations = ["claude.search"]  # a different id from ripgrep's, on purpose
-  # no ceiling here: what a call may spend arrives with the commission
+  # no ceiling here: what a call may spend arrives with the request
   timeout = "90s"                      # ~13 model turns; the grant bites first
 
   [orchestrator.codex]
@@ -201,18 +201,10 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
 ```
 
-`max_parallel` is the real brake on total memory: four steps of one wave run at
-a time so a laptop stays responsive. `0` means no ceiling, which is a choice
-for a build machine, not a default.
-
-It only ever comes up when a wave has more than one step in it, and what puts
-steps in a wave is **repositories**. A commission looks at each repository in
-scope and splits the work per repository, so a settings file with one
-`[[repository]]` produces waves one step wide however high this is set, and
-`atenea task` on a file with two runs both explores at once and then both
-searches at once. The run report is where that shows: it prints what the
-commission cost and what it took, and on a wide wave the second number is the
-smaller one.
+`max_parallel` is the real brake on total memory: it caps how many repositories
+one `workspace.context` call asks at once, so a laptop stays responsive. `0`
+means the built-in ceiling, which is a choice for a build machine, not a
+default. An `ask` dispatches a single step, so the ceiling never applies to it.
 
 `runners` names the far sides of the contract, and it is a list because several
 can be attached at once. `omp` is the client adapter that ships attached.
@@ -243,33 +235,29 @@ answer as complete. Atenea states the number instead, and a search that reaches
 it comes back with the ceiling named in `discovered` — a partial answer that
 does not say so is a wrong answer.
 
-`budget_usd` is what **one commission** may spend, added up across every step
-and every paid provider it dispatches to. It lives under `[orchestrator]` and
-not on an adapter because money is a permission, and permissions are granted
-per commission: an adapter with a ceiling of its own could only ever cap one
-call, so a run of four steps would spend it four times over.
+`budget_usd` is what **one call** may spend, across every paid provider it
+dispatches to. It lives under `[orchestrator]` and not on an adapter because
+money is a permission, and permissions are granted per call: an adapter with a
+ceiling of its own would be a second number to keep in step with this one.
 
-Zero is not a typo and not "no limit": it is a commission that may not spend,
-which is exactly what a machine with no paid provider attached wants. Free
-providers keep working. A negative number *is* a typo and is refused at load,
-because clamping it would silently switch off every paid provider and the
-refusals that followed would read as an outage.
+Zero is not a typo and not "no limit": it is a call that may not spend, which is
+exactly what a machine with no paid provider attached wants. Free providers
+keep working. A negative number *is* a typo and is refused at load, because
+clamping it would silently switch off every paid provider and the refusals that
+followed would read as an outage.
 
-A wave hands each of its steps an equal share of whatever is left, so even if
-every step spends its share to the last cent the wave cannot draw more than the
-commission had. The next wave divides what the last one did not touch. What
-each step was actually held to, and what it actually charged, are both on the
-receipt — `charged` on the summary, and per step under `--trace`.
+What the step was actually held to, and what it actually charged, are both on
+the receipt -- `charged` on the summary, and per step under `--trace`.
 
-One order beats the standing grant, in both directions: `atenea task "..."
---budget 3` funds that commission and nothing else.
+One order beats the standing grant, in both directions: `atenea ask ...
+--budget 3` funds that call and nothing else.
 
 Running out is reported as `permission_denied`, not as slowness: the far side
 was not slow, the grant was spent. It does not mark the provider down, so the
 next step can still go to it — and a step that costs nothing still runs.
 
-`effects` is granted the same way, standing to every commission and question
-this core dispatches, on top of the read that is always free. It exists
+`effects` is granted the same way, standing to every call this core
+dispatches, on top of the read that is always free. It exists
 because not every effect is a per-request choice: `code.search`'s only
 implementations today are both a binary, so requiring every caller to grant
 `process` by hand on every single call would just move the same yes to one
@@ -277,11 +265,9 @@ place instead of saying it once, here. The shipped default turns it on for
 exactly that reason — refusing it by default would not make the spawn
 auditable, it would make the one P0 capability unusable out of the box.
 
-One order beats the standing grant here too: `atenea task "..." --allow
-write` grants one more effect to that one commission, repeatable for
-several. Unlike `--budget` on a resume, which replaces what remains of the
-grant, `--allow` only ever adds — an effect already held is never worth
-losing by accident.
+One order beats the standing grant here too: `atenea ask ... --allow write`
+grants one more effect to that one call, repeatable for several. `--allow` only
+ever adds -- an effect already held is never worth losing by accident.
 
 `client_effects` is that same grant for a chat opened by a connected MCP
 client, rather than by the person at this terminal. Until it existed there was
@@ -376,7 +362,7 @@ error to find out what it may do will provoke it on the user's work.
 
 A capability declares the effects running it has, and a step is refused when
 its permission does not carry one of them — `code.search causes process, which
-the commission does not cover`, as a verdict on the step rather than a
+the call does not cover`, as a verdict on the step rather than a
 transport error. Both grants rest on that one check, which sits in the core
 wrapping whichever runner is attached rather than in the adapters.
 
@@ -1441,7 +1427,7 @@ never was; on the machine this was written on it arrived by inheritance, from
 an older `headroom wrap opencode --auto` alias, and rode along unexamined when
 the alias moved to `atenea wrap` on 2026-08-09.
 
-It does not widen anything Atenea enforces. The commission check refuses a
+It does not widen anything Atenea enforces. The permission check refuses a
 step whose effects its capability does not declare no matter which client
 asked, so `--auto` cannot buy a caller an effect the settings file withholds.
 What it governs is the other half: what the client approves on its own behalf,

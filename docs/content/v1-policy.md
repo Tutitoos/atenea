@@ -14,7 +14,7 @@ proveedores soportados.
 
 | Área | Garantía v1.0 | Evidencia | Límite conocido |
 | --- | --- | --- | --- |
-| Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo; `--confirm` añade aprobación TTY para `task` y `ask` | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | La confirmación es opt-in; los procesos desatendidos requieren concesión explícita |
+| Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo; `--confirm` añade aprobación TTY para `ask` | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | La confirmación es opt-in; los procesos desatendidos requieren concesión explícita |
 | Coste | `budget_usd` autoriza; el core rechaza cualquier resultado cuyo coste reportado supere el permiso | `internal/orchestrator/`, `internal/core/commission.go` | El proveedor puede haber iniciado trabajo que ya estaba en vuelo; no existe cancelación común por centavos |
 | Búsqueda estructural | `symbol.search` se sirve mediante `kivgraph.search` | `internal/config/default.toml` | La disponibilidad operativa depende del proveedor configurado; declarar una implementación no certifica su salud |
 | Cobertura de tests | CI ejecuta la suite con perfil de cobertura y publica la medición y los artefactos por plataforma, sin convertir un porcentaje en requisito de paso | `.github/workflows/ci.yml` | La cobertura cuenta sentencias ejecutadas y sirve como señal informativa, no como prueba de cobertura semántica total |

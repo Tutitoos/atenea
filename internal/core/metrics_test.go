@@ -58,16 +58,24 @@ func readBase(t *testing.T, path string) []metrics.Row {
 	return rows
 }
 
+// commission asks both fixture repositories one question each and stops the
+// core, returning the steps of both asks.
 func commission(t *testing.T, atenea *core.Core) *orchestrator.Result {
 	t.Helper()
-	result, err := atenea.Do(context.Background(), orchestrator.Task{Text: "TODO"})
-	if err != nil {
-		t.Fatalf("Do: %v", err)
+	all := &orchestrator.Result{}
+	for _, repository := range []string{"api", "scripts"} {
+		result, err := atenea.Ask(context.Background(), orchestrator.Question{
+			Capability: "code.search", Repository: repository, Payload: map[string]any{"query": "TODO"},
+		})
+		if err != nil {
+			t.Fatalf("Ask %s: %v", repository, err)
+		}
+		all.Steps = append(all.Steps, result.Steps...)
 	}
 	if err := atenea.Shutdown(); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
-	return result
+	return all
 }
 
 // The brick, end to end: hand the core a commission, stop it, and find the
@@ -303,7 +311,7 @@ func TestTheLastFlushIsRetriedAndItsLossIsWrittenDown(t *testing.T) {
 	if err := os.WriteFile(base, []byte("this is not a database"), 0o600); err != nil {
 		t.Fatalf("breaking the base: %v", err)
 	}
-	if _, err := atenea.Do(context.Background(), orchestrator.Task{Text: "TODO"}); err != nil {
+	if _, err := atenea.Ask(context.Background(), orchestrator.Question{Capability: "code.search", Repository: "api", Payload: map[string]any{"query": "TODO"}}); err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 

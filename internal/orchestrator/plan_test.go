@@ -7,7 +7,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-func TestRunPlanExecutesMultipleCapabilitiesInDependencyOrder(t *testing.T) {
+func TestDispatchRunsStepsInDependencyOrder(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 2, t.TempDir())
 	permission := contract.Permission{
@@ -25,9 +25,9 @@ func TestRunPlanExecutesMultipleCapabilitiesInDependencyOrder(t *testing.T) {
 		},
 	}
 
-	result, err := agent.RunPlan(t.Context(), plan, 0)
+	result, err := agent.DispatchPlan(t.Context(), plan, 0)
 	if err != nil {
-		t.Fatalf("RunPlan: %v", err)
+		t.Fatalf("DispatchPlan: %v", err)
 	}
 	if result.Verdict != contract.VerdictOK {
 		t.Fatalf("verdict = %s, want ok", result.Verdict)
@@ -38,7 +38,7 @@ func TestRunPlanExecutesMultipleCapabilitiesInDependencyOrder(t *testing.T) {
 	if result.Steps[0].Step.ID != "search-first" || result.Steps[1].Step.ID != "search-second" {
 		t.Fatalf("execution order = %s, %s", result.Steps[0].Step.ID, result.Steps[1].Step.ID)
 	}
-	if len(result.Phases) != 1 || result.Phases[0].Name != orchestrator.PhaseWork {
-		t.Fatalf("phases = %#v, want one work phase", result.Phases)
+	if len(result.Phases) != 1 || result.Phases[0].Name != orchestrator.PhaseAsk {
+		t.Fatalf("phases = %#v, want one ask phase", result.Phases)
 	}
 }

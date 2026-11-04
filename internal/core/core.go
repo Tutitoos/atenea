@@ -1310,35 +1310,6 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 	}
 }
 
-// Do hands a commission to the orchestrator on the operator's own behalf.
-//
-// The core does not explore, split or dispatch: it registers the work so a
-// clean stop waits for it, and lets the agent get on with it. Deciding and
-// delegating is the whole job.
-//
-// This is not a way around the chat isolation, it is the console's side of
-// it: somebody standing at the terminal is the user, not a chat acting for
-// one, and there is nobody above them to ask. A client speaking for a chat
-// opens a Session and goes through that.
-func (c *Core) Do(ctx context.Context, task orchestrator.Task) (result *orchestrator.Result, err error) {
-	repository := ""
-	if len(task.Repositories) == 1 {
-		repository = task.Repositories[0]
-	}
-	ctx, call := c.StartStatsRequest(ctx, "orchestrator.task", repository)
-	defer func() {
-		if call != nil && result != nil {
-			call.Event.Metadata.ReceiptID = result.RunID
-		}
-		call.End(resultError(result, err))
-	}()
-	if err := c.enter(); err != nil {
-		return nil, err
-	}
-	defer c.inflight.Done()
-	return c.agent.Run(ctx, task)
-}
-
 // Ask dispatches one capability against one repository, with the same
 // in-flight bookkeeping a commission gets: a clean stop waits for it too.
 func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (result *orchestrator.Result, err error) {
@@ -1354,17 +1325,6 @@ func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (result *orches
 	}
 	defer c.inflight.Done()
 	return c.agent.Ask(ctx, q)
-}
-
-// Resume picks an interrupted or failed commission back up on the
-// operator's own behalf, with the same in-flight bookkeeping Do and Ask
-// get: a clean stop waits for it too.
-func (c *Core) Resume(ctx context.Context, runID string, opts orchestrator.ResumeOptions) (*orchestrator.Result, error) {
-	if err := c.enter(); err != nil {
-		return nil, err
-	}
-	defer c.inflight.Done()
-	return c.agent.Resume(ctx, runID, opts)
 }
 
 // IndexReport is one repository/provider pairing's index-detection result.

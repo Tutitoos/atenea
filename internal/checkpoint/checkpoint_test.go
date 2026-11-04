@@ -16,7 +16,7 @@ func run(id string) checkpoint.Run {
 	task := "find every TODO"
 	return checkpoint.Run{
 		ID:                      id,
-		Kind:                    checkpoint.KindTask,
+		Kind:                    checkpoint.KindAsk,
 		Session:                 "chat-1",
 		SessionClient:           "codex",
 		SessionName:             "Improve dashboard",
@@ -53,7 +53,7 @@ func run(id string) checkpoint.Run {
 	}
 }
 
-func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
+func TestRoundTripKeepsWhatTheReceiptNeeds(t *testing.T) {
 	store, err := checkpoint.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -69,8 +69,8 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 	if read.Task != original.Task {
 		t.Errorf("task = %q, want %q", read.Task, original.Task)
 	}
-	if read.Kind != checkpoint.KindTask {
-		t.Errorf("kind = %q, want %q", read.Kind, checkpoint.KindTask)
+	if read.Kind != checkpoint.KindAsk {
+		t.Errorf("kind = %q, want %q", read.Kind, checkpoint.KindAsk)
 	}
 	if read.SessionName != "Improve dashboard" || read.SessionNameBasis != "provided" || read.SessionPrimaryProject != "atenea" || read.SessionOriginSurface != "codex" || read.SessionOriginTransport != "mcp-stdio" || !read.SessionExternalObserved {
 		t.Errorf("session metadata did not survive: %+v", read)
@@ -79,13 +79,12 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 		t.Fatalf("steps did not survive the round trip: %v", read.Steps)
 	}
 	if read.Steps[0].Implementation != "ripgrep" {
-		t.Error("which implementation ran is exactly what a resumed run needs")
+		t.Error("which implementation ran is exactly what a receipt has to keep")
 	}
 	if len(read.Steps[0].Discoveries) != 1 || read.Steps[0].Discoveries[0].Note != "api: 3 hit(s) for \"find every TODO\"" {
 		t.Errorf("discoveries did not survive the round trip: %+v", read.Steps[0].Discoveries)
 	}
-	// The rest is what a resumed run rebuilds its exploration and its grant
-	// from, and what it dispatches straight out of without replanning.
+	// The rest is what a receipt keeps of the run's own narrowing and grant.
 	if len(read.Repositories) != 1 || read.Repositories[0] != "api" {
 		t.Errorf("repositories = %v, want [api]", read.Repositories)
 	}
@@ -106,9 +105,9 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 	}
 }
 
-// A resumed run's failure display reads Failure and Raw off the dumped
-// StepState (see cmd/atenea/main.go's cmdResume), so both have to survive the
-// same disk round trip as everything else on the step.
+// A step's failure display reads Failure and Raw off the dumped StepState, so
+// both have to survive the same disk round trip as everything else on the
+// step.
 func TestRoundTripKeepsTheFailureAndItsRawText(t *testing.T) {
 	store, err := checkpoint.New(t.TempDir())
 	if err != nil {

@@ -174,7 +174,7 @@ func TestEverySubcommandHasHelp(t *testing.T) {
 // -- "-h" landing there would otherwise be swallowed as the capability id or
 // commission text rather than recognized as a request for help.
 func TestHelpWinsEvenWhereAPositionalArgumentComesFirst(t *testing.T) {
-	for _, command := range []string{"ask", "select", "task", "resume"} {
+	for _, command := range []string{"ask", "select"} {
 		t.Run(command, func(t *testing.T) {
 			out, err := cli(t, command, "-h")
 			if err != nil {
@@ -307,18 +307,14 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 		t.Fatalf("the far side is not the omp adapter:\n%s", status)
 	}
 
-	// And it is that far side that answers a real commission.
-	out, err := cli(t, "task", "TODO", "--trace")
+	// And it is that far side that answers a real ask.
+	out, err := cli(t, "ask", "code.search", "--set", "query=TODO", "--trace")
 	if err != nil {
-		t.Fatalf("task: %v\n%s", err, out)
+		t.Fatalf("ask: %v\n%s", err, out)
 	}
 	for _, want := range []string{
 		"verdict   ok",
-		// Two source files hold the text. The vendored copy is gitignored to
-		// omp and the credentials file is refused by the adapter, so neither
-		// can be among them.
-		"matches   2",
-		"search-current       work     ripgrep",
+		"ask-current          ask      ripgrep",
 		"review   child=ok parent=ok (output matches the capability)",
 	} {
 		if !strings.Contains(out, want) {
@@ -335,68 +331,17 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 	// TestTheColumnIsRecoveredFromTheLineOmpReturned.
 }
 
-// The one test that proves the skeleton beats: a commission enters the CLI,
-// the orchestrator looks at a real directory, narrows the work to what it
-// found, dispatches it, reviews the answers and leaves a paper copy.
-func TestTaskRunsAgainstARealRepositoryEndToEnd(t *testing.T) {
-	if os.Getenv("ATENEA_TEST_REAL_OMP") != "1" {
-		t.Skip("real OMP integration: run scripts/omp-integration-check.sh")
-	}
-	freshInstall(t)
-
-	out, err := cli(t, "task", "TODO", "--trace")
-	if err != nil {
-		t.Fatalf("task: %v\n%s", err, out)
-	}
-
-	// The verdict, the phases and the funnel all reached the screen.
-	for _, want := range []string{
-		"verdict   ok",
-		"explore  1 step(s)",
-		"work     1 step(s)",
-		"wave 1  explore-current",
-		"wave 2  search-current",
-		"search-current       work     ripgrep",
-		"review   child=ok parent=ok (output matches the capability)",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output is missing %q:\n%s", want, out)
-		}
-	}
-
-	// Providers without an attached runner are dropped explicitly, and the
-	// trace says why rather than leaving the choice unexplained.
-	if !strings.Contains(out, "dropped in every step") {
-		t.Errorf("the funnel did not explain its drops:\n%s", out)
-	}
-
-	// The look found the one area that holds the text and narrowed the work to
-	// it: docs and cmd were not searched again for nothing.
-	if !strings.Contains(out, "scope    internal") {
-		t.Errorf("the work was not narrowed to what the look found:\n%s", out)
-	}
-
-	// Two source files hold the text. The vendored copy and the credentials
-	// file are not among them.
-	if !strings.Contains(out, "matches   2") {
-		t.Errorf("want the two source hits and nothing else:\n%s", out)
-	}
-}
-
-// A commission is not allowed to read what the user did not offer, and the
+// An ask is not allowed to read what the user did not offer, and the
 // answer has to say so out loud rather than quietly returning less.
-func TestTheCommissionNeverReadsASensitiveFile(t *testing.T) {
+func TestTheAskNeverReadsASensitiveFile(t *testing.T) {
 	freshInstall(t)
 
-	out, err := cli(t, "task", "hunter2", "--trace")
+	out, err := cli(t, "ask", "code.search", "--set", "query=hunter2", "--trace")
 	if err != nil {
-		t.Fatalf("task: %v\n%s", err, out)
+		t.Fatalf("ask: %v\n%s", err, out)
 	}
 	if strings.Contains(out, ".env") {
 		t.Errorf("a sensitive file reached the answer:\n%s", out)
-	}
-	if !strings.Contains(out, "matches   0") {
-		t.Errorf("the secret was found anyway:\n%s", out)
 	}
 }
 
@@ -405,7 +350,7 @@ func TestTheCommissionNeverReadsASensitiveFile(t *testing.T) {
 func TestTheRunSurvivesOnDisk(t *testing.T) {
 	_, runs := freshInstall(t)
 
-	out, err := cli(t, "task", "TODO")
+	out, err := cli(t, "ask", "code.search", "--set", "query=TODO")
 	if err != nil {
 		t.Fatalf("task: %v\n%s", err, out)
 	}
@@ -433,11 +378,11 @@ func TestTheRunSurvivesOnDisk(t *testing.T) {
 	if err := json.Unmarshal(body, &record); err != nil {
 		t.Fatalf("the paper copy is not readable JSON: %v", err)
 	}
-	if record.Task != "TODO" || !record.Closed || record.Verdict != "ok" {
+	if record.Task != "code.search in current" || !record.Closed || record.Verdict != "ok" {
 		t.Fatalf("record = %+v", record)
 	}
-	if len(record.Steps) != 2 {
-		t.Fatalf("recorded steps = %d, want the look and the search", len(record.Steps))
+	if len(record.Steps) != 1 {
+		t.Fatalf("recorded steps = %d, want the one ask step", len(record.Steps))
 	}
 	for _, step := range record.Steps {
 		if step.Implementation != "ripgrep" {
@@ -448,19 +393,11 @@ func TestTheRunSurvivesOnDisk(t *testing.T) {
 
 // Asking for a repository that is not in the settings is a typo, and a typo
 // must not look like an empty answer.
-func TestTaskAgainstAnUnknownRepositoryFails(t *testing.T) {
+func TestAskAgainstAnUnknownRepositoryFails(t *testing.T) {
 	freshInstall(t)
-	_, err := cli(t, "task", "TODO", "--repo", "ghost")
+	_, err := cli(t, "ask", "code.search", "--set", "query=TODO", "--repo", "ghost")
 	if got := contract.KindOf(err); got != contract.FailureNotFound {
 		t.Fatalf("kind = %v, want not_found", got)
-	}
-}
-
-func TestTaskWithoutACommissionIsRefused(t *testing.T) {
-	freshInstall(t)
-	_, err := cli(t, "task")
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
-		t.Fatalf("kind = %v, want invalid_input", got)
 	}
 }
 
@@ -470,9 +407,6 @@ func TestTaskWithoutACommissionIsRefused(t *testing.T) {
 func TestANonsenseBudgetOnTheCommandLineIsRefused(t *testing.T) {
 	freshInstall(t)
 	for _, arg := range []string{"-1", "-0.01"} {
-		if _, err := cli(t, "task", "TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
-			t.Errorf("--budget %s was filed as %v", arg, contract.KindOf(err))
-		}
 		if _, err := cli(t, "ask", "code.search", "--repo", "current",
 			"--set", "query=TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
 			t.Errorf("ask --budget %s was filed as %v", arg, contract.KindOf(err))
@@ -490,7 +424,7 @@ func TestANonsenseBudgetOnTheCommandLineIsRefused(t *testing.T) {
 // and getting the settings file's grant instead, with nothing to notice it by.
 func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
 	_, runs := freshInstall(t)
-	if _, err := cli(t, "task", "TODO", "--budget", "5"); err != nil {
+	if _, err := cli(t, "ask", "code.search", "--repo", "current", "--set", "query=TODO", "--budget", "5"); err != nil {
 		t.Fatalf("a funded commission was refused: %v", err)
 	}
 	if got := latestReceipt(t, runs).BudgetUSD; got != 5 {
@@ -503,9 +437,6 @@ func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
 // to the typo.
 func TestAnUnknownAllowValueOnTheCommandLineIsRefused(t *testing.T) {
 	freshInstall(t)
-	if _, err := cli(t, "task", "TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
-		t.Errorf("--allow ghost was filed as %v", contract.KindOf(err))
-	}
 	if _, err := cli(t, "ask", "code.search", "--repo", "current",
 		"--set", "query=TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Errorf("ask --allow ghost was filed as %v", contract.KindOf(err))
@@ -519,7 +450,7 @@ func TestAnUnknownAllowValueOnTheCommandLineIsRefused(t *testing.T) {
 // refusal deep inside a provider rather than here.
 func TestTheCommandLineAllowFlagReachesTheRun(t *testing.T) {
 	_, runs := freshInstall(t)
-	if _, err := cli(t, "task", "TODO", "--allow", "write"); err != nil {
+	if _, err := cli(t, "ask", "code.search", "--repo", "current", "--set", "query=TODO", "--allow", "write"); err != nil {
 		t.Fatalf("a commission granted write was refused: %v", err)
 	}
 	receipt := latestReceipt(t, runs)
@@ -726,7 +657,7 @@ func TestAFailedVerdictLeavesThroughTheExitCode(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	out, err := cli(t, "--config", path, "task", "TODO")
+	out, err := cli(t, "--config", path, "ask", "code.search", "--set", "query=TODO")
 	if err == nil {
 		t.Fatal("a failed commission left as if it had worked")
 	}
@@ -1060,7 +991,7 @@ sensitive = ["*.local"]
 
 func TestConfigInspectionRejectsUnknownActions(t *testing.T) {
 	path := settingsFile(t)
-	for _, args := range [][]string{{"config"}, {"config", "nope"}, {"intent", "--bad"}, {"resume"}, {"resume", "--list", "extra"}} {
+	for _, args := range [][]string{{"config"}, {"config", "nope"}, {"intent", "--bad"}} {
 		_, err := cli(t, append([]string{"--config", path}, args...)...)
 		if contract.KindOf(err) != contract.FailureInvalidInput {
 			t.Errorf("args %v: kind=%v, want invalid_input", args, contract.KindOf(err))
@@ -1068,15 +999,7 @@ func TestConfigInspectionRejectsUnknownActions(t *testing.T) {
 	}
 }
 
-func TestResumeListAndDisplayHelpers(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
-	if err := os.MkdirAll(filepath.Join(os.Getenv("XDG_STATE_HOME"), "atenea", "runs"), 0o700); err != nil {
-		t.Fatalf("runs directory: %v", err)
-	}
-	out, err := cli(t, "--config", settingsFile(t), "resume", "--list")
-	if err != nil || !strings.Contains(out, "nothing to resume") {
-		t.Fatalf("resume list = %q, err=%v", out, err)
-	}
+func TestDisplayHelpers(t *testing.T) {
 	if got := removedOrAbsent(true, "/tmp/file"); got != "removed /tmp/file" {
 		t.Fatalf("removedOrAbsent true = %q", got)
 	}
@@ -1112,10 +1035,7 @@ func TestCommandArgumentGuardsDoNotStartExternalWork(t *testing.T) {
 		{name: "backup missing", call: func() error { return cmdBackup("", nil, &out) }},
 		{name: "detect bad flag", call: func() error { return cmdDetect("", []string{"--bad"}, &out) }},
 		{name: "select missing", call: func() error { return cmdSelect("", nil, &out) }},
-		{name: "task missing", call: func() error { return cmdTask("", nil, &out) }},
 		{name: "ask missing", call: func() error { return cmdAsk("", nil, &out) }},
-		{name: "resume extra", call: func() error { return cmdResume("", []string{"run", "extra"}, &out) }},
-		{name: "resume bad flag", call: func() error { return cmdResume("", []string{"run", "--bad"}, &out) }},
 		{name: "service missing", call: func() error { return cmdService("", nil, &out) }},
 		{name: "service unknown", call: func() error { return cmdService("", []string{"unknown"}, &out) }},
 		{name: "statusline missing", call: func() error { return cmdStatusLine(nil, &out) }},
