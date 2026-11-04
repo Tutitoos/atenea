@@ -85,7 +85,7 @@ func fuzzCore(f *testing.F) *Core {
 // const cannot cross that line. One catalog, one repository, one local
 // implementation: enough for every method dispatch can route to.
 const fuzzSettings = `
-contract = "4.0.0"
+contract = "5.0.0"
 
 [core]
 shutdown_grace = "2s"

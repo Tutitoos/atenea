@@ -36,7 +36,7 @@ func floors(t *testing.T, policy string) *core.Core {
 		t.Fatalf("write: %v", err)
 	}
 	return build(t, fmt.Sprintf(`
-contract = "4.0.0"
+contract = "5.0.0"
 
 [core]
 shutdown_grace = "2s"

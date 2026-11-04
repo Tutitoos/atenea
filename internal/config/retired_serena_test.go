@@ -11,7 +11,7 @@ import (
 
 func TestRetiredSerenaConfigurationIsRejected(t *testing.T) {
 	for name, body := range map[string]string{
-		"old contract":   strings.Replace(minimal, `contract = "4.0.0"`, `contract = "3.6.0"`, 1),
+		"old contract":   strings.Replace(minimal, `contract = "5.0.0"`, `contract = "3.6.0"`, 1),
 		"runner":         minimal + "\n[orchestrator]\nrunners = [\"serena\"]\n",
 		"adapter":        minimal + "\n[orchestrator.serena]\nendpoint = \"http://127.0.0.1:40010/mcp\"\n",
 		"process":        minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"persistent\"\n",
