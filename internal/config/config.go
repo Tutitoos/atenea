@@ -66,17 +66,12 @@ type Config struct {
 	Orchestrator Orchestrator
 	// Model fixes which model backs each of the two model-backed built-in
 	// agents, explore and plan, by role.
-	Model Model
-	// Workflow is how a graph of agent steps is scheduled.
-	Workflow Workflow
-	Metrics  Metrics
+	Model   Model
+	Metrics Metrics
 	// ResultCache is the bounded local cache for read-only code.context results.
 	// Its limits are intentionally explicit and validated at load time.
 	ResultCache resultcache.Config
-	// Knowledge is disabled by default. When enabled, Core opens the separate
-	// verified knowledge store and the workflow evidence database at startup.
-	Knowledge Knowledge
-	Backup    Backup
+	Backup      Backup
 	// Retention is how long receipts and traces are kept. See the type.
 	Retention Retention
 	Security  Security
@@ -113,13 +108,6 @@ type Config struct {
 	// nothing dispatches against them: Atenea's own providers are reached
 	// through adapters, not through this list.
 	MCPServers []MCPServer
-}
-
-// Knowledge controls the optional P15 verified knowledge service.
-type Knowledge struct {
-	Enabled      bool
-	Path         string
-	WorkflowPath string
 }
 
 // MCPServer is one MCP endpoint a client should be pointed at instead of
@@ -1258,40 +1246,31 @@ func WriteDefault(path string, force bool) error {
 // ---------------------------------------------------------------------------
 
 type file struct {
-	Contract         string                `toml:"contract"`
-	Core             fileCore              `toml:"core"`
-	Orchestrator     fileOrchestrator      `toml:"orchestrator"`
-	Model            fileModel             `toml:"model"`
-	Workflow         fileWorkflow          `toml:"workflow"`
-	WorkflowProfiles []fileWorkflowProfile `toml:"workflow_profile"`
-	Metrics          fileMetrics           `toml:"metrics"`
-	ResultCache      fileResultCache       `toml:"result_cache"`
-	Knowledge        fileKnowledge         `toml:"knowledge"`
-	Retention        fileRetention         `toml:"retention"`
-	Backup           fileBackup            `toml:"backup"`
-	Security         fileSecurity          `toml:"security"`
-	Desktop          fileDesktop           `toml:"desktop"`
-	Android          fileAndroid           `toml:"android"`
-	LocalAgents      fileLocalAgents       `toml:"local_agents"`
-	Selector         fileSelector          `toml:"selector"`
-	Capabilities     []fileCapability      `toml:"capability"`
-	Implementations  []fileImpl            `toml:"implementation"`
-	Repositories     []fileRepository      `toml:"repository"`
-	Agents           []fileAgent           `toml:"agent"`
-	MCPServers       []fileMCPServer       `toml:"mcp_server"`
-	DesktopProfiles  []fileDesktopProfile  `toml:"desktop_profile"`
+	Contract        string               `toml:"contract"`
+	Core            fileCore             `toml:"core"`
+	Orchestrator    fileOrchestrator     `toml:"orchestrator"`
+	Model           fileModel            `toml:"model"`
+	Metrics         fileMetrics          `toml:"metrics"`
+	ResultCache     fileResultCache      `toml:"result_cache"`
+	Retention       fileRetention        `toml:"retention"`
+	Backup          fileBackup           `toml:"backup"`
+	Security        fileSecurity         `toml:"security"`
+	Desktop         fileDesktop          `toml:"desktop"`
+	Android         fileAndroid          `toml:"android"`
+	LocalAgents     fileLocalAgents      `toml:"local_agents"`
+	Selector        fileSelector         `toml:"selector"`
+	Capabilities    []fileCapability     `toml:"capability"`
+	Implementations []fileImpl           `toml:"implementation"`
+	Repositories    []fileRepository     `toml:"repository"`
+	Agents          []fileAgent          `toml:"agent"`
+	MCPServers      []fileMCPServer      `toml:"mcp_server"`
+	DesktopProfiles []fileDesktopProfile `toml:"desktop_profile"`
 }
 
 type fileResultCache struct {
 	MaxEntries *int   `toml:"max_entries"`
 	MaxBytes   *int64 `toml:"max_bytes"`
 	TTL        string `toml:"ttl"`
-}
-
-type fileKnowledge struct {
-	Enabled      bool   `toml:"enabled"`
-	Path         string `toml:"path"`
-	WorkflowPath string `toml:"workflow_path"`
 }
 
 // fileModel is [model] as written.
@@ -1961,12 +1940,6 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Model, err = decoded.Model.build(source); err != nil {
 		return Config{}, err
 	}
-	if cfg.Workflow, err = decoded.Workflow.build(source); err != nil {
-		return Config{}, err
-	}
-	if cfg.Workflow, err = buildWorkflowProfiles(source, cfg.Workflow, decoded.WorkflowProfiles); err != nil {
-		return Config{}, err
-	}
 	if cfg.LocalAgents, err = decoded.LocalAgents.build(source); err != nil {
 		return Config{}, err
 	}
@@ -1991,22 +1964,6 @@ func parse(raw []byte, source string) (Config, error) {
 	if err := cfg.ResultCache.Validate(); err != nil {
 		return Config{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: result_cache: %v", source, err)
-	}
-	cfg.Knowledge = Knowledge{
-		Enabled:      decoded.Knowledge.Enabled,
-		Path:         strings.TrimSpace(decoded.Knowledge.Path),
-		WorkflowPath: strings.TrimSpace(decoded.Knowledge.WorkflowPath),
-	}
-	if cfg.Knowledge.Path == "" {
-		cfg.Knowledge.Path = filepath.Join(platform.StateDir(), "knowledge.sqlite")
-	}
-	if cfg.Knowledge.WorkflowPath == "" {
-		cfg.Knowledge.WorkflowPath = filepath.Join(platform.StateDir(), "traces.db")
-	}
-	if cfg.Knowledge.Enabled {
-		if strings.TrimSpace(cfg.Knowledge.Path) == "" || strings.TrimSpace(cfg.Knowledge.WorkflowPath) == "" {
-			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: knowledge paths must not be empty", source)
-		}
 	}
 	if cfg.Retention, err = decoded.Retention.build(source); err != nil {
 		return Config{}, err

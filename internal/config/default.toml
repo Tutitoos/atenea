@@ -31,12 +31,6 @@ max_entries = 128
 max_bytes = 4194304
 ttl = "5m"
 
-[knowledge]
-# Verified knowledge is opt-in. When enabled, omitted paths resolve under the
-# Atenea state directory and the workflow evidence database is read from
-# traces.db in that same directory.
-enabled = false
-
 [orchestrator]
 # The agent that receives a commission, explores the repositories in scope,
 # splits the work into a graph of steps and hands them out.
@@ -437,31 +431,6 @@ audit_reasoning_effort = ""
 # one-shot exec path is available only to a request explicitly marked
 # invisible or CI; disabling this setting fails interactive work closed.
 codex_native = true
-
-[workflow]
-# How a graph of agent steps is scheduled. One ceiling per lane, and a lane is
-# declared on the agent type itself (`pool`, further down).
-#
-# Two lanes rather than one so that auditing cannot be crowded out by the work
-# it audits: a single ceiling fills every slot with agents exactly when the
-# machine is busiest, leaving reviewers queued behind them and answers piling
-# up unjudged. 0 lifts a ceiling, the same reading as max_parallel above.
-max_parallel_agent = 4
-
-# The review lane, sized the same by default. Nobody has measured what
-# reviewing costs against the work it audits on this machine, and a smaller
-# number here would be a story with no reading behind it. What the split buys
-# is that the two cannot starve each other, not that one is cheaper.
-max_parallel_review = 4
-
-# Selectable workflow profiles. Each selected profile is materialized and
-# digested when a workflow is created; omitted max_budget_usd means no extra
-# workflow ceiling beyond the existing grant.
-[[workflow_profile]]
-name = "workflow-v1"
-version = "workflow-v1"
-max_parallel_agent = 4
-max_parallel_review = 4
 
 [selector]
 # Runtime health is evidence, not a permanent truth. Once this age passes the
@@ -4676,7 +4645,7 @@ max_tokens = 200000
   name = "plan"
   type = "string"
   required = true
-  summary = "The graph, as TOML, in the format `atenea workflow create` reads"
+  summary = "The graph, as TOML"
 
 # Model-backed execution stages. Each stage reports its role, evidence and
 # honest coverage; implement carries the only write-capable declaration.
