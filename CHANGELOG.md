@@ -7,7 +7,7 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `4.0.0`. It is a commitment from the first release: an adapter is code
+  at `5.0.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
@@ -158,6 +158,30 @@ types are unchanged. Every source change here invalidates the real Codex
 certification: **the real Codex re-certification is REQUIRED before the next
 release.** Dated audit evidence that measured the commission flow is kept and
 marked as such (#221).
+
+The schema and the contract are cut over to **5.0.0**, which closes #212: the
+built-in agents, the workflow engine, `decide`, the knowledge store and the
+commission flow are gone and Atenea is `atenea ask` plus the MCP capability
+surface. `pkg/contract` `Current` moves from 4.1.0 to 5.0.0 and `Supports` still
+refuses another major, so a 4.x settings file is refused with a remedy that
+names what to delete. A settings file (or repository overlay) that still has
+`[model]`, `[[agent]]`, `[local_agents]`, `[workflow]`, `[[workflow_profile]]`,
+`[decision]` or `[knowledge]` is now refused at load by section name, with the
+edit to make (`[workflow] was removed in contract 5.0.0 with the workflow
+engine; delete the table`) instead of the bare `unknown key`. The shipped
+defaults declare `contract = "5.0.0"`. `pkg/contract` drops the types only the
+agents and the workflow used (`Assignment`, `RootAssignment`, `Task`, `Limits`,
+`AgentTypeSpec`, `Report`, `Subject`, `Reason`, `Route`, `Operation`,
+`Plan.Append`, `Permission.Operations` and the `Parse*` helpers for agent type,
+context level, failure kind, operation and verdict); `Charge`, `Plan`, `Step`,
+`Permission`, `Outcome`, `Verdict` and the `Agent` card stay. `atenea ask`, every
+MCP capability and every other settings key are unchanged. `traces.db`,
+`knowledge.sqlite`, `floors.json`, `accepted-plans/` and
+`candidates.private.jsonl` stay on disk, dormant, and old checkpoint kinds still
+decode. See [the migration guide](docs/content/migration-5.md). Every source
+change here invalidates the real Codex certification (the checked-in certificate
+also expired 2026-10-08): **the real Codex re-certification is REQUIRED before
+the next release.** Dated audit evidence is kept and marked as such (#222).
 
 ### Fixed
 

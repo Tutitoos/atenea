@@ -93,10 +93,6 @@ func TestEveryParseRefusalIsBinnedAsInvalidInput(t *testing.T) {
 		"vcs":             func() error { _, err := contract.ParseVCS("maybe"); return err },
 		"health state":    func() error { _, err := contract.ParseHealthState("sick"); return err },
 		"scope guarantee": func() error { _, err := contract.ParseScopeGuarantee("loose"); return err },
-		"failure kind":    func() error { _, err := contract.ParseFailureKind("exploded"); return err },
-		"verdict":         func() error { _, err := contract.ParseVerdict("maybe"); return err },
-		"agent type":      func() error { _, err := contract.ParseAgentType("wizard"); return err },
-		"context level":   func() error { _, err := contract.ParseContextLevel("everything"); return err },
 	}
 	for name, refuse := range refusals {
 		t.Run(name, func(t *testing.T) {

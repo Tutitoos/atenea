@@ -40,9 +40,6 @@ type Permission struct {
 	// Effects the commission already covers. An effect outside this list is not
 	// forbidden forever; it is the point at which Atenea has to stop and ask.
 	Effects []Effect
-	// Operations are one-shot sensitive actions explicitly authorized for this
-	// step. They never arise from a generic write effect.
-	Operations []Operation
 	// BudgetUSD is how much money this permission carries. On a commission it
 	// is the whole grant; on a step it is that step's share of what was left.
 	//
@@ -63,23 +60,13 @@ func (p Permission) Funded() bool { return p.BudgetUSD > 0 }
 // does not, the action is not refused outright: it is the moment to ask.
 func (p Permission) Allows(effect Effect) bool { return slices.Contains(p.Effects, effect) }
 
-// AllowsOperation reports whether this permission carries the exact sensitive
-// action. Reconnecting a workflow can only intersect this list with a new
-// session grant; it cannot infer an operation from Effects.
-func (p Permission) AllowsOperation(operation Operation) bool {
-	return slices.Contains(p.Operations, operation)
-}
-
 // Grant returns a copy of p with more appended to its effects, each one kept
-// once. It is how a permission grows in layers: a fresh commission starts
-// from read, adds whatever the settings file stands behind for every
-// commission, then whatever the caller asked for on top of that; a resumed
-// one adds whatever --allow grants beyond what the step already carried.
+// once. It is how a permission grows in layers: a fresh call starts from read,
+// adds whatever the settings file stands behind for every call, then whatever
+// the caller asked for on top of that.
 //
-// Unlike BudgetUSD, which a resume REPLACES rather than adds to, an effect
-// already held is never worth losing by accident: Grant only ever grows the
-// list. --allow answers "what else may this do now", not "forget what it
-// already could".
+// An effect already held is never worth losing by accident: Grant only ever
+// grows the list.
 func (p Permission) Grant(more []Effect) Permission {
 	p.Effects = slices.Clone(p.Effects)
 	for _, effect := range more {
@@ -100,11 +87,6 @@ func (p Permission) Validate() error {
 			return Fail(FailureInvalidInput, "permission for %q: unknown effect", p.Task)
 		}
 	}
-	for _, operation := range p.Operations {
-		if !operation.Known() {
-			return Fail(FailureInvalidInput, "permission for %q: unknown operation %q", p.Task, operation)
-		}
-	}
 	if !realMoney(p.BudgetUSD) {
 		// Zero is a grant that is spent, which is ordinary. Below zero is an
 		// arithmetic mistake upstream. NaN and +Inf are the same mistake
@@ -121,7 +103,6 @@ func (p Permission) Validate() error {
 // Clone returns a deep copy.
 func (p Permission) Clone() Permission {
 	p.Effects = slices.Clone(p.Effects)
-	p.Operations = slices.Clone(p.Operations)
 	return p
 }
 
@@ -194,22 +175,6 @@ func (p Plan) Step(id string) (Step, bool) {
 		}
 	}
 	return Step{}, false
-}
-
-// Append returns a copy of the plan with more steps, validated as a whole.
-//
-// This is what hybrid planning needs: the first plan is light -- explore, and
-// little else -- and the rest of the graph is drawn once exploring has said
-// what the project actually looks like.
-func (p Plan) Append(steps ...Step) (Plan, error) {
-	extended := p.Clone()
-	for _, step := range steps {
-		extended.Steps = append(extended.Steps, step.Clone())
-	}
-	if err := extended.Validate(); err != nil {
-		return Plan{}, err
-	}
-	return extended, nil
 }
 
 // Validate checks every node and the shape of the graph.

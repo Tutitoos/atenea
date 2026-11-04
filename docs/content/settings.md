@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "3.6.0"
+contract = "5.0.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -102,7 +102,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "3.6.0"          # required: the contract version this file targets
+contract = "5.0.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -128,13 +128,18 @@ still wins.
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
 version by name rather than reading it and hoping. Minor lag is supported, so
-a file targeting `3.0.0` remains readable by the current `3.6.0` core because
-every 3.x addition since has been backward-compatible. A file from a newer contract
-is refused and must be reviewed before use:
+a file targeting `5.0.0` remains readable by a later `5.x` core because every
+minor addition is backward-compatible. A file from another major version is
+refused. A 4.x file is told what contract 5.0.0 removed (see the
+[5.0 migration guide]({{< relref "migration-5" >}})):
 
 ```text
-settings ~/.config/atenea/atenea.toml: contract 4.0.0 is not supported by
-this core (3.6.0): change the contract line to "3.6.0"; no other key moves
+settings ~/.config/atenea/atenea.toml: contract 4.1.0 is not supported by this
+core (5.0.0): contract 5.0.0 removed the agents, the workflow engine, the decide
+command and the knowledge store: delete the [model], [workflow],
+[[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]]
+tables if present, then change the contract line to "5.0.0" (see
+docs/content/migration-5.md)
 ```
 
 Do that and you are done. The refusal is deliberately not a fallback to the
@@ -145,8 +150,8 @@ instead, because no edit to the file can fix that one.
 ## Removed: the `[decision]` table
 
 `[decision]` (`capture_dir`) went away with the decision router (#212). A settings
-file that still has the table is refused at load, like any unknown key:
-`unknown key(s): decision, decision.capture_dir`. Delete the table.
+file that still has the table is refused at load, naming it: `[decision] was
+removed in contract 5.0.0 with the decide command; delete the table`.
 
 ## The orchestrator
 
@@ -1059,8 +1064,9 @@ that only they read:
 | `[local_agents]` | the ceiling on agent types a repository declared |
 | `[[agent]]` in `.atenea/config.toml` | agent types declared by a repository |
 
-A settings file that still has any of them is refused at load, like any unknown
-key (for example `unknown key(s): agent, agent.name`). Delete them from the
+A settings file that still has any of them is refused at load, naming the table
+(for example `[[agent]] was removed in contract 5.0.0 with the built-in agents;
+delete every block`). Delete them from the
 global file and from any repository `.atenea/config.toml`; nothing else in the
 file changes. The `[orchestrator]` table and the capability catalog are
 untouched, so `atenea ask` and the MCP tools work as before.
@@ -1075,8 +1081,9 @@ receipts, and the backup settles only the measurement base before it copies.
 The workflow engine (`atenea workflow`, `[workflow]`, `[[workflow_profile]]`,
 the recovery pilot and the knowledge store with `[knowledge]` and
 `knowledge.context`) went away in #212. A settings file that still has any of
-the three tables is refused at load, like any unknown key (for example
-`unknown key(s): workflow, workflow.max_parallel_agent`). Delete the tables.
+the three tables is refused at load, naming the table (for example `[workflow]
+was removed in contract 5.0.0 with the workflow engine; delete the table`).
+Delete the tables.
 `knowledge.sqlite` and the workflow tables inside `traces.db` stay on disk
 untouched; nothing reads them any more. The same holds for `traces.db` as a
 whole and for `floors.json` (see the section above).
@@ -1571,8 +1578,8 @@ way this layer could reach outside its own tree.
 Everything else — `contract`, `[core]`, `[orchestrator]`, `[metrics]`,
 `[backup]`, `[[capability]]`, `[[implementation]]`, `[[mcp_server]]` — is
 refused naming the block and why. The keys that left the schema with the
-built-in agents (`[[agent]]`, `[local_agents]`, `[model]`) are refused like any
-other key this binary does not know:
+built-in agents (`[[agent]]`, `[local_agents]`, `[model]`) are refused naming the
+removed table:
 
 ```
 atenea: invalid_input: local settings /tmp/repo/.atenea/config.toml:

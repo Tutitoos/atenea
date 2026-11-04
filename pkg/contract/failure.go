@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -76,21 +75,6 @@ func (k FailureKind) String() string {
 		return name
 	}
 	return "unspecified"
-}
-
-// ParseFailureKind reads a bin name, the way String() wrote it.
-//
-// The round trip has to exist because these names leave the process: a
-// reason on an agent's report, a row in the trace database. Reading one back
-// by hand somewhere else is how the two spellings of a bin drift apart.
-func ParseFailureKind(s string) (FailureKind, error) {
-	name := strings.ToLower(strings.TrimSpace(s))
-	for value, known := range failureNames {
-		if known == name {
-			return value, nil
-		}
-	}
-	return FailureUnspecified, Fail(FailureInvalidInput, "unknown failure kind %q", s)
 }
 
 // Failure is the error type crossing the contract boundary.

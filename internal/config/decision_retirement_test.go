@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 func TestRemovedDecisionSettingsAreRefused(t *testing.T) {
@@ -21,9 +22,7 @@ func TestRemovedDecisionSettingsAreRefused(t *testing.T) {
 	} {
 		t.Run(strings.SplitN(setting, " =", 2)[0], func(t *testing.T) {
 			_, err := config.Load(write(t, minimal+"\n[decision]\n"+setting+"\n"))
-			if err == nil || !strings.Contains(err.Error(), "unknown key") {
-				t.Fatalf("removed decision setting was not refused: %v", err)
-			}
+			refusedByName(t, err, "[decision]")
 		})
 	}
 }
@@ -41,9 +40,7 @@ func TestRemovedWorkflowAndKnowledgeTablesAreRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := config.Load(write(t, minimal+"\n"+table))
-			if err == nil || !strings.Contains(err.Error(), "unknown key") {
-				t.Fatalf("removed table was not refused: %v", err)
-			}
+			refusedByName(t, err, strings.SplitN(table, "\n", 2)[0])
 		})
 	}
 }
@@ -64,9 +61,47 @@ func TestRemovedAgentTablesAreRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := config.Load(write(t, minimal+"\n"+table))
-			if err == nil || !strings.Contains(err.Error(), "unknown key") {
-				t.Fatalf("removed table was not refused: %v", err)
-			}
+			refusedByName(t, err, strings.SplitN(table, "\n", 2)[0])
 		})
+	}
+}
+
+// refusedByName asserts the refusal names the retired section and the doc that
+// explains the edit, not the bare "unknown key" a typo gets.
+func refusedByName(t *testing.T, err error, section string) {
+	t.Helper()
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("removed table was not refused as invalid_input: %v", err)
+	}
+	for _, want := range []string{section + " was removed in contract 5.0.0", "migration-5.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("error %q is the bare typo message", err)
+	}
+}
+
+// Every retired section gets its own sentence, and a file carrying several
+// is told about all of them at once.
+func TestEveryRetiredSectionIsNamedWithItsRemedy(t *testing.T) {
+	for section, table := range map[string]string{
+		"[model]":              "[model]\nbinary = \"claude\"\n",
+		"[[agent]]":            "[[agent]]\nname = \"reader\"\n",
+		"[local_agents]":       "[local_agents]\neffects = [\"read\"]\n",
+		"[workflow]":           "[workflow]\nmax_parallel_agent = 4\n",
+		"[[workflow_profile]]": "[[workflow_profile]]\nname = \"workflow-v1\"\n",
+		"[decision]":           "[decision]\ncapture_dir = \"\"\n",
+		"[knowledge]":          "[knowledge]\nenabled = false\n",
+	} {
+		t.Run(section, func(t *testing.T) {
+			_, err := config.Load(write(t, minimal+"\n"+table))
+			refusedByName(t, err, section)
+		})
+	}
+	_, err := config.Load(write(t, minimal+"\n[workflow]\n[knowledge]\n"))
+	if err == nil || !strings.Contains(err.Error(), "[workflow] was removed") || !strings.Contains(err.Error(), "[knowledge] was removed") {
+		t.Fatalf("two retired tables were not both named: %v", err)
 	}
 }

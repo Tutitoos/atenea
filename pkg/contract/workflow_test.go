@@ -292,26 +292,6 @@ func TestLayersAfterRefusesAStepFromAnotherPlan(t *testing.T) {
 	}
 }
 
-// Hybrid planning: the first plan is light, and the rest is drawn once the
-// look has said what the project looks like.
-func TestAppendValidatesTheWholeGraph(t *testing.T) {
-	light := contract.Plan{Task: "add login", Steps: []contract.Step{step("explore-api")}}
-
-	full, err := light.Append(step("search-api", "explore-api"))
-	if err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if len(full.Steps) != 2 {
-		t.Fatalf("steps = %d, want 2", len(full.Steps))
-	}
-	if len(light.Steps) != 1 {
-		t.Fatal("Append edited the plan it was called on")
-	}
-	if _, err := light.Append(step("search-api", "ghost")); err == nil {
-		t.Fatal("appending a dangling edge has to be refused")
-	}
-}
-
 func TestPlanCloneDoesNotSharePayloads(t *testing.T) {
 	original := contract.Plan{Task: "t", Steps: []contract.Step{step("one", "zero")}}
 	original.Steps = append(original.Steps, step("zero"))

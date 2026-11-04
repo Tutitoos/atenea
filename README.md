@@ -5,10 +5,11 @@ capability catalog. omp, Claude Code, Codex and OpenCode can share the same
 service, provider configuration and execution history.
 
 > **Atenea decides and delegates.** A request names a capability; Atenea selects
-> an implementation, dispatches it through an adapter and reviews the result.
+> an implementation and dispatches it through an adapter. The product is
+> `atenea ask` plus the MCP capability surface.
 
 ```text
-goal → capability → provider selection → implementation → reviewed result
+goal → capability → provider selection → implementation → answer and receipt
 ```
 
 [Documentation](https://tutitoos.github.io/atenea/) ·
@@ -16,21 +17,21 @@ goal → capability → provider selection → implementation → reviewed resul
 [Changelog](CHANGELOG.md) ·
 [Configuration reference](docs/content/settings.md)
 
-**Source version:** `1.1.0` · **Adapter contract:** `4.1.0`
+**Source version:** `1.1.0` · **Adapter contract:** `5.0.0`
 
 This README describes the current checkout, including unreleased changes.
 The product version in the source does not establish that a matching release
 has been published. For an installed binary, check `atenea version` and use the
-documentation at its release tag. Contract 3.x configurations require the
-[4.0 migration](#migrating-from-contract-3x) before this source version can load them.
+documentation at its release tag. Contract 3.x and 4.x configurations require the
+[migrations](#migrating-from-an-earlier-contract) before this source version can load them.
 
 ## What it does
 
 - Routes capabilities such as `code.search` through repository constraints,
   attached runners, provider health and measured time, tokens and memory.
 - Answers one capability call at a time, from the CLI with `ask` or from an MCP
-  client. Each call is dispatched to the selected implementation, reviewed
-  and written to a receipt.
+  client. Each call is dispatched to the selected implementation and written
+  to a receipt.
 - Exposes configured capabilities and explicitly declared raw MCP tools through
   one MCP connection. Clients discover the actual tool surface at runtime.
 - Applies effect permissions and spending grants, records attempts and run
@@ -308,12 +309,25 @@ provide separate execution evidence. State normally lives under
 [operations](docs/content/operations.md) for recovery and backups, and
 [provider diagnosis](docs/content/diagnosing-providers.md) for dispatch failures.
 
-## Migrating from contract 3.x
+## Migrating from an earlier contract
+
+### From 4.x to 5.0.0
+
+Contract `5.0.0` removed the built-in agents, the workflow engine, `decide`
+and the knowledge store. A settings file that still has `[model]`, `[[agent]]`,
+`[local_agents]`, `[workflow]`, `[[workflow_profile]]`, `[decision]` or
+`[knowledge]` is refused at load, naming the table; delete them and set
+`contract = "5.0.0"`. `ask` and the MCP capability surface are unchanged, and old
+state files stay on disk unused. See the
+[5.0 migration guide](docs/content/migration-5.md).
+
+### From 3.x to 4.0.0
 
 Contract `4.0.0` retires Serena and rejects 3.x configuration files. Remove its
 runner, adapter/process tables, MCP declaration, implementation blocks,
 selector references and repository `indexed_by` entries before setting
-`contract = "4.0.0"`. Changing only the header is insufficient.
+`contract = "4.0.0"` (then continue with 5.0.0 above). Changing only the header
+is insufficient.
 
 Validate the result with `atenea config show`. Follow the
 [migration guide](docs/content/migration-4.md) for the complete checklist and

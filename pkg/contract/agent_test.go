@@ -90,40 +90,6 @@ func TestAgentCloneDoesNotShareSlices(t *testing.T) {
 	}
 }
 
-func TestAgentTypeRoundTrip(t *testing.T) {
-	for _, name := range []string{"orchestrator"} {
-		parsed, err := contract.ParseAgentType(name)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		if parsed.String() != name {
-			t.Fatalf("round trip: %q -> %v -> %q", name, parsed, parsed.String())
-		}
-	}
-	if _, err := contract.ParseAgentType("reviewer"); err == nil {
-		t.Fatal("an unknown agent type has to be refused")
-	}
-	// The empty string is the zero value, not a family, so it never parses.
-	if _, err := contract.ParseAgentType(""); err == nil {
-		t.Fatal("the empty string is not an agent type")
-	}
-}
-
-func TestContextLevelRoundTrip(t *testing.T) {
-	for _, name := range []string{"repository", "workspace", "global", "history"} {
-		parsed, err := contract.ParseContextLevel(name)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		if parsed.String() != name {
-			t.Fatalf("round trip: %q -> %v -> %q", name, parsed, parsed.String())
-		}
-	}
-	if _, err := contract.ParseContextLevel("execution"); err == nil {
-		t.Fatal("there are four levels, and that is not one of them")
-	}
-}
-
 func TestVerdictNames(t *testing.T) {
 	cases := map[contract.Verdict]string{
 		contract.VerdictUnspecified: "unjudged",
@@ -134,21 +100,6 @@ func TestVerdictNames(t *testing.T) {
 		if got := verdict.String(); got != want {
 			t.Errorf("%d = %q, want %q", verdict, got, want)
 		}
-	}
-}
-
-func TestVerdictRoundTrip(t *testing.T) {
-	for _, name := range []string{"ok", "failed", "canceled"} {
-		parsed, err := contract.ParseVerdict(name)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		if parsed.String() != name {
-			t.Fatalf("round trip: %q -> %v -> %q", name, parsed, parsed.String())
-		}
-	}
-	if _, err := contract.ParseVerdict("passed"); err == nil {
-		t.Fatal("an unknown verdict has to be refused")
 	}
 }
 

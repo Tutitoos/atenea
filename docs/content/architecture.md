@@ -281,8 +281,11 @@ This is how a caller that already *has* a cursor hands it over.
 
 Atenea does not plan multi-step work. `atenea task` explored every repository,
 split the commission and dispatched the pieces, and `atenea resume` continued
-an interrupted one; both were removed (see #212 and the changelog). A caller
-that needs several steps chains calls itself.
+an interrupted one; both were removed together with the built-in agents, the
+workflow engine, `decide` and the knowledge store in contract 5.0.0 (see #212,
+the changelog and the [migration guide]({{< relref "migration-5" >}})). Atenea is
+`ask` plus the MCP capability surface; a caller that needs several steps chains
+calls itself.
 
 ### Waves, not a queue
 

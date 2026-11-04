@@ -10,17 +10,6 @@ import (
 )
 
 func TestPortableContractHelpers(t *testing.T) {
-	for _, name := range []string{
-		"unspecified", "invalid_input", "not_found", "permission_denied",
-		"external_denied", "unavailable", "timeout", "canceled",
-	} {
-		if got, err := contract.ParseFailureKind("  " + name + " "); err != nil || got.String() != name {
-			t.Fatalf("failure %q round trip = %v, %v", name, got, err)
-		}
-	}
-	if _, err := contract.ParseFailureKind("unknown"); err == nil {
-		t.Fatal("unknown failure kind was accepted")
-	}
 	if got := contract.MessageOf(contract.Fail(contract.FailureTimeout, "slow")); got != "slow" {
 		t.Fatalf("MessageOf failure = %q", got)
 	}
@@ -69,59 +58,7 @@ func TestPortableContractHelpers(t *testing.T) {
 	}
 }
 
-func TestPortableAssignmentHelpers(t *testing.T) {
-	task := contract.Task{Objective: "inspect code", Criterion: "report findings", Files: []string{"main.go"}}
-	spec := contract.AgentTypeSpec{
-		Name:   "reviewer",
-		Kind:   contract.AgentSpecialized,
-		Result: []contract.Field{{Name: "summary", Type: contract.TypeString, Required: true}},
-	}
-	if _, err := spec.ResultSchema(); err != nil {
-		t.Fatalf("ResultSchema: %v", err)
-	}
-	if err := spec.ValidateResult(map[string]any{"summary": "done"}); err != nil {
-		t.Fatalf("ValidateResult: %v", err)
-	}
-	clone := spec.Clone()
-	clone.Result[0].Name = "details"
-	if spec.Result[0].Name == clone.Result[0].Name {
-		t.Fatal("AgentTypeSpec.Clone shared result fields")
-	}
-
-	root := contract.RootAssignment("root", "planner", contract.AgentOrchestrator, task,
-		contract.Limits{MaxDuration: time.Minute, MaxTokens: 1000})
-	root.Context = []contract.ContextLevel{contract.ContextRepository}
-	if !root.Causes(contract.EffectRead) || root.Causes(contract.EffectWrite) {
-		t.Fatal("Causes returned the wrong effect grant")
-	}
-	if !root.Sees(contract.ContextRepository) || root.Sees(contract.ContextGlobal) {
-		t.Fatal("Sees returned the wrong context grant")
-	}
-
-	subject := contract.Subject{
-		RunID: "child", TypeName: "worker", Task: task, Attempt: 1,
-		Result: map[string]any{"summary": "done"}, Verdict: contract.VerdictOK,
-	}
-	if err := subject.Validate(); err != nil {
-		t.Fatalf("Subject.Validate: %v", err)
-	}
-	subjectClone := subject.Clone()
-	subjectClone.Result["summary"] = "changed"
-	if subject.Result["summary"] == subjectClone.Result["summary"] {
-		t.Fatal("Subject.Clone shared result map")
-	}
-
-	reason := contract.Reason{Kind: contract.FailureNotFound, Text: "no match"}
-	if err := reason.Validate(); err != nil {
-		t.Fatalf("Reason.Validate: %v", err)
-	}
-	if reason.String() != "not_found: no match" || reason.Empty() {
-		t.Fatalf("reason helpers = %q, empty=%v", reason.String(), reason.Empty())
-	}
-	if !(contract.Reason{}).Empty() {
-		t.Fatal("zero Reason was not empty")
-	}
-
+func TestPortableChargeHelpers(t *testing.T) {
 	firstUSD, secondUSD := 0.10, 0.20
 	first := contract.Charge{InputTokens: 2, CacheReadTokens: 3, USD: &firstUSD, PricedBy: "one"}
 	second := contract.Charge{OutputTokens: 4, CacheWriteTokens: 5, USD: &secondUSD, PricedBy: "two"}
@@ -140,12 +77,6 @@ func TestPortableAssignmentHelpers(t *testing.T) {
 	}
 	if got := first.Plus(contract.Charge{OutputTokens: 1}); got.USD != nil {
 		t.Fatal("partially priced charge kept an unsupported USD total")
-	}
-
-	report := contract.Report{Result: map[string]any{"summary": "done"}, Verdict: contract.VerdictOK}
-	created := report.Subject("run-1", "worker", 1, task)
-	if created.RunID != "run-1" || created.TypeName != "worker" || created.Verdict != contract.VerdictOK {
-		t.Fatalf("Report.Subject = %+v", created)
 	}
 }
 

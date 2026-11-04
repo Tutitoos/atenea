@@ -299,6 +299,13 @@ func refuseUnreadableKeys(meta toml.MetaData, source string) error {
 			}
 			blocked[block] = true
 			reasons = append(reasons, fmt.Sprintf("%s: %s", block, refusedLocally[block]))
+		case retiredSections[first(name)] != "":
+			block := first(name)
+			if blocked[block] {
+				continue
+			}
+			blocked[block] = true
+			reasons = append(reasons, retiredSections[block])
 		default:
 			// Not in the global schema either: a typo, and the message for a
 			// typo is the one the global file already gives.

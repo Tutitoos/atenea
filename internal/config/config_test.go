@@ -307,7 +307,7 @@ func write(t *testing.T, body string) string {
 }
 
 const minimal = `
-contract = "4.0.0"
+contract = "5.0.0"
 
 [[capability]]
 id = "code.search"
@@ -810,9 +810,9 @@ func TestUnknownKeysAreRefused(t *testing.T) {
 
 func TestContractVersionIsEnforced(t *testing.T) {
 	cases := map[string]string{
-		"missing":     strings.Replace(minimal, `contract = "4.0.0"`, "", 1),
-		"unparseable": strings.Replace(minimal, `contract = "4.0.0"`, `contract = "one"`, 1),
-		"too new":     strings.Replace(minimal, `contract = "4.0.0"`, `contract = "9.0.0"`, 1),
+		"missing":     strings.Replace(minimal, `contract = "5.0.0"`, "", 1),
+		"unparseable": strings.Replace(minimal, `contract = "5.0.0"`, `contract = "one"`, 1),
+		"too new":     strings.Replace(minimal, `contract = "5.0.0"`, `contract = "9.0.0"`, 1),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -831,7 +831,7 @@ func TestContractVersionIsEnforced(t *testing.T) {
 // newer binary and no edit at all. Telling the second case to edit the line
 // would buy it a second, more confusing failure.
 func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
-	behind := strings.Replace(minimal, `contract = "4.0.0"`, `contract = "1.0.0"`, 1)
+	behind := strings.Replace(minimal, `contract = "5.0.0"`, `contract = "1.0.0"`, 1)
 	_, err := config.Load(write(t, behind))
 	if err == nil {
 		t.Fatal("a file from the previous major was accepted")
@@ -844,7 +844,23 @@ func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
 		t.Errorf("err = %v, want %s", err, wantFix)
 	}
 
-	ahead := strings.Replace(minimal, `contract = "4.0.0"`, `contract = "9.0.0"`, 1)
+	// The previous major (a file written for 4.x) is told what 5.0.0 removed.
+	for _, header := range []string{"4.0.0", "4.1.0"} {
+		_, err = config.Load(write(t, strings.Replace(minimal, `contract = "5.0.0"`, `contract = "`+header+`"`, 1)))
+		if err == nil {
+			t.Fatalf("a %s file was accepted", header)
+		}
+		for _, want := range []string{"not supported by this core (5.0.0)", "[workflow]", "[[agent]]", "[knowledge]", "migration-5.md", wantFix} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: err = %v, lacks %q", header, err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "Serena") {
+			t.Errorf("%s: err = %v, a 4.x file has no Serena to remove", header, err)
+		}
+	}
+
+	ahead := strings.Replace(minimal, `contract = "5.0.0"`, `contract = "9.0.0"`, 1)
 	_, err = config.Load(write(t, ahead))
 	if err == nil {
 		t.Fatal("a file from the future was accepted")
@@ -1923,7 +1939,7 @@ func TestAnUnknownKeyInTheNewBlocksIsRefused(t *testing.T) {
 		"\n[orchestrator.omp]\nbinry = \"omp\"\n",
 		"\n[orchestrator.omp]\nmatch_limt = 5\n",
 		"\n[security]\nsensitiv = []\n",
-		"\n[model]\ntimeot = \"90s\"\n",
+		"\n[core]\nshutdwn_grace = \"5s\"\n",
 	} {
 		_, err := config.Load(write(t, minimal+body))
 		if err == nil || !strings.Contains(err.Error(), "unknown key") {
