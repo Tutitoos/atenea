@@ -63,7 +63,6 @@ rewritten when they do.
 - [Aceptación de la orquestación inteligente]({{< relref "intelligent-orchestration-acceptance" >}}) — evidencia local, métricas y límites de la entrega
 - [Benchmarks y métricas]({{< relref "benchmarks" >}}) — tests, cobertura, rendimiento, baselines y semáforos
 - [Cobertura Dart]({{< relref "dart-coverage" >}}) — matriz local, límites y evidencia pendiente
-- [Conocimiento verificado]({{< relref "knowledge" >}}) — scopes, dependencias y gate de promoción
 - [Final 1.0.0 audit]({{< relref "v1-final-audit" >}}) — historical repository, team configuration and post-release limits
 - [v1 contracts]({{< relref "v1-contracts" >}}) — structural search, permission and provider decisions
 - [v1.0 policy]({{< relref "v1-policy" >}}) — garantías, límites y criterios de v1.1

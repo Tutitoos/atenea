@@ -4,7 +4,7 @@ Status: design deliverable for audit R03. This document does not claim that Aten
 
 ## Security objective and trust boundary
 
-Contain an untrusted agent process and its children even when they ignore the assignment. It must not read host secrets, modify files outside explicitly writable roots, create unapproved network connections, attach to other host processes, or bypass the workflow budget through Atenea's broker. Host kernel, sandbox launcher, broker and configured provider services remain trusted. Do not describe a compromised host/root account as contained.
+Contain an untrusted agent process and its children even when they ignore the assignment. It must not read host secrets, modify files outside explicitly writable roots, create unapproved network connections, attach to other host processes, or bypass the assignment budget through Atenea's broker. Host kernel, sandbox launcher, broker and configured provider services remain trusted. Do not describe a compromised host/root account as contained.
 
 ## Selected architecture
 
@@ -26,7 +26,7 @@ The read profile's named files are a ceiling, not merely search hints. Runtime d
 
 ## Broker and protocol
 
-The launcher receives a versioned manifest containing run/parent IDs, exact effects, read/write mount grants, network allowlist, resource limits and the reservation ID. The manifest digest is bound to the approved workflow step. The broker derives authority from server-side records, not paths or claims supplied by the child.
+The launcher receives a versioned manifest containing run/parent IDs, exact effects, read/write mount grants, network allowlist, resource limits and the reservation ID. The manifest digest is bound to the approved assignment. The broker derives authority from server-side records, not paths or claims supplied by the child.
 
 Use a private inherited file descriptor or VM vsock channel authenticated with a per-run random capability. Tokens expire at run completion and cannot be shared with unrelated runs. Deny unknown manifest versions and unsupported enforcement features before spawning.
 

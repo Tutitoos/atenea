@@ -267,14 +267,14 @@ There is **one** agent contract and two kinds under it. The **orchestrator**
 decides and splits; a **specialized** agent executes one objective it was
 handed and answers in the shape its type declares. The specialist was drawn up
 early, left unbuilt for a while, and is now the kind every shipped agent uses:
-`filereader`, `reviewer`, `plan-check`, `explore`, `reader` and `plan`. They
+`filereader`, `reviewer`, `explore`, `reader` and `plan`. They
 are one contract and one wire -- two JSON objects on stdin and stdout -- which
 is why a script and a model-backed agent differ only in what they do between
 reading and writing.
 
 ### One capability, directly
 
-A workflow is several capabilities chained; the single capability is the atom
+A commission is several capabilities chained; the single capability is the atom
 those chains are made of. `atenea ask` dispatches exactly one, against exactly
 one repository, through the same funnel and the same review as any step of a
 commission — a second, quieter dispatch path would be a second set of rules to

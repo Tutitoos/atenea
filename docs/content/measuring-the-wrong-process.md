@@ -8,6 +8,8 @@ weight: 6
 
 # When the instrument is the bug
 
+The workflow engine (`atenea workflow`, recovery pilot and the knowledge store) was measured at the time of this audit; it is no longer part of Atenea (see #212).
+
 Three defects were reported against this project on 2026-08-09, with numbers
 attached to each. All three were confidently written, none of them existed, and
 every one came from the same measurement taken through an instrument nobody had

@@ -27,26 +27,10 @@ specialist roles, concurrency limits, permissions, and parent-child mapping.
 This is distinct from Codex's model-internal collaboration tools; Atenea does
 not claim direct client access to those tools.
 
-For a visible specialist, the workflow acquires its limits, claims the step and
-budget, and publishes the activity notice and progress before any provider
-call. It then reserves the fork in its durable route, issues one `thread/fork`,
-stores the distinct child id, and only then dispatches the step. The child
-process resumes that id and installs its own hook, model, sandbox and role
-instructions before its first turn.
-
-If the connection is lost after the external request, the reservation remains
-`pending` and automatic resume refuses to fork again. After checking the
-provider's thread list, an operator can inspect and bind the verified child,
-then resume the workflow:
-
-```sh
-atenea workflow native-fork inspect --traces /path/to/traces.db WORKFLOW STEP
-atenea workflow native-fork bind --traces /path/to/traces.db \
-  --child-thread VERIFIED_CHILD WORKFLOW STEP
-atenea workflow resume --traces /path/to/traces.db WORKFLOW
-```
-
-Binding refuses the coordinator id and any workflow with an active writer.
+The durable child-thread flow (`atenea workflow native-fork inspect|bind` and
+resuming a workflow whose fork was left `pending`) belonged to the workflow
+engine, which is no longer part of Atenea (see #212). `thread/fork` stays an
+adapter capability.
 
 Canonical profiles are synchronized without launching Codex:
 

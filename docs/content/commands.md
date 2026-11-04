@@ -59,7 +59,7 @@ The aliases `health` and `providers` map to `status` and `catalog`.
 
 ## Safety boundary
 
-The command surface is intentionally read-only. Tasks, workflows,
+The command surface is intentionally read-only. Tasks,
 configuration changes and desktop interaction are not available through it.
 Those operations keep their existing confirmation, effect, allow-list and
 audit policy. `atenea.command` has a closed enum of command names, rejects

@@ -2,6 +2,8 @@
 
 Declared interfaces audited in September 2026. Tests validate Atenea routing and adapters with fixtures; external tools remain unverified operationally.
 
+The workflow engine (`atenea workflow`, recovery pilot and the knowledge store) was measured at the time of this audit; it is no longer part of Atenea (see #212).
+
 | Capability | Implementations | Validation |
 |---|---|---|
 | code.context | kivgraph.context, tokensave.context | Declaration and local contracts |

@@ -19,7 +19,9 @@ go run ./cmd/atenea-dart-coverage
 
 Escribe `benchmarks/runs/dart-coverage-2026-09-06/report.json` y su Markdown.
 Lee los fixtures propios de `internal/dartcoverage/testdata` y vuelve a
-validar S03 y S07 contra el SHA fijo de `benchmarks/corpus/v1`. El corpus P01
+validar S03 y S07 contra el SHA fijo de `benchmarks/corpus/v2` (el informe
+fechado 2026-09-06 se midió contra `v1`, que queda como evidencia histórica; S03
+y S07 y sus fixtures son idénticos byte a byte). El corpus P01
 se abre en modo lectura y su SHA no se modifica.
 
 El reporte fija como base observada Kivgraph
