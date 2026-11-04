@@ -72,7 +72,6 @@ rewritten when they do.
 - [MCP compatibility]({{< relref "mcp-compatibility" >}}) — legacy and modern eras, transports and MRTR limits
 - [Controlled MCP activation]({{< relref "mcp-activation" >}}) — evidence-backed proposals, explicit permissions and append-only activation
 - [Codex]({{< relref "codex" >}}) — native App Server transport, receipts and managed agent profiles
-- [Decision router]({{< relref "decision" >}}) — model, tool, MCP, provider and workflow choices
 - [Settings]({{< relref "settings" >}})
 - [Computer Use]({{< relref "computer-use" >}}) — macOS desktop access through Atenea
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})

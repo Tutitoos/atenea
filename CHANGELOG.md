@@ -81,6 +81,18 @@ next release.** Acceptance scenario S12 keeps its pinned corpus and now runs
 `workflow.TestWorkflowPublishesDurableActivityBeforeAgentProcess`. Dated audit
 evidence that measured these tools is kept and marked as such (#217).
 
+`atenea decide` is removed with the decision stack behind it: its `accept-plan`,
+`status`, `cancel`, `resume` and `answer` forms, the decision planner, the private
+candidate capture and the coordinator store, plus the Decision router page. The
+`task`, `ask` and `workflow` commands are unchanged; durable workflows are still
+managed with `atenea workflow`. A settings file that
+still has a `[decision]` table is refused at load with `unknown key(s): decision,
+decision.capture_dir`; **delete the `[decision]` table.** Files already on disk
+(`accepted-plans/` under the configuration directory, `candidates.private.jsonl`)
+are left alone and nothing reads them; delete them if you want. The contract
+version is unchanged. Dated audit evidence that measured `atenea decide` is kept
+and marked as such (#218).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

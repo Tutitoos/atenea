@@ -142,20 +142,11 @@ defaults: a file quietly ignored is a machine running settings nobody chose.
 A file from a *newer* core than the binary is told to upgrade the binary
 instead, because no edit to the file can fix that one.
 
-## Decision planning capture
+## Removed: the `[decision]` table
 
-The planner classifies `understand`, `search`, `plan` and `change` requests
-with local deterministic rules. Accepted-plan continuations require verified
-context. Classification does not require an external service or configuration.
-See [Decision router]({{< relref "decision" >}}).
-
-`[decision].capture_dir` is accepted but inert: only the removed MCP
-`decision.plan` tool wrote candidates to it (see #212).
-
-```toml
-[decision]
-capture_dir = "" # absolute private directory for opt-in planning capture
-```
+`[decision]` (`capture_dir`) went away with the decision router (#212). A settings
+file that still has the table is refused at load, like any unknown key:
+`unknown key(s): decision, decision.capture_dir`. Delete the table.
 
 ## The orchestrator
 
