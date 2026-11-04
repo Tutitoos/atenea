@@ -1700,6 +1700,22 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %v", source, err)
 	}
+	// A table the 5.0.0 cutover removed is named with its remedy instead of
+	// being reported as a typo: the file was right when it was written.
+	var gone []string
+	named := map[string]bool{}
+	for _, key := range meta.Undecoded() {
+		top := first(key.String())
+		if msg, ok := retiredSections[top]; ok && !named[top] {
+			named[top] = true
+			gone = append(gone, msg)
+		}
+	}
+	if len(gone) > 0 {
+		sort.Strings(gone)
+		return Config{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s", source, strings.Join(gone, "; "))
+	}
 	// An unknown key is almost always a typo, and a typo that is silently
 	// ignored is a setting that never takes effect.
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
@@ -1917,15 +1933,6 @@ var defaultCodexImplementations = []string{"codex.search"}
 // Kivgraph and Tokensave defaults come from their own packages so they cannot
 // drift from the adapters. Neither adapter imports internal/config.
 
-// contractRemedy names the edit that fixes a refused settings file, because
-// the two numbers alone do not say which of them is meant to move.
-//
-// A file behind by a major version is the case that has a one-line fix, and
-// it is the common one: the number a file declares is the core it was written
-// for, no settings key has ever changed shape with it, and a `Health` -- the
-// thing the 2.0.0 break removed -- never appears in a settings file at all.
-// So the file is almost always already correct and only says the wrong year.
-//
 // clientDeniedCapabilitiesDefault is the first-phase MCP surface. The list
 // is capability-level rather than effect-level: desktop.move only causes
 // read + device, so a client floor that allows observation would otherwise
@@ -1946,12 +1953,38 @@ var clientDeniedCapabilitiesDefault = []string{
 	"android.unmirror",
 }
 
-// Every other direction is a file this binary is too old to read, and no edit
-// to the file can fix that. Saying "change the line" there would be advice
-// that produces a second, more confusing failure.
+// retiredSections are the tables contract 5.0.0 removed with the agents, the
+// workflow engine, the decide command and the knowledge store. Each message
+// names the section and the edit; none is ignored silently.
+var retiredSections = map[string]string{
+	"model":            retired("[model]", "the built-in agents", "delete the table"),
+	"agent":            retired("[[agent]]", "the built-in agents", "delete every block"),
+	"local_agents":     retired("[local_agents]", "the built-in agents", "delete the table"),
+	"workflow":         retired("[workflow]", "the workflow engine", "delete the table"),
+	"workflow_profile": retired("[[workflow_profile]]", "the workflow engine", "delete every block"),
+	"decision":         retired("[decision]", "the decide command", "delete the table"),
+	"knowledge":        retired("[knowledge]", "the knowledge store", "delete the table; knowledge.sqlite and traces.db stay on disk, unused"),
+}
+
+func retired(section, with, remedy string) string {
+	return fmt.Sprintf("%s was removed in contract 5.0.0 with %s; %s (see docs/content/migration-5.md)", section, with, remedy)
+}
+
+// contractRemedy names the edit that fixes a refused settings file, because
+// the two numbers alone do not say which of them is meant to move.
+//
+// A file behind by a major version has its fix in the file: delete what the
+// cutovers retired, then say the current number. Every other direction is a
+// file this binary is too old to read, and no edit to the file can fix that.
+// Saying "change the line" there would be advice that produces a second, more
+// confusing failure.
 func contractRemedy(declared contract.Version) string {
 	if declared.Major < contract.Current.Major {
-		return fmt.Sprintf("remove Serena runner, adapter/process, MCP, implementations and indexed_by entries, then change the contract line to %q", contract.Current)
+		remedy := fmt.Sprintf("contract 5.0.0 removed the agents, the workflow engine, the decide command and the knowledge store: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables if present, then change the contract line to %q (see docs/content/migration-5.md)", contract.Current)
+		if declared.Major < 4 {
+			remedy = "remove Serena runner, adapter/process, MCP, implementations and indexed_by entries, and " + remedy
+		}
+		return remedy
 	}
 	return "this file was written for a newer core; upgrade atenea"
 }

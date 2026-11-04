@@ -382,8 +382,9 @@ func find(t *testing.T, cfg Config, id string) contract.Repository {
 	return contract.Repository{}
 }
 
-// The agent keys left the schema with the built-in agents, so an overlay that
-// still carries one is refused by name, as any key this binary does not know.
+// The agent keys left the schema with the built-in agents (contract 5.0.0), so
+// an overlay that still carries one is refused by name with the same remedy
+// the global file gets.
 func TestAnOverlayWithARetiredAgentKeyIsRefusedByName(t *testing.T) {
 	for key, body := range map[string]string{
 		"agent":        "[[agent]]\nname = \"mine\"\nruns = \"reviewer\"\nsummary = \"s\"\n",
@@ -395,8 +396,8 @@ func TestAnOverlayWithARetiredAgentKeyIsRefusedByName(t *testing.T) {
 		if contract.KindOf(err) != contract.FailureInvalidInput {
 			t.Fatalf("%s: kind = %v, want invalid_input (err = %v)", key, contract.KindOf(err), err)
 		}
-		if !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "unknown key") {
-			t.Errorf("%s: error %q does not name the key as unknown", key, err)
+		if !strings.Contains(err.Error(), "was removed in contract 5.0.0") || !strings.Contains(err.Error(), "migration-5.md") {
+			t.Errorf("%s: error %q does not name the removal and its remedy", key, err)
 		}
 	}
 }
