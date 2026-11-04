@@ -8,6 +8,8 @@ weight: 7
 
 # v1 readiness
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). Every Scrapling mention in this document is dated evidence.
 
 The decision stack (`atenea decide`) was measured at the time of this audit; it is no longer part of Atenea (see #212).

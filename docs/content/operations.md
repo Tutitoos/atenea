@@ -59,7 +59,7 @@ Interpret them in this order:
 For a provider problem, use the declared probe before changing configuration:
 
 ```sh
-atenea detect --repo REPOSITORY_ID
+atenea detect
 atenea catalog
 atenea ask code.search --repo REPOSITORY_ID --set query=health
 ```

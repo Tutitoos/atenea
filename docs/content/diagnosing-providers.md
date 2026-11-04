@@ -8,6 +8,8 @@ weight: 5
 
 # When a provider looks flaky
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 A report that reads *"Serena is unstable"* is almost never about Serena.
 
 It is the shape Atenea's own funnel gives to a fault underneath **every**

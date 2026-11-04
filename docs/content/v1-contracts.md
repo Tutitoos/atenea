@@ -11,14 +11,6 @@ tests; una función que necesita otro provider o una decisión interactiva queda
 registrada como límite deliberado, no implícita en la configuración. La matriz
 operativa completa está en [v1.0 policy]({{< relref "v1-policy" >}}).
 
-## Structural search
-
-`symbol.search` retains its language-aware declaration search contract, including
-qualified names, kinds, source ranges and ranks through Kivgraph.
-`symbol.implementations` adds declared and structural compiler evidence.
-`symbol.unresolved` is not advertised by `tools/list`; direct calls return `not_offered`.
-`code.search` remains literal or regex text search.
-
 ## Security and permissions
 
 Effects are granted before dispatch, and an effect outside the grant is refused.

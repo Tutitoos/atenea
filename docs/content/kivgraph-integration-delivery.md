@@ -5,6 +5,8 @@ weight: 7
 
 The embedded dashboard was measured at the time of this audit; it is no longer part of Atenea (see #211).
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 ## Implemented
 
 Contract 4.0 remains additive. The provider matrix now has 39 implementations.

@@ -8,6 +8,8 @@ weight: 6
 
 # When the instrument is the bug
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 The commission flow (`atenea task` and `atenea resume`) was measured at the time of this audit; it is no longer part of Atenea (see #212).
 
 The workflow engine (`atenea workflow`, recovery pilot and the knowledge store) was measured at the time of this audit; it is no longer part of Atenea (see #212).

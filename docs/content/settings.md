@@ -63,7 +63,7 @@ from an explicitly empty one, deliberately:
 | nothing | the built-in list stands |
 | `[]` | genuinely nothing: dispatch nowhere, skip no directory, treat no file as sensitive |
 
-Strip `implementations` out of `[orchestrator.kivgraph]` and its built-in list stands.
+Strip `implementations` out of `[orchestrator.tokensave]` and its built-in list stands.
 Write `implementations = []` to disable all of that adapter's implementations.
 
 `effects` is the one list that does not play by this rule, because a grant
@@ -162,7 +162,7 @@ budget_usd = 0.90           # what ONE CALL may spend
 effects = ["process"]       # granted standing to every call
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
 client_denied_capabilities = ["desktop.move", "desktop.click"] # MCP kill switch
-  runners = ["omp"]           # any of omp, claudecode, codex, kivgraph, tokensave, desktop, local; [] dispatches nowhere
+  runners = ["omp"]           # any of omp, claudecode, codex, tokensave, desktop, android, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
@@ -194,7 +194,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   [orchestrator.tokensave]
   root = "/srv/workspace"              # required, and ABSOLUTE: every path is relative to it
   implementations = ["tokensave.context", "tokensave.calls", "tokensave.overview"]
-  timeout = "90s"                      # re-syncs its own index first: kivgraph's class, not omp's
+  timeout = "90s"                      # re-syncs its own index first: slower than omp, not stuck
 
     # Required: a stdio child has no address to dial.
     [orchestrator.tokensave.process]
@@ -393,8 +393,7 @@ service startup; `on_demand` starts on first use and stops after `idle_timeout`.
 `stable_after`, `ready_timeout` and `stop_grace` bound recovery and shutdown.
 `env` adds variables to the inherited environment. For HTTP processes, `port = 0`
 allocates a free port and substitutes `{{port}}` in `args`.
-Kivgraph uses a shared corpus; Tokensave serves one root. Neither adapter accepts
-`instance = "per_repository"`. MCP stdio declarations support `shared` and `per_chat`.
+Tokensave serves one root and does not accept `instance = "per_repository"`. MCP stdio declarations support `shared` and `per_chat`.
 
 ### The far side that serves one root
 
@@ -406,8 +405,7 @@ server has no address to dial without one` — because there is nothing else in
 the block that could say where the far side is.
 
 `root` is the key no other adapter has, and it is required for the same
-reason it exists. `kivgraph` publishes one corpus addressed by repository
-*name*, while tokensave serves **one project rooted at a directory** and
+reason it exists. tokensave serves **one project rooted at a directory** and
 speaks paths relative to that root, so every path crossing this adapter is
 translated in both directions and the translation has to know where the root
 begins. Leave it out and the runner is refused by name:
@@ -435,18 +433,15 @@ caller could not detect.
 
 The three implementations are what the far side can answer honestly:
 `tokensave.context` for `code.context`, `tokensave.calls` for `symbol.calls`
-and `tokensave.overview` for `symbol.overview`. Three things are deliberately
+and `tokensave.overview` for `symbol.overview`. Two things are deliberately
 absent. No `code.search`, because tokensave has no text engine and a flat
 search answered out of a symbol index is a different answer wearing the same
-name. No `symbol.definition`, because resolving the symbol under a *position*
-back to its declaration needs a type checker and tokensave resolves by name.
-And no indexing implementation at all, unlike kivgraph: this far side
-re-syncs its index on every call, so there is nothing for the funnel to
-trigger.
+name. And no indexing implementation at all: this far side re-syncs its index
+on every call, so there is nothing for the funnel to trigger.
 
-That re-sync is also what `timeout` is sized for. `90s` is kivgraph's ceiling
-rather than omp's because an index brought back into step before the answer
-is slow long before it is stuck.
+That re-sync is also what `timeout` is sized for. `90s` is generous rather than
+tight because an index brought back into step before the answer is slow long
+before it is stuck.
 
 `instance` may only be `shared`, and `per_repository` is refused rather than
 accepted: a second copy pointed at the same root would index the same files
@@ -946,7 +941,6 @@ scope_guarantee = ""        # "", filtered, confined -- see below
 
   [implementation.constraints]
   languages = ["go", "typescript"]   # empty means language-agnostic
-  requires_index = true
   requires_vcs = false               # needs the repository under version control (e.g. a git diff against a baseline)
   min_scale = ""                     # "", small, medium, large
   max_scale = ""
@@ -1015,14 +1009,11 @@ path = "/srv/api"
 languages = ["go"]
 scale = "small"             # "", small, medium, large
 vcs = "present"             # "", present, absent -- whether the root sits under version control
-indexed_by = ["fixture"]     # providers with a ready index HERE
 ```
 
 An unclassified `scale` or an unspecified `vcs` never disqualifies anyone: an
 unknown fact is not a proven mismatch, and dropping candidates over it would
 silently empty the funnel.
-
-Repository indexes identify providers with a ready index; they do not launch processes.
 
 `path` has to be a directory that is really there. Every adapter makes it the
 working directory of the tool it launches, and a missing one used to come back
@@ -1039,17 +1030,10 @@ guess is not free. Writing `small` there drops every implementation that asks
 for a medium repository or bigger, which then looks unimplemented rather than
 unclassified. Set it once you know, and the implementation comes back.
 
-`indexed_by` is a starting point the operator typed by hand, not a live
-fact -- a settings file does not watch the disk, so it can drift the moment
-an index is built or lost after the file was last edited. `atenea detect
-[--repo ID]` asks every attached provider that can answer whether it
-already holds a ready index and corrects the belief in memory for the rest
-of that process's run, the same one-place-a-catalog-entry-changes-while-
-running exception `SetHealth` already is for a provider's health -- it
-writes nothing back to this file, so a later invocation starts again from
-what is declared here. When a provider genuinely has nothing to detect,
-the provider's own indexing tool must build one instead. Atenea only records
-the resulting provider state and does not build indexes itself.
+`indexed_by` and the `requires_index` constraint are gone with the Kivgraph
+provider, the only one that kept an index to ask about: a settings file that
+still has either is refused at load with the edit that fixes it (see the
+[5.0 migration guide]({{< relref "migration-5" >}})).
 
 ## Removed: the `[model]`, `[[agent]]` and `[local_agents]` tables
 
@@ -1088,6 +1072,18 @@ Delete the tables.
 untouched; nothing reads them any more. The same holds for `traces.db` as a
 whole and for `floors.json` (see the section above).
 
+## Removed: the Kivgraph provider
+
+The Kivgraph provider went away in #208 with every setting that only it read:
+`[orchestrator.kivgraph]` (and its `process` and `dashboard_process` tables),
+the `kivgraph` runner name in `orchestrator.runners`, the `kivgraph.*`
+implementation blocks, `indexed_by` on a `[[repository]]` (and in a repository's
+own `.atenea/config.toml`) and the `requires_index` constraint. Each is refused
+at load, naming the setting and the edit (for example `[orchestrator.kivgraph]
+was removed in contract 5.0.0 with the Kivgraph provider; delete the table and
+every sub-table`). So is any `[[capability]]`, `[[implementation]]` or
+`[[selector.rule]]` that names a capability only Kivgraph served; the list is in
+the [5.0 migration guide]({{< relref "migration-5" >}}).
 
 ## MCP servers
 
@@ -1119,40 +1115,10 @@ URL is reachable first. `atenea dashboard hosts --dry-run` previews the
 idempotent, Atenea-managed block in `/etc/hosts`; writing that file requires
 the explicit `atenea dashboard hosts` command and appropriate permissions.
 
-Dashboards use the explicitly configured URL. No retired-provider discovery is performed.
+Dashboards use the explicitly configured URL. No provider discovery is performed.
 Atenea no longer serves a dashboard of its own: a settings file that still has
 a `[dashboard]` table is rejected as an unknown key, and the table must be
 deleted.
-
-Kivgraph 0.9.2 has two separate processes: its native daemon, which serves MCP
-over authenticated streamable HTTP (stdio `kivgraph serve` remains an explicit
-alternative), and its optional read-only graph viewer. Install the daemon with
-`kivgraph daemon install`, then copy its endpoint and token from
-`~/.local/state/kivgraph/daemon.json` into Atenea. The viewer remains independent:
-
-```toml
-[orchestrator.kivgraph]
-endpoint = "http://127.0.0.1:7788/mcp"
-token = "token from ~/.local/state/kivgraph/daemon.json"
-binary = "kivgraph"
-index_timeout = "30m" # separate from the shorter read timeout
-auto_reindex_registered = false # explicit, narrow standing authorization
-index_env = [] # KEY=value entries for the index child, e.g. its toolchain PATH
-dashboard = "http://127.0.0.1:7777"
-
-[orchestrator.kivgraph.dashboard_process]
-command = "/Users/gtrave/.local/opt/kivgraph-ui/bin/kivgraph"
-args = ["ui", "--addr", "127.0.0.1:7777"]
-env = ["HOME=/Users/gtrave"]
-lifecycle = "persistent"
-port = 7777
-```
-
-This process is checked with a normal HTTP GET, not an MCP handshake. It is
-kept bound to loopback and does not open a browser. Use `atenea dashboard
-kivgraph` when the page should be opened explicitly. A binary built without
-the web bundle is not a valid dashboard provider: adding its URL would claim
-a UI that cannot serve one.
 
 Each block sets `url` or `command`, never both; repeating an `id` is refused
 rather than resolved; and an `id` may not contain a dot. Those refusals are
@@ -1488,7 +1454,7 @@ required.
 # /home/you/work/api/.atenea/config.toml
 [[repository]]
 scale = "medium"           # this repository is medium here, whatever the global file says
-                           # languages, vcs and indexed_by are not named, so they inherit
+                           # languages and vcs are not named, so they inherit
 
 [[selector.rule]]
 capability = "code.search"
@@ -1509,7 +1475,6 @@ repository api  /home/you/work/api
   global   languages   go
   local    scale       medium
   global   vcs         present
-  global   indexed_by  fixture
 ```
 
 ### Which file applies
@@ -1557,7 +1522,7 @@ reason:
 
 | allowed | what it says |
 | --- | --- |
-| `[[repository]]` — `languages`, `scale`, `vcs`, `indexed_by` | what this repository is |
+| `[[repository]]` — `languages`, `scale`, `vcs` | what this repository is |
 | `[[selector.rule]]` | which implementation to prefer, for this repository only |
 | `[security] sensitive` | further files to treat as delicate |
 
@@ -1623,8 +1588,8 @@ asks for, what happens here?
 ```
 asked for
   funnel     fixture (local)
-             -> provider fixture: code.search, symbol.definition, symbol.references
-                via fixture.definition, fixture.references, fixture.search
+             -> provider fixture: code.search, symbol.overview
+                via fixture.overview, fixture.search
   vouched    semgrep (local)
              declared by Atenea and handed to clients by `atenea wrap`
   unmatched  dart (local, off in the project's settings)

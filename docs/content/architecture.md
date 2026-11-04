@@ -19,10 +19,10 @@ weight: 3
    |        Orchestrator (agent): dispatches      |
    |        one call, reviews the answer          |
    +----------------------------------------------+
-       |       |       |       |       |       |
-    adapter adapter adapter adapter adapter adapter <- dumb translators
-       |       |       |       |       |       |
-      omp   Claude   Codex  Kivgraph Tokensave
+       |       |       |       |
+    adapter adapter adapter adapter <- dumb translators
+       |       |       |       |
+      omp   Claude   Codex  Tokensave
 ```
 
 ## Capability vs implementation
@@ -37,7 +37,7 @@ Everything that varies by tool lives here, in four blocks.
 | Block | Holds |
 | --- | --- |
 | **1. Capability** | Which capability this answers. |
-| **2. Constraints** | Languages, whether an index is required, whether the repository must sit under version control, and the repository sizes it is worth using on. |
+| **2. Constraints** | Languages, whether the repository must sit under version control, and the repository sizes it is worth using on. |
 | **3. Cost** | Time, tokens and peak memory. Hybrid: an estimate to begin with, real measurements the moment there are enough. |
 | **4. Health** | Alive, degraded, down, or unknown before anything has probed it, plus a comparable score. The block that enables fallback. |
 
@@ -55,12 +55,8 @@ swappability is the entire point.
 ## The unit of work is the repository
 
 Not the project. Constraints are measured per repository: the selector asks
-"does **this** repository have an index?", and a workspace of forty repositories
-is forty separate answers. One global index over all of them was the
-alternative, refused for being slow to build and impossible to keep fresh.
-
-An index belongs to the **provider** that built it, not to one implementation of
-it, so two implementations of a provider share one warm index.
+"does this provider fit **this** repository?", and a workspace of forty
+repositories is forty separate answers.
 
 ## The funnel
 
@@ -69,7 +65,7 @@ it, so two implementations of a provider share one warm index.
                 |
                 v
      [1] constraints   who CAN work here
-                |          language, index, scale
+                |          language, version control, scale
                 v
      [2] reach         who is WIRED UP at all
                 |          no attached client serves it
@@ -84,9 +80,10 @@ it, so two implementations of a provider share one warm index.
 ```
 
 Reach runs after constraints and before health because the trace should carry
-the most useful reason it can. A provider that both needs a missing index and
-has nothing wired up should be reported for the index: that is the fact the
-user can act on, and the one that would still block after the wiring was fixed.
+the most useful reason it can. A provider that both does not fit the
+repository and has nothing wired up should be reported for the fit: that is the
+fact the user can act on, and the one that would still block after the wiring
+was fixed.
 
 Reach is its own stage rather than a health verdict because the two are
 different kinds of fact. Health is what a probe found — running a step is a

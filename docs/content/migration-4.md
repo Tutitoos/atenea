@@ -5,6 +5,8 @@ weight: 4
 
 # Migrating from 3.x
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 Serena is a retired provider. Contract 4.0.0 deliberately rejects 3.x files.
 Do not update only the version header: first remove the following declarations:
 

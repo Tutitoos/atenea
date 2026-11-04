@@ -183,6 +183,49 @@ change here invalidates the real Codex certification (the checked-in certificate
 also expired 2026-10-08): **the real Codex re-certification is REQUIRED before
 the next release.** Dated audit evidence is kept and marked as such (#222).
 
+The Kivgraph provider and the capabilities only it served are removed (#208),
+inside 5.0.0 rather than as a `6.0.0`: the contract has not been released, so the
+removal is part of its notes. Gone are `internal/adapter/kivgraph`, the
+`kivgraph` runner, `[orchestrator.kivgraph]` (and its `process` and
+`dashboard_process` tables), the `kivgraph.*` implementations, `internal/mcphttp`
+(whose only caller was the Kivgraph daemon client), `indexed_by`, the
+`requires_index` constraint and the index probing they fed
+(`contract.IndexProber`, `Repository.SetIndexed`, the registry's persisted
+overrides and the selector's index filter), the index half of `atenea detect`
+(it probes the declared `[[mcp_server]]` entries; `--repo` is gone),
+`atenea.command maintenance` and the `atenea_kivgraph_usage` receipt key. These
+capabilities had no other implementation and left the shipped catalog instead of
+staying declared but unserved: `symbol.search`, `symbol.intent_search`,
+`symbol.definition`, `symbol.references`, `symbol.implementations`,
+`symbol.dependencies`, `symbol.consumers`, `symbol.get`, `symbol.unresolved`,
+`symbol.source`, `symbol.impact`, `graph.status`, `graph.repositories`,
+`graph.ensure_fresh`, `repository.index` and `code.impact`. `code.search`,
+`code.context`, `symbol.overview`, `symbol.calls` and the `desktop.*` and
+`android.*` families keep their other providers. **Delete the
+`[orchestrator.kivgraph]` tables, the `kivgraph` runner, the `kivgraph.*`
+implementation blocks, the capability blocks above, `indexed_by` and
+`requires_index`** from your settings file: each is refused at load by name with
+the edit to make (for example `[orchestrator.kivgraph] was removed in contract
+5.0.0 with the Kivgraph provider; delete the table and every sub-table`), all in
+one message, and `atenea config init --force` writes a clean file. Acceptance
+corpus **v3** (`benchmarks/corpus/v3`: S04, S08 and S09) replaces v2: S01-S03 and
+S05-S07 were probed only through the Kivgraph adapter and the Dart coverage
+matrix, so they are retired rather than re-pointed, `internal/dartcoverage` and
+`cmd/atenea-dart-coverage` are removed, the `quality` gate goes, and
+`CanonicalCorpusSHA256` is now
+`ceed1238cfa16eb9b9718b5ef6a896638e16bdaad9a35ab26b35349e2beb5208`. The runner
+now proves workspace scoping and the two MCP protocol declarations, and no longer
+language-specific context or implementation relations; re-adding language
+scenarios with Tokensave-backed probes is a separate issue. The Go, TypeScript
+and Dart files stay in v3 only because `fixtures/workspace.json` names them as
+S04's file scopes. v1, v2 and the dated reports under `benchmarks/runs/` are kept
+as historical evidence but the code no longer verifies them. Kivgraph's own
+install and data, shipped SQL migrations and old registry state are left alone
+and nothing reads them. The contract version is unchanged. Every source change
+here invalidates the real Codex certification: **repeat it before the next
+release** (#229). Dated audit evidence that measured Kivgraph is kept and marked
+as such. See [the migration guide](docs/content/migration-5.md).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

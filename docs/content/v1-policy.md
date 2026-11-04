@@ -16,7 +16,6 @@ proveedores soportados.
 | --- | --- | --- | --- |
 | Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo; `--confirm` añade aprobación TTY para `ask` | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | La confirmación es opt-in; los procesos desatendidos requieren concesión explícita |
 | Coste | `budget_usd` autoriza; el core rechaza cualquier resultado cuyo coste reportado supere el permiso | `internal/orchestrator/`, `internal/core/commission.go` | El proveedor puede haber iniciado trabajo que ya estaba en vuelo; no existe cancelación común por centavos |
-| Búsqueda estructural | `symbol.search` se sirve mediante `kivgraph.search` | `internal/config/default.toml` | La disponibilidad operativa depende del proveedor configurado; declarar una implementación no certifica su salud |
 | Cobertura de tests | CI ejecuta la suite con perfil de cobertura y publica la medición y los artefactos por plataforma, sin convertir un porcentaje en requisito de paso | `.github/workflows/ci.yml` | La cobertura cuenta sentencias ejecutadas y sirve como señal informativa, no como prueba de cobertura semántica total |
 
 ## Decisiones de no-implementación
@@ -25,10 +24,11 @@ Estas decisiones no son fallos silenciosos:
 
 1. No se añade un prompt interactivo de permisos al daemon o a un adaptador.
    Solo los comandos directos solicitan `--confirm`, y fallan si no hay TTY.
-2. `code.impact` y `repository.index` tienen provider Kivgraph. El primero
-   compara un baseline Git con la copia actual y devuelve impacto acotado al
-   repositorio; el segundo ejecuta el indexador oficial con permisos explícitos
-   `write+process` y verifica el snapshot publicado antes de responder.
+
+> Kivgraph y las capacidades que solo él servía (`symbol.search`,
+> `symbol.implementations`, `code.impact`, `repository.index` y el resto de
+> `symbol.*` y `graph.*`) se midieron en el momento de esta política; ya no
+> forman parte de Atenea (véase #208). Sus garantías se retiraron con ellos.
 
 > Los agentes integrados (`atenea agent`), su revisión por citas, la revisión
 > semántica y el backend OpenCode se midieron en el momento de esta política; ya

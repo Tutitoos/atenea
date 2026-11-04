@@ -6,8 +6,9 @@ weight: 5
 # Migrating from 4.x
 
 Contract 5.0.0 finishes the removal tracked in #212: Atenea is `ask` plus the
-MCP capability surface, and nothing else. A 4.x settings file is refused until
-the tables below are deleted. Changing only the header is not enough, and the
+MCP capability surface, and nothing else. It also drops the Kivgraph provider
+and the capabilities only it served (#208). A 4.x settings file is refused until
+the tables, keys and blocks below are deleted. Changing only the header is not enough, and the
 header alone is not what fails first: any retired table is refused by name.
 
 ## What was removed
@@ -32,11 +33,53 @@ Settings tables, with what each was:
 | `[decision]` | the `decide` command (every key was already inert) |
 | `[knowledge]` | the knowledge store |
 
-`atenea ask` and the whole MCP capability surface (`code.search`,
-`code.context`, `workspace.context`, `symbol.*`, `graph.*` and every capability
-you declared) behave as before. `[orchestrator]`, the selector, the metrics
-base, the result cache and the catalog blocks are untouched, so no other key
-moves.
+`atenea ask` and the remaining MCP capability surface (`code.search`,
+`code.context`, `workspace.context`, `symbol.overview`, `symbol.calls`, the
+`desktop.*` and `android.*` families and every other capability you declared)
+behave as before. `[orchestrator]`, the selector, the metrics base, the result
+cache and the catalog blocks are untouched apart from what the next section
+lists, so no other key moves.
+
+## The Kivgraph provider and the capabilities only it served
+
+Kivgraph is no longer part of Atenea (#208): the adapter, its `kivgraph`
+runner, `[orchestrator.kivgraph]` (with its `process` and `dashboard_process`
+tables), the `kivgraph.*` implementations, the `atenea.command maintenance`
+command and the `atenea_kivgraph_usage` receipt key are gone. Nothing replaces
+it. `indexed_by` and `requires_index` go with it, because Kivgraph was the only
+provider that kept an index to ask about, and so does the index half of
+`atenea detect` (it now only probes the declared `[[mcp_server]]` entries, and
+`--repo` is gone).
+
+These capabilities had no implementation left, so they left the shipped catalog
+instead of staying declared but unserved. They disappear from `tools/list`, the
+`catalog` and the orchestrator's askable surface:
+
+| removed | removed | removed | removed |
+| --- | --- | --- | --- |
+| `symbol.search` | `symbol.intent_search` | `symbol.definition` | `symbol.references` |
+| `symbol.implementations` | `symbol.dependencies` | `symbol.consumers` | `symbol.get` |
+| `symbol.unresolved` | `symbol.source` | `symbol.impact` | `graph.status` |
+| `graph.repositories` | `graph.ensure_fresh` | `repository.index` | `code.impact` |
+
+These keep a provider and are unchanged: `code.search` (ripgrep, Claude Code,
+Codex), `code.context` and `symbol.overview` and `symbol.calls` (Tokensave), and
+the `desktop.*` and `android.*` families. `workspace.context` is not a catalog
+capability and is unchanged.
+
+The contract version stays `5.0.0`: it has not been released, so this is part of
+its notes rather than a `6.0.0`. Clients that called a removed tool get the
+ordinary unknown-tool answer. The client defaults (`client_denied_capabilities`,
+the desktop profiles and the `atenea wrap` translation) never named any of them,
+so nothing there changes.
+
+The acceptance corpus moves to **v3** (`benchmarks/corpus/v3`): S01, S02, S03,
+S05, S06 and S07 were probed only through the Kivgraph adapter and the Dart
+coverage matrix (`cmd/atenea-dart-coverage`, removed), so they are retired
+rather than re-pointed; S04 (workspace scope), S08 and S09 (MCP declarations)
+remain. The runner therefore proves workspace scoping and the two protocol
+declarations, and no longer language-specific context or implementation
+relations. The `quality` gate went with the scenarios it covered.
 
 ## Fixing a 4.x file
 
@@ -47,11 +90,29 @@ atenea: invalid_input: settings ~/.config/atenea/atenea.toml: [workflow] was rem
 ```
 
 Several retired tables are reported in one message. Delete each one named,
-then change the header to `contract = "5.0.0"`. A file that declares a 4.x
+then change the header to `contract = "5.0.0"`. The Kivgraph leftovers are named
+the same way, all in one message with the sentences separated by `;`. The
+sentences are:
+
+```text
+[orchestrator.kivgraph] was removed in contract 5.0.0 with the Kivgraph provider; delete the table and every sub-table (see docs/content/migration-5.md)
+runner "kivgraph" was removed in contract 5.0.0 with the Kivgraph provider; delete the entry from orchestrator.runners (see docs/content/migration-5.md)
+[[implementation]] kivgraph.definition, kivgraph.references was removed in contract 5.0.0 with the Kivgraph provider; delete the blocks (see docs/content/migration-5.md)
+capability "symbol.definition" was removed in contract 5.0.0 with the Kivgraph provider, the only implementation it had; delete its [[capability]] block, every [[implementation]] that serves it and every [[selector.rule]] that names it (see docs/content/migration-5.md)
+```
+
+(The last covers a `[[capability]]`, `[[implementation]]` or `[[selector.rule]]`
+naming a removed capability; several are listed together as `capabilities "a",
+"b"`. `indexed_by` and `requires_index` are refused the same way. A file
+generated by the old `config init` carries all of them, so delete the
+`[orchestrator.kivgraph]` tables, the 17 `kivgraph.*` implementation blocks, the
+16 capability blocks above, `indexed_by` on each repository and every
+`requires_index` line.) The simplest fix for an unedited generated file is to
+run `atenea config init --force` and re-apply your own changes. A file that declares a 4.x
 header and has none of those tables is refused by the contract check instead:
 
 ```text
-atenea: invalid_input: settings ~/.config/atenea/atenea.toml: contract 4.1.0 is not supported by this core (5.0.0): contract 5.0.0 removed the agents, the workflow engine, the decide command and the knowledge store: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables if present, then change the contract line to "5.0.0" (see docs/content/migration-5.md)
+atenea: invalid_input: settings ~/.config/atenea/atenea.toml: contract 4.1.0 is not supported by this core (5.0.0): contract 5.0.0 removed the agents, the workflow engine, the decide command, the knowledge store and the Kivgraph provider: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables, the [orchestrator.kivgraph] tables, the "kivgraph" runner, the kivgraph.* implementations, the capabilities named in docs/content/migration-5.md and every indexed_by key if present, then change the contract line to "5.0.0" (see docs/content/migration-5.md)
 ```
 
 Validate the result with `atenea config show`. A 3.x file still needs the
@@ -67,12 +128,16 @@ removed by hand:
   directory;
 - `accepted-plans/` and `candidates.private.jsonl`;
 - old checkpoint kinds still decode, so a receipt written by a 4.x core stays
-  readable.
+  readable;
+- Kivgraph's own installation and graph data (`~/.local/opt/kivgraph`,
+  `~/.local/state/kivgraph`, its daemon unit) and the `indexed_by` entries in
+  the registry state file, which are ignored when read. Shipped SQL migrations
+  are not edited, and any Kivgraph rows in the measurement base stay dormant.
 
 ## Release certification
 
 The checked-in Codex certificate binds the source commit, the binary, the
 profiles and the MCP overlay, so it is stale for every source change in this
-series (it also expired 2026-10-08). A real Codex re-certification by the
+series (and the acceptance corpus pin changed again with v3) (it also expired 2026-10-08). A real Codex re-certification by the
 operator, with the private key, is **required before the next release**; the
 release workflow's certification gate fails until it is done.
