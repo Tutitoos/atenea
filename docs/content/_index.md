@@ -32,7 +32,7 @@ what it knows about the repository in front of it.
 ## Where the project stands
 
 **These pages describe Atenea `1.1.0`**, speaking
-contract `3.6.0`. The product is stable; Claude Code, Codex, OpenCode and the
+contract `5.0.0`. The product is stable; Claude Code, Codex, OpenCode and the
 Kivgraph web viewer remain optional external provider surfaces. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
 landed.
@@ -72,6 +72,7 @@ rewritten when they do.
 - [Controlled MCP activation]({{< relref "mcp-activation" >}}) — evidence-backed proposals, explicit permissions and append-only activation
 - [Codex]({{< relref "codex" >}}) — native App Server transport, receipts and managed agent profiles
 - [Settings]({{< relref "settings" >}})
+- [Migrating to contract 5.0]({{< relref "migration-5" >}}) — what the agents, workflow and knowledge removal changes in a settings file
 - [Computer Use]({{< relref "computer-use" >}}) — macOS desktop access through Atenea
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})
 - [When the instrument is the bug]({{< relref "measuring-the-wrong-process" >}}) — three defects that were not there

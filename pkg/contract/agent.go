@@ -23,8 +23,8 @@ type AgentType uint8
 const (
 	// AgentUnspecified is the zero value and is never valid on a real agent.
 	AgentUnspecified AgentType = iota
-	// AgentOrchestrator explores, splits the commission and hands out the
-	// pieces. It decides; it does not do the work itself.
+	// AgentOrchestrator is the card the orchestrator carries: it dispatches a
+	// capability call; it does not do the work itself.
 	// AgentOrchestrator is part of ATENEA's public orchestration contract.
 	AgentOrchestrator
 	// AgentSpecialized executes one objective it was handed and answers in
