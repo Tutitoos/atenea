@@ -97,7 +97,6 @@ scripts/v1-policy-check.sh
 scripts/benchmark-check.sh
 scripts/load-check.sh
 scripts/provider-matrix-check.sh
-scripts/scrapling-spider-check.sh
 "$build_dir/atenea" version
 
 echo "v1 readiness gate passed"

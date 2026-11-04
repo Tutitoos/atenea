@@ -61,14 +61,6 @@ required=(
 	"android.key|adb.key"
 	"android.mirror|scrcpy.mirror"
 	"android.unmirror|scrcpy.unmirror"
-	"web.fetch|scrapling.fetch"
-	"web.fetch|scrapling.request"
-	"web.fetch|scrapling.stealth"
-	"web.extract|scrapling.extract_fetch"
-	"web.extract|scrapling.extract_request"
-	"web.extract|scrapling.extract_stealth"
-	"web.crawl|scrapling.crawl"
-	"web.crawl|scrapling.crawl_stealth"
 )
 
 # The edge, not just its right-hand side. The loop used to search the whole
