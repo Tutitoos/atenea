@@ -616,12 +616,10 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		}, "required": []string{"name"}},
 	})
 	tools = append(tools, v.repositoriesTool())
-	tools = append(tools, v.decisionPlanTool())
 	tools = append(tools, v.workspaceContextTool())
 	if v.core.knowledgeSurfaceEnabled() {
 		tools = append(tools, v.knowledgeContextTool())
 	}
-	tools = append(tools, v.workflowTools()...)
 	for _, capability := range capabilities {
 		if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
 			continue
@@ -779,12 +777,6 @@ func (v *conversation) aimable(schema map[string]any) map[string]any {
 
 // aimedAt adds the repository argument to a schema and makes it required when
 // the machine has more than one to choose between.
-//
-// Split out of aimable because the workflow tools need exactly this half and
-// none of the other: route_prefer is the selector's, and a workflow step names
-// its own agent. They used to declare no repository at all, which meant a
-// caller had no way to aim them and the code behind them fell back to the
-// service's working directory.
 func (v *conversation) aimedAt(schema map[string]any) map[string]any {
 	repos := v.core.catalog.Repositories()
 	ids := make([]string, 0, len(repos))
@@ -870,7 +862,6 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	var statsErr error
 	observation := &mcpObservation{}
 	ctx = context.WithValue(ctx, observationKey{}, observation)
-	ctx = context.WithValue(ctx, statsErrorKey{}, &statsErr)
 	var incoming toolsCallParams
 	_ = json.Unmarshal(raw, &incoming)
 	statsName, _ := normalizeDesktopToolName(incoming.Name)
@@ -946,25 +937,8 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if params.Name == toolWorkspaceContext {
 		return v.workspaceContext(ctx, arguments)
 	}
-	if params.Name == toolDecisionPlan {
-		return v.decisionPlan(ctx, arguments)
-	}
 	if params.Name == toolKnowledgeContext {
 		return v.knowledgeContext(ctx, arguments)
-	}
-	switch params.Name {
-	case toolWorkflowCreate:
-		return v.workflowCreate(ctx, arguments)
-	case toolWorkflowLaunch:
-		return v.workflowLaunch(ctx, arguments)
-	case toolWorkflowStatus:
-		return v.workflowStatus(ctx, arguments)
-	case toolWorkflowCancel:
-		return v.workflowCancel(ctx, arguments)
-	case toolWorkflowResume:
-		return v.workflowResume(ctx, arguments)
-	case toolWorkflowAnswer:
-		return v.workflowAnswer(ctx, arguments)
 	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
@@ -1317,13 +1291,6 @@ func refusalOf(result *orchestrator.Result) string {
 		return "nothing ran"
 	}
 	return "the run finished with verdict " + result.Steps[0].Review.Parent.String()
-}
-
-func toolFailure(message string) map[string]any {
-	return map[string]any{
-		"content": []any{map[string]any{"type": "text", "text": message}},
-		"isError": true,
-	}
 }
 
 func desktopDiagnostic(code, requested, normalized string, fallback bool, message, recommendation string) map[string]any {

@@ -149,9 +149,8 @@ with local deterministic rules. Accepted-plan continuations require verified
 context. Classification does not require an external service or configuration.
 See [Decision router]({{< relref "decision" >}}).
 
-`[decision].capture_dir` optionally writes unreviewed, automatically redacted
-`decision.plan` candidates to a private directory outside Git. Its empty
-default leaves capture off; see the privacy requirements in Decision router.
+`[decision].capture_dir` is accepted but inert: only the removed MCP
+`decision.plan` tool wrote candidates to it (see #212).
 
 ```toml
 [decision]
@@ -1573,9 +1572,8 @@ atenea workflow launch <id>        # commits the grant and runs it
 
 `atenea workflow run plan.toml` is both at once, and honest about it: the
 person typed the path, so the reading and the commissioning are the same act.
-Over MCP there is no such shortcut -- `workflow.create` and `workflow.launch`
-are separate tools, because a plan and the permission to run it arriving in
-one message is the arrangement a gate exists to prevent.
+Workflows are driven from the CLI only: the MCP `workflow.*` tools were removed
+(see #212).
 
 The graph may grow mid-run, three times at most. Nothing proposes an
 expansion yet: it comes from a file, the same as the first graph did.

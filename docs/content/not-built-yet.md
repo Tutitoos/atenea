@@ -1255,6 +1255,8 @@ baseline on the same day showed +342 across three clients from `workflow.create`
 and `workflow.launch`, unrelated work landing in the same tree: a baseline names
 a moment, not a cause.
 
+The workflow.* and decision.plan MCP tools were measured at the time of this audit; they are no longer part of Atenea (see #212).
+
 **The condition, unchanged and still unmet.** Nothing above changes it, and the
 build does not earn it. It stays what it was: `migration/` becomes a registerable
 TypeScript project — a named `package.json` with a `tsconfig` that covers it — so

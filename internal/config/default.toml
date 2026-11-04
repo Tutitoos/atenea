@@ -38,7 +38,8 @@ ttl = "5m"
 enabled = false
 
 [decision]
-# Optional private capture for real MCP decision.plan requests. Keep outside Git.
+# Reserved. Nothing writes captures since the MCP decision.plan tool was removed
+# (#212); the key is still accepted so existing settings files keep loading.
 capture_dir = ""
 
 [orchestrator]

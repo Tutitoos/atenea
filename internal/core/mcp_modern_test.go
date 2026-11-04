@@ -108,9 +108,7 @@ func TestModernRequestsNeedMetadataAndReturnServerInfo(t *testing.T) {
 }
 
 func TestModernIdentityDoesNotChangeApplicationPermissions(t *testing.T) {
-	settings, plan := writingPlanFixture(t, 0)
-	settings = strings.Replace(settings, "client_effects = [\"write\", \"external\"]", "client_effects = []", 1)
-	atenea := buildService(t, settings)
+	atenea := buildService(t, mcpSettings(t))
 	defer serve(t, atenea)()
 
 	c := dial(t)
@@ -122,12 +120,6 @@ func TestModernIdentityDoesNotChangeApplicationPermissions(t *testing.T) {
 	result(t, c.call(core.MethodToolsList, modernParams("attacker", grantShaped)), "observed identity refresh")
 	if sessions := atenea.Sessions(); len(sessions) != 0 {
 		t.Fatalf("second modern request leaked an application session: %v", sessions)
-	}
-	created := c.call(core.MethodToolsCall, mergeModern(map[string]any{
-		"name": "workflow.create", "arguments": map[string]any{"file": plan},
-	}, "attacker"))
-	if got, _ := created["result"].(map[string]any); got["isError"] != true {
-		t.Fatalf("grant-shaped metadata widened permission: %v", created)
 	}
 }
 

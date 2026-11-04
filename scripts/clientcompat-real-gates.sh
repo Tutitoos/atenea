@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Opt-in only. The caller supplies an actual installed client binary and a
-# batch command that drives it through MCP and workflow.status. This gate never
+# batch command that drives it through MCP and catalog.repositories. This gate never
 # writes a persistent client profile and never treats a discovered binary as a
 # successful connection. The transcript is the acceptance artifact.
 clients=(codex claude opencode chatgpt omp)

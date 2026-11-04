@@ -53,7 +53,7 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 		itemType, _ := item["type"].(string)
 		itemID, _ := item["id"].(string)
 		text, _ := item["text"].(string)
-		expectedNotice := fmt.Sprintf("**ATENEA · workflow.status** — consulto %s para verificar actividad y progreso.", invocationID)
+		expectedNotice := fmt.Sprintf("**ATENEA · catalog.repositories** — consulto %s para verificar actividad y progreso.", invocationID)
 		if eventType == "item.completed" && itemType == "agent_message" && strings.Contains(text, "ATENEA ·") {
 			totalNotices++
 			if strings.TrimSpace(text) == expectedNotice {
@@ -65,7 +65,7 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 		}
 		if eventType == "item.started" && itemType == "mcp_tool_call" {
 			totalToolCalls++
-			if item["server"] == "atenea" && item["tool"] == "workflow.status" && matchingArguments(item["arguments"], nonce, runID, workflowID, invocationID) {
+			if item["server"] == "atenea" && item["tool"] == "catalog.repositories" && matchingArguments(item["arguments"], nonce, runID, workflowID, invocationID) {
 				obs.RequestCount++
 				toolID = itemID
 				if obs.RequestSequence < 0 {
@@ -165,7 +165,7 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 		item, _ := event["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
 		text, _ := item["text"].(string)
-		expectedNotice := fmt.Sprintf("**ATENEA · workflow.status** — reanudo %s desde cursor 1 sin repetir actividad.", invocationID)
+		expectedNotice := fmt.Sprintf("**ATENEA · catalog.repositories** — reanudo %s desde cursor 1 sin repetir actividad.", invocationID)
 		if eventType == "item.completed" && itemType == "agent_message" {
 			if strings.Contains(text, "ATENEA ·") {
 				totalNotices++
@@ -180,7 +180,7 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 		}
 		if eventType == "item.started" && itemType == "mcp_tool_call" {
 			totalToolCalls++
-			if item["server"] == "atenea" && item["tool"] == "workflow.status" && matchingReconnectArguments(item["arguments"], nonce, runID, workflowID, invocationID) {
+			if item["server"] == "atenea" && item["tool"] == "catalog.repositories" && matchingReconnectArguments(item["arguments"], nonce, runID, workflowID, invocationID) {
 				started++
 				requestSequence = sequence
 				toolID, _ = item["id"].(string)

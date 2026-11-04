@@ -71,8 +71,8 @@ func (c fixtureConnection) Transcript(context.Context) (Transcript, error) {
 	base := []TranscriptEvent{{Kind: "handshake", ID: "handshake-1", RunID: c.runID, ClientInfo: c.clientInfo, ProtocolVersion: "2026-07-28", Transport: c.transport, Profile: c.profile, Requested: "2026-07-28", Observed: "2026-07-28"}}
 	if c.cursor != "" {
 		base = append(base,
-			TranscriptEvent{Kind: "request", ID: "status-2", Method: "workflow.status", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-2", ActivityAfter: 1},
-			TranscriptEvent{Kind: "response", ID: "status-2-response", Method: "workflow.status", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-2", ActivityCursor: 2},
+			TranscriptEvent{Kind: "request", ID: "status-2", Method: "catalog.repositories", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-2", ActivityAfter: 1},
+			TranscriptEvent{Kind: "response", ID: "status-2-response", Method: "catalog.repositories", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-2", ActivityCursor: 2},
 		)
 		return Transcript{SessionID: session, Reconnect: true, Provenance: Provenance{Level: EvidenceFixture, Source: EvidenceFixture, Recorder: "fixture-recorder"}, Events: base}, nil
 	}
@@ -83,8 +83,8 @@ func (c fixtureConnection) Transcript(context.Context) (Transcript, error) {
 		TranscriptEvent{Kind: "response", ID: "call-1-response", Method: "tools/call", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "invocation-1"},
 		TranscriptEvent{Kind: "activity", ID: "activity-1", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "invocation-1"},
 		TranscriptEvent{Kind: "render", ID: "render-1", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "invocation-1", Source: "fixture", Text: "Checklist [x]\n**Progreso:** " + bar},
-		TranscriptEvent{Kind: "request", ID: "status-1", Method: "workflow.status", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-1", ActivityAfter: 0},
-		TranscriptEvent{Kind: "response", ID: "status-1-response", Method: "workflow.status", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-1", ActivityCursor: 1},
+		TranscriptEvent{Kind: "request", ID: "status-1", Method: "catalog.repositories", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-1", ActivityAfter: 0},
+		TranscriptEvent{Kind: "response", ID: "status-1-response", Method: "catalog.repositories", RunID: c.runID, WorkflowID: c.workflowID, InvocationID: "status-1", ActivityCursor: 1},
 	)
 	return Transcript{SessionID: session, Provenance: Provenance{Level: EvidenceFixture, Source: EvidenceFixture, Recorder: "fixture-recorder"}, Events: base}, nil
 }
