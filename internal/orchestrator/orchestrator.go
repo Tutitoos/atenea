@@ -107,48 +107,17 @@ const (
 	contextCapability = "code.context"
 )
 
-// The symbol capabilities, plus the two that read the call graph itself. The
-// orchestrator does not plan a commission around any of them -- it plans
-// around a text search, which is brick 4's shape and stays -- but it declares
-// them because declaring is what makes a step askable at all. A capability
-// the card does not name cannot be dispatched even when the catalog, the
-// funnel and a runner are all ready for it.
-//
-// symbol.search is here because it was once not. It shipped complete in every
-// other respect -- declared in default.toml, bound to MCP server.symbol_search,
-// answered by runSearch, chosen by the funnel -- and every call was refused at
-// this list. Warning about the trap in a comment turned out not to be the same
-// as closing it, so core.checkAskable now refuses at load a catalog capability
-// this card does not name.
+// The two symbol capabilities a provider still answers: the declarations of a
+// file, and the call graph around a symbol. The orchestrator does not plan a
+// commission around either of them -- it plans around a text search, which is
+// brick 4's shape and stays -- but it declares them because declaring is what
+// makes a step askable at all. A capability the card does not name cannot be
+// dispatched even when the catalog, the funnel and a runner are all ready for
+// it, so core.checkAskable refuses at load a catalog capability this card does
+// not name.
 const (
-	symbolSearchCapability    = "symbol.search"
-	intentSearchCapability    = "symbol.intent_search"
-	definitionCapability      = "symbol.definition"
-	dependenciesCapability    = "symbol.dependencies"
-	referencesCapability      = "symbol.references"
-	implementationsCapability = "symbol.implementations"
-	overviewCapability        = "symbol.overview"
-	callsCapability           = "symbol.calls"
-	impactCapability          = "code.impact"
-	indexCapability           = "repository.index"
-)
-
-// code.impact and repository.index are direct, explicit questions. They are
-// not planned into ordinary exploration: indexing asks for write and process,
-// and impact asks for process in addition to the read that is always free.
-
-// The four Kivgraph answers. Named here for the reason stated above and for
-// no other: none of them is planned into a commission either. Three read one
-// symbol's cross-repository consumers, its identity by stable key, and the
-// references that resolved to nothing; the fourth reports the published
-// graph itself. A provider can be declared, attached, holding a ready index
-// and answering on the wire, and still be unreachable if this list does not
-// name it -- which is how it read from the outside the first time.
-const (
-	consumersCapability   = "symbol.consumers"
-	symbolGetCapability   = "symbol.get"
-	unresolvedCapability  = "symbol.unresolved"
-	graphStatusCapability = "graph.status"
+	overviewCapability = "symbol.overview"
+	callsCapability    = "symbol.calls"
 )
 
 // What is open on this machine's screen. Listed here so a commission can name
@@ -256,21 +225,8 @@ var card = contract.Agent{
 	Capabilities: []string{
 		contextCapability,
 		searchCapability,
-		symbolSearchCapability,
-		intentSearchCapability,
-		definitionCapability,
-		dependenciesCapability,
-		referencesCapability,
-		implementationsCapability,
 		overviewCapability,
 		callsCapability,
-		impactCapability,
-		indexCapability,
-		consumersCapability,
-		symbolGetCapability,
-		unresolvedCapability,
-		graphStatusCapability,
-		"graph.repositories", "graph.ensure_fresh", "symbol.source", "symbol.impact",
 		desktopAppsCapability,
 		desktopOpenCapability,
 		desktopInspectCapability,
@@ -880,18 +836,6 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	// this step ranks on and the row it writes describe the same thing.
 	out.Subject = capability.Subject(step.Payload)
 	measuring, notices := a.priced(ctx, step.Capability, repository.ID, out.Subject, candidates)
-	// Explicit repair remains callable after a failed repair. Never override
-	// an operator-declared outage, and permissions are still checked below.
-	if step.Capability == "graph.ensure_fresh" {
-		declared, _ := a.catalog.ImplementationsFor(step.Capability)
-		for i := range candidates {
-			for _, impl := range declared {
-				if impl.ID == candidates[i].ID && impl.Provider == "kivgraph" && impl.Health.State != contract.HealthDown {
-					candidates[i].Health = contract.Health{State: contract.HealthUnknown, Reason: "explicit graph maintenance may retry"}
-				}
-			}
-		}
-	}
 	reachable := a.runner.Implementations()
 	var unreachable map[string]string
 	if a.reach != nil {
@@ -970,7 +914,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 				identity.Provider = candidate.Provider
 			}
 			if identity.Tool == "" {
-				identity.Tool = "graph_status"
+				identity.Tool = "status"
 			}
 			observedIdentities[candidate.ID] = identity
 			a.emitContext(ctx, observability.Event{
@@ -1122,9 +1066,6 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 			}
 		}
 	}
-	if decision.Chosen.Provider == "kivgraph" && step.Capability == "graph.ensure_fresh" {
-		a.reopenGraphQueries(repository.ID)
-	}
 	return a.close(out, nil)
 }
 
@@ -1142,22 +1083,6 @@ func countsAsProviderSample(out contract.Outcome, runErrOrKind any) bool {
 		return value != contract.FailureCanceled
 	default:
 		return true
-	}
-}
-
-// Verified maintenance permits a new query probe, not an assertion that every
-// operation works. Keep this scoped to this repository and runtime observations.
-func (a *Agent) reopenGraphQueries(repository string) {
-	for _, capability := range []string{"symbol.search", "symbol.intent_search", "symbol.get", "symbol.source", "symbol.overview", "symbol.references", "symbol.calls", "symbol.definition", "symbol.dependencies", "symbol.consumers", "symbol.impact", "code.context", "code.impact"} {
-		impls, err := a.catalog.ImplementationsFor(capability)
-		if err != nil {
-			continue
-		}
-		for _, impl := range a.catalog.Observed(repository, impls) {
-			if impl.Provider == "kivgraph" && impl.Health.State == contract.HealthDown && !impl.Health.ObservedAt.IsZero() {
-				_ = a.catalog.SetHealth(repository, impl.ID, contract.Health{State: contract.HealthUnknown, Reason: "graph maintenance verified; query requires a new probe"})
-			}
-		}
 	}
 }
 

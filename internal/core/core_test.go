@@ -94,7 +94,6 @@ capability = "code.search"
 
   [implementation.constraints]
   languages = ["go", "typescript"]
-  requires_index = true
 
   [implementation.health]
   state = "alive"
@@ -106,7 +105,6 @@ provider = "graph"
 capability = "code.search"
 
   [implementation.constraints]
-  requires_index = true
   min_scale = "large"
 
 [[repository]]
@@ -114,7 +112,6 @@ id = "api"
 path = "/srv/api"
 languages = ["go"]
 scale = "small"
-indexed_by = ["fixture"]
 
 [[repository]]
 id = "scripts"
@@ -167,12 +164,12 @@ func writeTemp(t *testing.T, body string) string {
 	return path
 }
 
-// symbolCapability is a capability the stand-in has no case for. It runs
+// overviewCapability is a capability the stand-in has no case for. It runs
 // code.search and nothing else, so an implementation of this one in its
 // served list is a promise no code can keep.
-const symbolCapability = `
+const overviewCapability = `
 [[capability]]
-id = "symbol.definition"
+id = "symbol.overview"
 version = "1.0.0"
 summary = "Find where a symbol is born."
 effects = ["read"]
@@ -198,9 +195,9 @@ effects = ["read"]
     required = true
 
 [[implementation]]
-id = "fixture.definition"
+id = "fixture.overview"
 provider = "fixture"
-capability = "symbol.definition"
+capability = "symbol.overview"
 `
 
 // The mistake this catches used to be accepted in full: the settings file
@@ -211,12 +208,12 @@ capability = "symbol.definition"
 func TestARunnerToldToServeACapabilityItCannotRunIsRefused(t *testing.T) {
 	body := strings.Replace(catalog,
 		`implementations = ["ripgrep", "fixture.search", "graph.search"]`,
-		`implementations = ["ripgrep", "fixture.search", "graph.search", "fixture.definition"]`, 1)
-	if !strings.Contains(body, "fixture.definition") {
+		`implementations = ["ripgrep", "fixture.search", "graph.search", "fixture.overview"]`, 1)
+	if !strings.Contains(body, "fixture.overview") {
 		t.Fatal("fixture drifted: the served list this test edits is no longer there")
 	}
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	cfg, err := config.Load(writeTemp(t, body+symbolCapability))
+	cfg, err := config.Load(writeTemp(t, body+overviewCapability))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -224,7 +221,7 @@ func TestARunnerToldToServeACapabilityItCannotRunIsRefused(t *testing.T) {
 		t.Fatal("a runner told to serve a capability it cannot run was accepted")
 	} else if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
 		t.Errorf("kind = %v, want invalid_input: err = %v", kind, err)
-	} else if !strings.Contains(err.Error(), "cannot run symbol.definition") {
+	} else if !strings.Contains(err.Error(), "cannot run symbol.overview") {
 		t.Errorf("the message must name the capability it cannot run: %v", err)
 	}
 }

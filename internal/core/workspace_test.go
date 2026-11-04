@@ -75,8 +75,8 @@ func workspaceFixtureCore(t *testing.T, runner *workspaceFixtureRunner, repos ..
 }
 
 func TestWorkspaceContextCoreUsesOrdinarySingularChildren(t *testing.T) {
-	api := contract.NewRepository("api", filepath.Join(t.TempDir(), "api"), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	web := contract.NewRepository("web", filepath.Join(t.TempDir(), "web"), []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	api := contract.NewRepository("api", filepath.Join(t.TempDir(), "api"), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
+	web := contract.NewRepository("web", filepath.Join(t.TempDir(), "web"), []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified)
 	for _, repo := range []contract.Repository{api, web} {
 		if err := os.MkdirAll(repo.Path, 0o755); err != nil {
 			t.Fatal(err)
@@ -124,8 +124,8 @@ func TestWorkspaceContextCoreUsesOrdinarySingularChildren(t *testing.T) {
 }
 
 func TestWorkspaceContextMCPUsesFixtureCoreAndEmitsNotice(t *testing.T) {
-	api := contract.NewRepository("api", filepath.Join(t.TempDir(), "api"), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	web := contract.NewRepository("web", filepath.Join(t.TempDir(), "web"), []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	api := contract.NewRepository("api", filepath.Join(t.TempDir(), "api"), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
+	web := contract.NewRepository("web", filepath.Join(t.TempDir(), "web"), []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified)
 	for _, repo := range []contract.Repository{api, web} {
 		if err := os.MkdirAll(repo.Path, 0o755); err != nil {
 			t.Fatal(err)

@@ -11,7 +11,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,7 +23,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
-	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/backup"
@@ -33,7 +31,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/ipc"
-	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/internal/metrics"
@@ -65,11 +62,10 @@ type rawBackend struct {
 // Core is safe for concurrent use. Sessions are isolated per chat, but the
 // catalog underneath them is shared.
 type Core struct {
-	deviceOwnersMu   sync.Mutex
-	deviceOwners     map[string]*deviceOwner
-	graphMaintenance *kivgraph.Runner
-	settings         config.Config
-	catalog          *registry.Registry
+	deviceOwnersMu sync.Mutex
+	deviceOwners   map[string]*deviceOwner
+	settings       config.Config
+	catalog        *registry.Registry
 	// backends are the declared servers whose own tools are re-offered
 	// verbatim, keyed by the id that forms the middle segment of their tool
 	// names. Empty on a machine that declared none, which is every machine
@@ -373,7 +369,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		observed.Observed = true
 		observed.Provider = req.Implementation.Provider
 		if observed.Tool == "" {
-			observed.Tool = "graph_status"
+			observed.Tool = "status"
 		}
 		observed.DurationNS = time.Since(started).Nanoseconds()
 		if err != nil {
@@ -452,40 +448,28 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			instance: instance,
 		}
 	}
-	graphMaintenance, err := prepareGraphMaintenance(runners, role)
-	if err != nil {
-		return nil, err
-	}
-	if graphMaintenance != nil {
-		graphMaintenance.OnMaintenanceVerified = func() {
-			if err := catalog.InvalidateProviderHealth("kivgraph", "Verified maintenance; capability probe permitted"); err != nil {
-				slog.Warn("invalidate verified graph health", "error", err)
-			}
-		}
-	}
 	built = true
 	return &Core{
-		graphMaintenance: graphMaintenance,
-		settings:         cfg,
-		backends:         backends,
-		readings:         readings,
-		catalog:          catalog,
-		chooser:          chooser,
-		runners:          runners,
-		checkpoints:      checkpoints,
-		measurements:     store,
-		stats:            stats,
-		notebook:         book,
-		copies:           copies,
-		recovered:        found,
-		beats:            beats,
-		processes:        procs,
-		agent:            agent,
-		events:           events,
-		sessions:         make(map[string]*Session),
-		started:          time.Now(),
-		role:             role,
-		upkeep:           upkeep,
+		settings:     cfg,
+		backends:     backends,
+		readings:     readings,
+		catalog:      catalog,
+		chooser:      chooser,
+		runners:      runners,
+		checkpoints:  checkpoints,
+		measurements: store,
+		stats:        stats,
+		notebook:     book,
+		copies:       copies,
+		recovered:    found,
+		beats:        beats,
+		processes:    procs,
+		agent:        agent,
+		events:       events,
+		sessions:     make(map[string]*Session),
+		started:      time.Now(),
+		role:         role,
+		upkeep:       upkeep,
 	}, nil
 }
 
@@ -507,8 +491,6 @@ func effectiveImplementationDigest(cfg config.Config, impl contract.Implementati
 		settings = cfg.Orchestrator.ClaudeCode
 	case "codex":
 		settings = cfg.Orchestrator.Codex
-	case "kivgraph":
-		settings = cfg.Orchestrator.Kivgraph
 	case "tokensave":
 		settings = cfg.Orchestrator.Tokensave
 	case "desktop":
@@ -669,8 +651,6 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 			Sensitive:       cfg.Security.Sensitive,
 			Timeout:         cfg.Orchestrator.Codex.Timeout,
 		})
-	case config.RunnerKivgraph:
-		return buildKivgraphRunner(cfg, procs)
 	case config.RunnerTokensave:
 		return buildTokensaveRunner(cfg, procs)
 	case config.RunnerDesktop:
@@ -697,105 +677,11 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 	}
 }
 
-// buildKivgraphRunner builds the kivgraph adapter, over whichever transport the
-// settings file named.
-//
-// kivgraph 0.9.2 serves the same tool surface two ways: `kivgraph serve` over
-// stdio, which Atenea spawns and supervises, and `kivgraph daemon` over
-// streamable HTTP at a URL that answers 401 without its bearer token. The
-// settings file admits exactly one of the two (config refuses a block naming
-// both), so this reads as one branch and not a merge.
-//
-// An endpoint is returned UNGUARDED, the same as an unmanaged MCP server: there is
-// no process of Atenea's to wake before the call, and guarding a runner against
-// a supervisor that owns nothing would report a health state nobody is keeping.
-func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
-	graph := cfg.Orchestrator.Kivgraph
-	if graph.Process == nil {
-		return buildKivgraphOverHTTP(cfg, graph)
-	}
-	runner, err := kivgraph.New(kivgraph.Options{
-		RequireFresh:          true,
-		AutoReindexRegistered: graph.AutoReindexRegistered,
-		MaintenanceDirectory:  kivgraphMaintenanceDirectoryFor(cfg),
-		Implementations:       graph.Implementations,
-		Sensitive:             cfg.Security.Sensitive,
-		Timeout:               graph.Timeout,
-		IndexTimeout:          graph.IndexTimeout,
-		ConfigDigest:          implementationDigestForProvider(cfg, "kivgraph"),
-		Session: func(ctx context.Context) (kivgraph.Session, error) {
-			return procs.Session(config.RunnerKivgraph)
-		},
-		Index: func(ctx context.Context, root, mode string) (kivgraph.IndexReport, error) {
-			process := graph.Process
-			if process == nil {
-				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
-					"settings %s: kivgraph index has no process declaration", cfg.Source)
-			}
-			return kivgraph.RunConfiguredIndex(ctx, process.Command, append(slices.Clone(process.Env), graph.IndexEnv...), root, mode)
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	// The declaration is instance = "shared" only (see kivgraphSpecs in
-	// guard.go, which refuses per_repository before a Supervisor is ever
-	// built), so the instance id every call guards against is the one
-	// constant name, never a per-repository lookup.
-	instanceID := func(contract.Repository) string { return config.RunnerKivgraph }
-	return guard(runner, procs, instanceID), nil
-}
-
-// buildKivgraphOverHTTP dials the daemon instead of spawning a child.
-//
-// One client for the whole runner, not one per call: the MCP handshake is a
-// round trip and a session id, and re-running it per commission would pay for
-// both every time. mcphttp.Client handles the wire format and sends the
-// bearer token on every request, including the handshake.
-//
-// repository.index remains an explicit local process boundary. Binary is
-// separate from the daemon endpoint so indexing does not require a second,
-// supervised stdio MCP server merely to recover the command name.
-func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (contract.Runner, error) {
-	headers := map[string]string{}
-	if graph.Token != "" {
-		headers["Authorization"] = "Bearer " + graph.Token
-	}
-	client, err := mcphttp.New(mcphttp.Options{
-		Endpoint: graph.Endpoint,
-		Headers:  headers,
-		Client:   "atenea",
-	})
-	if err != nil {
-		return nil, err
-	}
-	return kivgraph.New(kivgraph.Options{
-		RequireFresh:          true,
-		AutoReindexRegistered: graph.AutoReindexRegistered,
-		MaintenanceDirectory:  kivgraphMaintenanceDirectoryFor(cfg),
-		Implementations:       graph.Implementations,
-		Sensitive:             cfg.Security.Sensitive,
-		Timeout:               graph.Timeout,
-		IndexTimeout:          graph.IndexTimeout,
-		ConfigDigest:          implementationDigestForProvider(cfg, "kivgraph"),
-		Session: func(context.Context) (kivgraph.Session, error) {
-			return client, nil
-		},
-		Index: func(ctx context.Context, root, mode string) (kivgraph.IndexReport, error) {
-			if strings.TrimSpace(graph.Binary) == "" {
-				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
-					"settings %s: orchestrator.kivgraph.binary is required for repository.index", cfg.Source)
-			}
-			return kivgraph.RunConfiguredIndex(ctx, graph.Binary, graph.IndexEnv, root, mode)
-		},
-	})
-}
-
-// buildTokensaveRunner builds the tokensave adapter. Same refusal as
-// Kivgraph's for a missing process table -- a stdio server has no address --
-// plus one of its own: the root every path on that wire is relative to has to
-// be declared, because this adapter translates repository-relative paths in
-// both directions and cannot invent where the served project begins.
+// buildTokensaveRunner builds the tokensave adapter. A missing process table is
+// refused -- a stdio server has no address -- and so is a missing root: every
+// path on that wire is relative to it, because this adapter translates
+// repository-relative paths in both directions and cannot invent where the
+// served project begins.
 func buildTokensaveRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
 	if cfg.Orchestrator.Tokensave.Process == nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
@@ -821,7 +707,7 @@ func buildTokensaveRunner(cfg config.Config, procs *supervisor.Supervisor) (cont
 		return nil, err
 	}
 	// One server for the whole root, so one instance id: the graph is the
-	// project's, not a repository's, exactly as with Kivgraph's global corpus.
+	// project's, not a repository's.
 	instanceID := func(contract.Repository) string { return config.RunnerTokensave }
 	return guard(runner, procs, instanceID), nil
 }
@@ -1327,100 +1213,6 @@ func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (result *orches
 	return c.agent.Ask(ctx, q)
 }
 
-// IndexReport is one repository/provider pairing's index-detection result.
-type IndexReport struct {
-	Repository string
-	Provider   string
-	Ready      bool
-	// Hint explains a false Ready in words a user can act on. Empty when
-	// Ready is true.
-	Hint string
-	// Err is the probe's own failure, in its own words. Empty when the
-	// probe ran to completion, whatever it found -- a wire-friendly string
-	// rather than an error, the same reason Health.Reason and Drop.Reason
-	// already are.
-	Err string
-}
-
-// DetectIndexes asks every attached runner that can say whether it already
-// holds a ready index, for the given repository or every registered one when
-// repositoryID is empty, and corrects the catalog's own belief -- indexed_by,
-// as the settings file declared it -- with whatever it finds.
-//
-// Detection only ever asks, it never builds, and SetIndexed is the same
-// in-memory correction SetHealth already makes for a provider's own
-// liveness, on the same reasoning. It runs on demand rather than on every
-// startup because a probe is itself a subprocess call per repository per
-// provider, and paying that unconditionally would tax the common case --
-// everything already wired correctly -- for the sake of the uncommon one
-// this exists to catch.
-//
-// Not every runner can answer this. One that cannot is left out of the
-// report entirely rather than reported as a failure, the same reasoning
-// IndexProber being optional documents at its own declaration.
-func (c *Core) DetectIndexes(ctx context.Context, repositoryID string) ([]IndexReport, error) {
-	if err := c.enter(); err != nil {
-		return nil, err
-	}
-	defer c.inflight.Done()
-
-	var repos []contract.Repository
-	if repositoryID == "" {
-		repos = c.catalog.Repositories()
-	} else {
-		repo, err := c.catalog.Repository(repositoryID)
-		if err != nil {
-			return nil, err
-		}
-		repos = []contract.Repository{repo}
-	}
-
-	var reports []IndexReport
-	for _, runner := range c.runners {
-		prober, ok := runner.(contract.IndexProber)
-		if !ok {
-			continue
-		}
-		for _, repo := range repos {
-			if ctx.Err() != nil {
-				return reports, ctx.Err()
-			}
-			ready, hint, err := prober.ProbeIndex(ctx, repo.Path)
-			var errText string
-			if err != nil {
-				errText = err.Error()
-			} else if setErr := c.catalog.SetIndexed(repo.ID, runner.ID(), ready); setErr != nil {
-				errText = setErr.Error()
-			}
-			reports = append(reports, IndexReport{
-				Repository: repo.ID,
-				Provider:   runner.ID(),
-				Ready:      ready,
-				Hint:       hint,
-				Err:        errText,
-			})
-			if c.events != nil {
-				event := observability.Event{Kind: "health.index", Repository: repo.ID, Provider: runner.ID(), State: "ready"}
-				if !ready {
-					event.State = "not_ready"
-				}
-				if errText != "" {
-					event.State = "failed"
-					event.Reason = errText
-				}
-				c.events.Publish(event)
-			}
-		}
-	}
-	slices.SortFunc(reports, func(a, b IndexReport) int {
-		if d := strings.Compare(a.Repository, b.Repository); d != 0 {
-			return d
-		}
-		return strings.Compare(a.Provider, b.Provider)
-	})
-	return reports, nil
-}
-
 // ServerProbe is one declared [[mcp_server]] as a probe just found it.
 //
 // This is the opposite half of ServerStatus and the two must not be confused:
@@ -1514,43 +1306,32 @@ func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
 	return out, nil
 }
 
-// Detection is both halves of a detect sweep plus the identity of whoever ran
-// it, and the last part is the point.
-//
-// Both halves travel together because both spawn: the server probes spawn a
-// process per stdio declaration, and the index reports spawn the provider's own
-// CLI. Fixing one and leaving the other would answer half the command from one
-// environment and half from another, which is worse than the fault being fixed.
+// Detection is the server sweep plus the identity of whoever ran it, and the
+// last part is the point.
 //
 // PID and Settings are what a caller cannot know about a process it only
 // reached through a socket: which process earned these verdicts, and which
 // declarations it read to earn them.
 type Detection struct {
 	Servers  []ServerProbe
-	Indexes  []IndexReport
 	PID      int
 	Settings string
 }
 
-// Detect runs both halves of a sweep and signs the result.
+// Detect runs a sweep and signs the result.
 //
 // It exists so the service can answer the whole of `atenea detect` in one
 // exchange. A command that probes locally learns whether the servers are
 // reachable from a shell, which is not the question when the thing that cannot
 // reach them is the service: measured on this machine, a service with a minimal
 // PATH had a node-based backend dead while a shell called it reachable in the same minute.
-func (c *Core) Detect(ctx context.Context, repositoryID string) (Detection, error) {
+func (c *Core) Detect(ctx context.Context) (Detection, error) {
 	servers, err := c.DetectServers(ctx)
-	if err != nil {
-		return Detection{}, err
-	}
-	indexes, err := c.DetectIndexes(ctx, repositoryID)
 	if err != nil {
 		return Detection{}, err
 	}
 	return Detection{
 		Servers:  servers,
-		Indexes:  indexes,
 		PID:      os.Getpid(),
 		Settings: c.settings.Source,
 	}, nil
@@ -1659,9 +1440,6 @@ func (c *Core) Shutdown() error {
 	// The door shuts first: the flag above already refuses new work, and this
 	// stops new callers from getting as far as being refused.
 	c.closeSocket()
-	if c.graphMaintenance != nil {
-		c.graphMaintenance.CancelMaintenance()
-	}
 	// Connection handlers and in-flight work wait together, under the one
 	// margin. They were two waits before this, and only the second of them
 	// was bounded: closeSocket ended in c.conns.Wait() with no limit at all,
@@ -1673,9 +1451,6 @@ func (c *Core) Shutdown() error {
 	// belongs under the same budget as everything else that can.
 	done := make(chan struct{})
 	go func() {
-		if c.graphMaintenance != nil {
-			c.graphMaintenance.CloseMaintenance()
-		}
 		c.conns.Wait()
 		c.inflight.Wait()
 		close(done)

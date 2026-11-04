@@ -28,7 +28,7 @@ func TestProviderPreferenceAndExactID(t *testing.T) {
 }
 
 func TestUnknownPreferenceDoesNotSilentlyFallback(t *testing.T) {
-	d, err := mustSelector(t).Select(selector.Request{Capability: "code.search", Repository: smallGoRepo(), Candidates: []contract.Implementation{impl("ripgrep")}, Prefer: "kivgraph"})
+	d, err := mustSelector(t).Select(selector.Request{Capability: "code.search", Repository: smallGoRepo(), Candidates: []contract.Implementation{impl("ripgrep")}, Prefer: "tokensave"})
 	if contract.KindOf(err) != contract.FailureInvalidInput || d.Chosen.ID != "" || !strings.Contains(err.Error(), "available implementations: ripgrep") {
 		t.Fatalf("%v %v", d, err)
 	}

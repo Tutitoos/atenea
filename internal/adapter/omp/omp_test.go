@@ -453,7 +453,6 @@ func TestAScopeThatLeavesTheRepositoryIsRefused(t *testing.T) {
 // The lexical check cannot see a symlink: "vendor" climbs out of nothing at
 // all, and if it points at the directory above then omp is pointed outside the
 // repository and every hit it finds there is reported as if it were inside.
-// kivgraph has always decided this same question by resolving the link.
 func TestAScopeReachingOutOfTheRepositoryThroughASymlinkIsRefused(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "repo")
@@ -693,7 +692,7 @@ func requestAt(t *testing.T, root string, payload map[string]any) contract.RunRe
 	return contract.RunRequest{
 		Capability:     codeSearch(),
 		Implementation: contract.Implementation{ID: "ripgrep", Provider: "ripgrep", Capability: "code.search"},
-		Repository:     contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		Repository:     contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified),
 		Payload:        payload,
 		Permission:     contract.Permission{Task: "find login", Effects: []contract.Effect{contract.EffectRead}},
 	}

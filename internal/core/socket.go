@@ -76,12 +76,6 @@ const (
 // enough that a wedged service does not hold a person there.
 const probeAskTimeout = 60 * time.Second
 
-// detectParams is what a detect asks about: one repository, or every one when
-// empty. The same filter `atenea detect --repo` already took.
-type detectParams struct {
-	Repository string `json:"repository"`
-}
-
 type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      any    `json:"id"`
@@ -262,8 +256,10 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 	for lines.Scan() {
 		var req rpcRequest
 		if err := json.Unmarshal(lines.Bytes(), &req); err != nil {
-			_ = writer.send(rpcResponse{JSONRPC: rpcVersion,
-				Error: &rpcError{Code: codeParse, Message: "not JSON"}})
+			_ = writer.send(rpcResponse{
+				JSONRPC: rpcVersion,
+				Error:   &rpcError{Code: codeParse, Message: "not JSON"},
+			})
 			cancelAll()
 			workers.Wait()
 			return
@@ -303,8 +299,10 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 			defer dispatchMu.Unlock()
 			var answer *rpcResponse
 			if requestCtx.Err() != nil {
-				answer = &rpcResponse{JSONRPC: rpcVersion, ID: req.ID,
-					Error: &rpcError{Code: codeRequestCanceled, Message: "request canceled"}}
+				answer = &rpcResponse{
+					JSONRPC: rpcVersion, ID: req.ID,
+					Error: &rpcError{Code: codeRequestCanceled, Message: "request canceled"},
+				}
 			} else {
 				answer = talk.dispatch(requestCtx, req)
 			}
@@ -341,10 +339,13 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 		if errors.Is(err, bufio.ErrTooLong) {
 			message = "the request is over the " + limitWords + " limit for one line"
 		}
-		_ = writer.send(rpcResponse{JSONRPC: rpcVersion,
-			Error: &rpcError{Code: codeInvalid, Message: message}})
+		_ = writer.send(rpcResponse{
+			JSONRPC: rpcVersion,
+			Error:   &rpcError{Code: codeInvalid, Message: message},
+		})
 		_ = c.notebook.Record(notebook.Incident{
-			Op: "socket.request", Detail: message, Version: buildinfo.Full()})
+			Op: "socket.request", Detail: message, Version: buildinfo.Full(),
+		})
 	}
 }
 
@@ -447,7 +448,7 @@ func Asked() (Status, bool) {
 //
 // Connecting is still bounded tightly. A door with nobody behind it is the
 // ordinary state of a machine, and the caller has a local sweep ready.
-func AskedDetect(ctx context.Context, repository string) (Detection, bool) {
+func AskedDetect(ctx context.Context) (Detection, bool) {
 	conn, err := ipc.DialTimeout(SocketPath(), askTimeout)
 	if err != nil {
 		return Detection{}, false
@@ -464,12 +465,8 @@ func AskedDetect(ctx context.Context, repository string) (Detection, bool) {
 		return Detection{}, false
 	}
 
-	params, err := json.Marshal(detectParams{Repository: repository})
-	if err != nil {
-		return Detection{}, false
-	}
 	if err := json.NewEncoder(conn).Encode(rpcRequest{
-		JSONRPC: rpcVersion, ID: 1, Method: MethodDetect, Params: params,
+		JSONRPC: rpcVersion, ID: 1, Method: MethodDetect,
 	}); err != nil {
 		return Detection{}, false
 	}

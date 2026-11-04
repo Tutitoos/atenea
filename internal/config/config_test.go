@@ -1,8 +1,6 @@
 package config_test
 
 import (
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/android"
-	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
@@ -47,16 +44,15 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(ids)
 	wantIDs := []string{
-		"android.devices", "android.diagnose", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.open", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved",
+		"android.devices", "android.diagnose", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
+		"desktop.move", "desktop.open", "desktop.screenshot", "desktop.scroll", "desktop.type", "symbol.calls", "symbol.overview",
 	}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
 
 	// Read capabilities may also declare process when they invoke a local
-	// command. repository.index additionally declares write because it publishes
-	// provider state, and desktop.apps declares device because it reaches this
+	// command, and desktop.apps declares device because it reaches this
 	// machine's own session rather than any repository.
 	//
 	// Spelled out per capability rather than checked against a set, and that
@@ -66,12 +62,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	for _, capability := range cfg.Capabilities {
 		var want []contract.Effect
 		switch capability.ID {
-		case "code.search", "code.impact":
+		case "code.search":
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
-		case "repository.index":
-			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
-		case "graph.ensure_fresh":
-			want = []contract.Effect{contract.EffectRead, contract.EffectWrite, contract.EffectProcess}
 		case "desktop.apps", "desktop.inspect", "desktop.screenshot", "desktop.move":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
 		case "android.devices", "android.diagnose", "android.inspect", "android.screenshot", "android.mirror", "android.unmirror":
@@ -155,23 +147,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"adb.type",
 		"claude.search",
 		"codex.search",
-		"kivgraph.context",
-		"kivgraph.cross_repo_consumers",
-		"kivgraph.definition",
-		"kivgraph.dependencies",
-		"kivgraph.ensure_fresh",
-		"kivgraph.get",
-		"kivgraph.impact",
-		"kivgraph.implementations",
-		"kivgraph.index",
-		"kivgraph.intent_search",
-		"kivgraph.overview",
-		"kivgraph.references",
-		"kivgraph.repositories",
-		"kivgraph.search",
-		"kivgraph.source",
-		"kivgraph.status",
-		"kivgraph.symbol_impact",
 		"macos.apps",
 		"macos.click",
 		"macos.drag",
@@ -356,7 +331,7 @@ func TestLoadReadsAFile(t *testing.T) {
 // repository at a time and pointed at a process Atenea did not own.
 func TestAPerRepositoryProcessIsReadBack(t *testing.T) {
 	body := minimal + `
-[orchestrator.kivgraph.process]
+[orchestrator.tokensave.process]
 command = "fixture"
 args = ["start-mcp-server", "--port", "{{port}}", "--project", "{{project}}"]
 lifecycle = "on_demand"
@@ -366,56 +341,11 @@ instance = "per_repository"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Orchestrator.Kivgraph.Process.Instance; got != config.InstancePerRepository {
+	if got := cfg.Orchestrator.Tokensave.Process.Instance; got != config.InstancePerRepository {
 		t.Errorf("instance = %q, want %q", got, config.InstancePerRepository)
 	}
 }
 
-func TestKivgraphDashboardProcessIsReadBack(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-endpoint = "http://127.0.0.1:7788/mcp"
-dashboard = "http://127.0.0.1:7777"
-
-[orchestrator.kivgraph.dashboard_process]
-command = "/usr/local/bin/kivgraph-ui"
-args = ["ui", "--addr", "127.0.0.1:7777"]
-lifecycle = "persistent"
-port = 7777
-`
-	cfg, err := config.Load(write(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Orchestrator.Kivgraph.Dashboard != "http://127.0.0.1:7777" {
-		t.Fatalf("dashboard = %q", cfg.Orchestrator.Kivgraph.Dashboard)
-	}
-	process := cfg.Orchestrator.Kivgraph.DashboardProcess
-	if process == nil || process.Port != 7777 || process.Lifecycle != supervisor.Persistent {
-		t.Fatalf("dashboard process = %+v", process)
-	}
-}
-
-func TestKivgraphDashboardProcessRequiresMatchingFixedPort(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-endpoint = "http://127.0.0.1:7788/mcp"
-dashboard = "http://127.0.0.1:7777"
-
-[orchestrator.kivgraph.dashboard_process]
-command = "kivgraph"
-lifecycle = "persistent"
-`
-	_, err := config.Load(write(t, body))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput || !strings.Contains(err.Error(), "dashboard_process.port") {
-		t.Fatalf("error = %v, kind = %v", err, got)
-	}
-}
-
-// endpoint and process are the two ways to reach kivgraph now that 0.9.2
-// ships a daemon alongside the stdio child, and a config declaring both has
-// two answers to "where is this server" -- the same failure fileMCPServer's
-// own url-vs-command refusal exists to catch.
 // "everything, and also these two" is two sentences that disagree about which
 // one is in force. Refused rather than resolved, because whichever reading
 // this code picked would be the one the operator did not mean half the time --
@@ -594,155 +524,11 @@ func TestAndroidSerialAllowListRefusesWildcardsAndDuplicates(t *testing.T) {
 	}
 }
 
-func TestKivgraphRefusesBothEndpointAndProcess(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-endpoint = "http://127.0.0.1:7788/mcp"
-
-[orchestrator.kivgraph.process]
-command = "kivgraph"
-args = ["daemon"]
-`
-	_, err := config.Load(write(t, body))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
-		!strings.Contains(err.Error(), "has both endpoint and process") {
-		t.Fatalf("error = %v, kind = %v", err, got)
-	}
-}
-
-// The moment a file writes anything at all under orchestrator.kivgraph it
-// has started answering "where is this server", and answering neither is
-// exactly as useless as answering both: nothing left for the adapter to
-// talk to.
-func TestKivgraphRefusesNeitherEndpointNorProcess(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-timeout = "30s"
-`
-	_, err := config.Load(write(t, body))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
-		!strings.Contains(err.Error(), "needs an endpoint or a process") {
-		t.Fatalf("error = %v, kind = %v", err, got)
-	}
-}
-
-// A bearer token authenticates a request to a daemon on the other end of an
-// HTTP connection. A stdio child Atenea itself spawns has no such door, so a
-// token with no endpoint to send it to is refused rather than silently
-// discarded.
-func TestKivgraphRefusesATokenWithoutAnEndpoint(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-token = "daemon-token"
-`
-	_, err := config.Load(write(t, body))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
-		!strings.Contains(err.Error(), "token is set without endpoint") {
-		t.Fatalf("error = %v, kind = %v", err, got)
-	}
-}
-
-// Also refused with a process declared alongside it: the token is still
-// meaningless once endpoint is cleared in favor of the stdio child.
-func TestKivgraphRefusesATokenWithAProcessButNoEndpoint(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-token = "daemon-token"
-
-[orchestrator.kivgraph.process]
-command = "kivgraph"
-args = ["daemon"]
-`
-	_, err := config.Load(write(t, body))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
-		!strings.Contains(err.Error(), "token is set without endpoint") {
-		t.Fatalf("error = %v, kind = %v", err, got)
-	}
-}
-
-func TestKivgraphRefusesAnEndpointThatIsNotAnAbsoluteHTTPURL(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-endpoint = "ftp://127.0.0.1:7788/mcp"
-`
-	_, err := config.Load(write(t, body))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
-		!strings.Contains(err.Error(), "endpoint scheme") {
-		t.Fatalf("error = %v, kind = %v", err, got)
-	}
-}
-
-// The happy path: a daemon endpoint and the bearer token it demands, read
-// back onto the built adapter exactly as written.
-func TestKivgraphEndpointAndTokenAreReadBack(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph]
-endpoint = "http://127.0.0.1:7788/mcp"
-token = "daemon-token"
-`
-	cfg, err := config.Load(write(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Orchestrator.Kivgraph.Endpoint != "http://127.0.0.1:7788/mcp" {
-		t.Errorf("endpoint = %q", cfg.Orchestrator.Kivgraph.Endpoint)
-	}
-	if cfg.Orchestrator.Kivgraph.Token != "daemon-token" {
-		t.Errorf("token = %q", cfg.Orchestrator.Kivgraph.Token)
-	}
-	if cfg.Orchestrator.Kivgraph.Process != nil {
-		t.Errorf("process = %+v, want nil: the file never declared one", cfg.Orchestrator.Kivgraph.Process)
-	}
-}
-
-// Choosing process over the compiled kivgraph.DefaultEndpoint fallback has
-// to actually clear it: a built adapter naming both would be exactly the
-// ambiguity the both-set refusal above exists to catch, just reached through
-// the fallback instead of the file.
-func TestKivgraphProcessClearsTheCompiledEndpointFallback(t *testing.T) {
-	body := minimal + `
-[orchestrator.kivgraph.process]
-command = "kivgraph"
-args = ["daemon"]
-lifecycle = "on_demand"
-`
-	cfg, err := config.Load(write(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Orchestrator.Kivgraph.Endpoint != "" {
-		t.Errorf("endpoint = %q, want empty: process was chosen instead", cfg.Orchestrator.Kivgraph.Endpoint)
-	}
-	if cfg.Orchestrator.Kivgraph.Process == nil || cfg.Orchestrator.Kivgraph.Process.Command != "kivgraph" {
-		t.Errorf("process = %+v", cfg.Orchestrator.Kivgraph.Process)
-	}
-}
-
-// A file that never mentions orchestrator.kivgraph at all leaves Endpoint at
-// the compiled fallback -- the same "assume the daemon is already there"
-// shape Fixture's own Endpoint has always had -- and Token/Process exactly as
-// unconfigured as before either key existed.
-func TestKivgraphIsUnconfiguredByDefault(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Orchestrator.Kivgraph.Endpoint != kivgraph.DefaultEndpoint {
-		t.Errorf("endpoint = %q, want the compiled fallback %q", cfg.Orchestrator.Kivgraph.Endpoint, kivgraph.DefaultEndpoint)
-	}
-	if cfg.Orchestrator.Kivgraph.Token != "" {
-		t.Errorf("token = %q, want empty when the file never mentions orchestrator.kivgraph", cfg.Orchestrator.Kivgraph.Token)
-	}
-	if cfg.Orchestrator.Kivgraph.Process != nil {
-		t.Errorf("process = %+v, want nil when the file never mentions orchestrator.kivgraph", cfg.Orchestrator.Kivgraph.Process)
-	}
-}
-
 // Absent means shared, which is what every managed server did before the key
 // existed. A file that never mentions it must not change behavior.
 func TestTheInstancePolicyDefaultsToShared(t *testing.T) {
 	body := minimal + `
-[orchestrator.kivgraph.process]
+[orchestrator.tokensave.process]
 command = "fixture"
 args = ["start-mcp-server", "--port", "{{port}}"]
 lifecycle = "on_demand"
@@ -751,7 +537,7 @@ lifecycle = "on_demand"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Orchestrator.Kivgraph.Process.Instance; got != config.InstanceShared {
+	if got := cfg.Orchestrator.Tokensave.Process.Instance; got != config.InstanceShared {
 		t.Errorf("instance = %q, want %q", got, config.InstanceShared)
 	}
 }
@@ -762,7 +548,7 @@ lifecycle = "on_demand"
 // that is already bound.
 func TestAnUnworkableInstancePolicyIsRefused(t *testing.T) {
 	process := func(extra string) string {
-		return minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\n" + extra
+		return minimal + "\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\n" + extra
 	}
 	cases := map[string]string{
 		"unknown policy": process("instance = \"per_chat\"\n"),
@@ -1326,13 +1112,12 @@ func TestWriteDefaultForceReplacesRatherThanTruncates(t *testing.T) {
 
 // default.toml is not only the file a fresh install boots on, it is the file
 // `config init` hands the operator to read: what its comments say is what a
-// person believes they may write. The comment above `runners` had listed five
-// of the seven the loader accepts since kivgraph and tokensave were added, so
-// the two graph providers were undiscoverable from the one document meant to
-// document them.
+// person believes they may write. The comment above `runners` had once listed
+// five of the runners the loader accepts, so two of them were undiscoverable
+// from the one document meant to document them.
 //
-// The list is checked against the constants rather than against a copy, so the
-// eighth runner cannot ship with the comment still naming seven.
+// The list is checked against the constants rather than against a copy, so a
+// new runner cannot ship with the comment still naming the old set.
 func TestTheRunnersCommentNamesEveryRunnerTheLoaderAccepts(t *testing.T) {
 	raw, err := os.ReadFile("default.toml")
 	if err != nil {
@@ -1355,7 +1140,7 @@ func TestTheRunnersCommentNamesEveryRunnerTheLoaderAccepts(t *testing.T) {
 
 	for _, runner := range []string{
 		config.RunnerOMP, config.RunnerClaudeCode, config.RunnerCodex,
-		config.RunnerKivgraph, config.RunnerTokensave, config.RunnerLocal,
+		config.RunnerTokensave, config.RunnerLocal,
 	} {
 		if !strings.Contains(comment, `"`+runner+`"`) {
 			t.Errorf("the runners comment never names %q, so nobody reading this file learns they may write it", runner)
@@ -1384,14 +1169,14 @@ func TestAStaleCatalogNamesWhatItIsMissing(t *testing.T) {
 	dropped := ""
 	kept := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		if dropped == "" && strings.Contains(block, `id = "kivgraph.overview"`) {
-			dropped = "kivgraph.overview"
+		if dropped == "" && strings.Contains(block, `id = "tokensave.overview"`) {
+			dropped = "tokensave.overview"
 			continue
 		}
 		kept = append(kept, block)
 	}
 	if dropped == "" {
-		t.Fatal("the shipped catalog no longer declares kivgraph.overview; pick another block")
+		t.Fatal("the shipped catalog no longer declares tokensave.overview; pick another block")
 	}
 
 	stale, err := config.Load(write(t, strings.Join(kept, "[[implementation]]")))
@@ -2094,41 +1879,11 @@ func TestCopyingCanBeTurnedOffWithoutErasingTheBlock(t *testing.T) {
 	}
 }
 
-// Every endpoint the shipped settings reach over the network names an address,
-// never a hostname. A proxy binds an address; a name is a question the machine
-// answers, and it may answer it differently tomorrow -- `localhost` resolving
-// to ::1 first is the default nearly everywhere, and a proxy listening only on
-// 127.0.0.1 would start refusing connections with nothing on this side having
-// changed. `localhost` is friendlier, which is exactly why somebody will try
-// to tidy this into one. See docs/content/diagnosing-providers.md.
-func TestTheShippedEndpointsNameAnAddressAndNeverAName(t *testing.T) {
-	cfg, err := config.Defaults()
-	if err != nil {
-		t.Fatalf("Defaults: %v", err)
-	}
-	endpoint := cfg.Orchestrator.Kivgraph.Endpoint
-	host, err := hostOf(endpoint)
-	if err != nil {
-		t.Fatalf("fixture endpoint %q: %v", endpoint, err)
-	}
-	if net.ParseIP(host) == nil {
-		t.Fatalf("fixture endpoint %q reaches the proxy by the name %q; pin the address it binds", endpoint, host)
-	}
-}
-
-func hostOf(raw string) (string, error) {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	return parsed.Hostname(), nil
-}
-
 // ---------------------------------------------------------------------------
 // Fixture as a managed process
 // ---------------------------------------------------------------------------
 
-// A file that says nothing about orchestrator.kivgraph.process must leave
+// A file that says nothing about orchestrator.tokensave.process must leave
 // Fixture exactly as unmanaged as it has always been: reached over Endpoint,
 // started by whatever started it.
 func TestManagedProcessIsNilByDefault(t *testing.T) {
@@ -2136,14 +1891,14 @@ func TestManagedProcessIsNilByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.Kivgraph.Process != nil {
-		t.Errorf("Process = %+v, want nil when the file never mentions it", cfg.Orchestrator.Kivgraph.Process)
+	if cfg.Orchestrator.Tokensave.Process != nil {
+		t.Errorf("Process = %+v, want nil when the file never mentions it", cfg.Orchestrator.Tokensave.Process)
 	}
 }
 
 func TestTheManagedProcessBlockIsRead(t *testing.T) {
 	body := minimal + `
-[orchestrator.kivgraph.process]
+[orchestrator.tokensave.process]
 command = "fixture"
 args = ["start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"]
 env = ["FIXTURE_LOG_LEVEL=INFO"]
@@ -2160,7 +1915,7 @@ stop_grace = "15s"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got := cfg.Orchestrator.Kivgraph.Process
+	got := cfg.Orchestrator.Tokensave.Process
 	if got == nil {
 		t.Fatal("Process = nil, want the table the file declared")
 	}
@@ -2201,12 +1956,12 @@ stop_grace = "15s"
 // legitimate value there, so the supervisor cannot tell it from an omitted key
 // and config has to resolve it while the pointer still says which it was.
 func TestManagedProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
-	body := minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"persistent\"\n"
+	body := minimal + "\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"persistent\"\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got := cfg.Orchestrator.Kivgraph.Process
+	got := cfg.Orchestrator.Tokensave.Process
 	if got == nil {
 		t.Fatal("Process = nil, want the table the file declared")
 	}
@@ -2224,7 +1979,7 @@ func TestManagedProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
 // skips persistent servers, so the key is inert for a reason that lives in
 // the supervisor and appears nowhere in the file. Refused at load instead.
 func TestIdleTimeoutIsRefusedForAPersistentServer(t *testing.T) {
-	const table = "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\n"
+	const table = "\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\n"
 
 	_, err := config.Load(write(t, minimal+table+
 		"lifecycle = \"persistent\"\nidle_timeout = \"30s\"\n"))
@@ -2263,13 +2018,13 @@ func TestIdleTimeoutIsRefusedForAPersistentServer(t *testing.T) {
 // managed Fixture without naming restart_limit therefore got a server that was
 // marked down on its first crash, and the constant was referenced nowhere.
 func TestManagedProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *testing.T) {
-	table := minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"persistent\"\n"
+	table := minimal + "\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"persistent\"\n"
 
 	omitted, err := config.Load(write(t, table))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := omitted.Orchestrator.Kivgraph.Process.RestartLimit; got != supervisor.DefaultRestartLimit {
+	if got := omitted.Orchestrator.Tokensave.Process.RestartLimit; got != supervisor.DefaultRestartLimit {
 		t.Errorf("omitted restart_limit = %d, want the supervisor default %d",
 			got, supervisor.DefaultRestartLimit)
 	}
@@ -2280,7 +2035,7 @@ func TestManagedProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *tes
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := off.Orchestrator.Kivgraph.Process.RestartLimit; got != 0 {
+	if got := off.Orchestrator.Tokensave.Process.RestartLimit; got != 0 {
 		t.Errorf("explicit restart_limit = 0 became %d; never retry must stay sayable", got)
 	}
 }
@@ -2289,7 +2044,7 @@ func TestManagedProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *tes
 // then left out the one thing that makes the opt-in mean anything -- not the
 // same as never having written the table at all.
 func TestManagedProcessRequiresACommand(t *testing.T) {
-	_, err := config.Load(write(t, minimal+"\n[orchestrator.kivgraph.process]\nlifecycle = \"on_demand\"\n"))
+	_, err := config.Load(write(t, minimal+"\n[orchestrator.tokensave.process]\nlifecycle = \"on_demand\"\n"))
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("KindOf = %v, want invalid_input", got)
 	}
@@ -2304,10 +2059,10 @@ func TestManagedProcessRequiresACommand(t *testing.T) {
 // be refused rather than silently picking one.
 func TestManagedProcessLifecycleMustBeValid(t *testing.T) {
 	for _, body := range []string{
-		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\n",
-		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"\"\n",
-		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"always\"\n",
-		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"Persistent\"\n",
+		"\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\n",
+		"\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"\"\n",
+		"\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"always\"\n",
+		"\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"Persistent\"\n",
 	} {
 		_, err := config.Load(write(t, minimal+body))
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
@@ -2317,7 +2072,7 @@ func TestManagedProcessLifecycleMustBeValid(t *testing.T) {
 }
 
 func TestManagedProcessNumbersAreValidated(t *testing.T) {
-	const header = "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\n"
+	const header = "\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\n"
 	for _, body := range []string{
 		header + "port = -1\n",
 		header + "port = 70000\n",
@@ -2341,13 +2096,13 @@ func TestManagedProcessNumbersAreValidated(t *testing.T) {
 // a free one" that most of these should use -- so it must be accepted even
 // though every other number in this block treats zero as unset.
 func TestManagedProcessPortZeroIsAccepted(t *testing.T) {
-	body := minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\nport = 0\n"
+	body := minimal + "\n[orchestrator.tokensave.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\nport = 0\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.Kivgraph.Process.Port != 0 {
-		t.Errorf("Port = %d, want 0", cfg.Orchestrator.Kivgraph.Process.Port)
+	if cfg.Orchestrator.Tokensave.Process.Port != 0 {
+		t.Errorf("Port = %d, want 0", cfg.Orchestrator.Tokensave.Process.Port)
 	}
 }
 
@@ -2509,14 +2264,10 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 			t.Errorf("the shipped repository %s is classified %q; a fresh install has measured nothing",
 				shipped.ID, shipped.Scale.String())
 		}
-		// An index the operator has not declared is dropped before size is
-		// ever weighed, which would hide the drop this test is looking for.
-		// Declaring one is the single step a fresh install is expected to
-		// take, so the funnel below runs on a repository that took it: after
-		// that, a size nobody measured is the only thing left that could
-		// empty it.
+		// The funnel below runs on a repository of the shipped shape: a size
+		// nobody measured is the only thing left that could empty it.
 		repo := contract.NewRepository(shipped.ID, shipped.Path, shipped.Languages,
-			shipped.Scale, shipped.VCS, providers)
+			shipped.Scale, shipped.VCS)
 		for _, capability := range cfg.Capabilities {
 			candidates := make([]contract.Implementation, 0, len(cfg.Implementations))
 			for _, impl := range cfg.Implementations {
@@ -2527,11 +2278,9 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 			if len(candidates) == 0 {
 				continue
 			}
-			// A capability with nothing left is not this test's business: the
-			// shipped file leaves indexed_by empty on purpose, and fixture has
-			// no probe that could fill it in, so an empty funnel is the
-			// documented state of a fresh install. Select hands back the trace
-			// either way, and the trace is what is under test.
+			// A capability with nothing left is not this test's business: an
+			// empty funnel is a possible state of a fresh install. Select hands
+			// back the trace either way, and the trace is what is under test.
 			decision, _ := sel.Select(selector.Request{
 				Capability: capability.ID,
 				Repository: repo,

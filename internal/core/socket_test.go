@@ -190,9 +190,8 @@ func TestAnUnknownMethodIsRefusedByName(t *testing.T) {
 	}
 }
 
-// atenea/detect takes an optional filter, and an empty body means every
-// repository -- the same default the command's --repo flag has. A method that
-// required params would make the common call the awkward one.
+// atenea/detect takes no parameters: it sweeps every declared server, and an
+// empty body is the only call there is.
 func TestDetectOverTheSocketTakesNoParams(t *testing.T) {
 	atenea := buildService(t, socketSettings)
 	stop := serve(t, atenea)
@@ -206,20 +205,6 @@ func TestDetectOverTheSocketTakesNoParams(t *testing.T) {
 	// otherwise tell which process earned the verdicts it is reading.
 	if !strings.Contains(answer, "\"PID\":"+strconv.Itoa(os.Getpid())) {
 		t.Errorf("answer = %s, want the answering process's own pid", answer)
-	}
-}
-
-// A body that is not the shape must be refused rather than read as "every
-// repository". A caller that sent something meant something, and quietly
-// sweeping everything is how a filtered question gets an unfiltered answer.
-func TestDetectOverTheSocketRefusesAMalformedBody(t *testing.T) {
-	atenea := buildService(t, socketSettings)
-	stop := serve(t, atenea)
-	defer stop()
-
-	answer := ask(t, `{"jsonrpc":"2.0","id":4,"method":"atenea/detect","params":"api"}`)
-	if !strings.Contains(answer, "-32600") {
-		t.Errorf("answer = %s, want an invalid-request code", answer)
 	}
 }
 

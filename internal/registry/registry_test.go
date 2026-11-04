@@ -117,7 +117,7 @@ func TestDuplicatesAreRefused(t *testing.T) {
 	if err := reg.AddImplementation(impl("ripgrep", "ripgrep")); err == nil {
 		t.Error("duplicate implementation should fail")
 	}
-	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified)
 	if err := reg.AddRepository(repo); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}
@@ -150,9 +150,9 @@ func TestUnknownLookupsAreNotFound(t *testing.T) {
 func TestRepositoryResolvesAnAbsolutePathToItsRepository(t *testing.T) {
 	reg := seeded(t)
 	for _, r := range []contract.Repository{
-		contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
-		contract.NewRepository("frontend", "/srv/web/frontend", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
-		contract.NewRepository("sibling", "/srv/web-two", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified),
+		contract.NewRepository("frontend", "/srv/web/frontend", nil, contract.ScaleSmall, contract.VCSUnspecified),
+		contract.NewRepository("sibling", "/srv/web-two", nil, contract.ScaleSmall, contract.VCSUnspecified),
 	} {
 		if err := reg.AddRepository(r); err != nil {
 			t.Fatalf("AddRepository %s: %v", r.ID, err)
@@ -221,8 +221,8 @@ func mustErr[T any](_ T, err error) error { return err }
 // thereby down for the rest.
 func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 	reg := seeded(t)
-	web := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	api := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	web := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified)
+	api := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified)
 	for _, r := range []contract.Repository{web, api} {
 		if err := reg.AddRepository(r); err != nil {
 			t.Fatalf("AddRepository %s: %v", r.ID, err)
@@ -275,7 +275,7 @@ func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 	}
 }
 
-func TestRuntimeHealthAndIndexObservationsSurviveReopen(t *testing.T) {
+func TestRuntimeHealthObservationsSurviveReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry-state.json")
 	first, err := registry.NewWithState(path)
 	if err != nil {
@@ -288,16 +288,13 @@ func TestRuntimeHealthAndIndexObservationsSurviveReopen(t *testing.T) {
 		t.Fatalf("AddImplementation: %v", err)
 	}
 	if err := first.AddRepository(contract.NewRepository("api", "/srv/api", nil,
-		contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		contract.ScaleSmall, contract.VCSUnspecified)); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}
 	if err := first.SetHealth("api", "ripgrep", contract.Health{
 		State: contract.HealthDown, Reason: "probe failed",
 	}); err != nil {
 		t.Fatalf("SetHealth: %v", err)
-	}
-	if err := first.SetIndexed("api", "ripgrep", true); err != nil {
-		t.Fatalf("SetIndexed: %v", err)
 	}
 
 	second, err := registry.NewWithState(path)
@@ -311,7 +308,7 @@ func TestRuntimeHealthAndIndexObservationsSurviveReopen(t *testing.T) {
 		t.Fatalf("reopen AddImplementation: %v", err)
 	}
 	if err := second.AddRepository(contract.NewRepository("api", "/srv/api", nil,
-		contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		contract.ScaleSmall, contract.VCSUnspecified)); err != nil {
 		t.Fatalf("reopen AddRepository: %v", err)
 	}
 	impls, err := second.ImplementationsFor("code.search")
@@ -321,36 +318,6 @@ func TestRuntimeHealthAndIndexObservationsSurviveReopen(t *testing.T) {
 	observed := second.Observed("api", impls)
 	if observed[0].Health.State != contract.HealthDown || observed[0].Health.ObservedAt.IsZero() {
 		t.Fatalf("health after reopen = %+v, want persisted down observation", observed[0].Health)
-	}
-	repo, err := second.Repository("api")
-	if err != nil {
-		t.Fatalf("Repository: %v", err)
-	}
-	if !repo.IndexedBy("ripgrep") {
-		t.Fatal("indexed_by observation was not restored")
-	}
-}
-
-// SetIndexed is the repository's equivalent of SetHealth: indexed_by starts
-// as the settings file's declared guess, and a real probe corrects it.
-func TestSetIndexedCorrectsRepository(t *testing.T) {
-	reg := registry.New()
-	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	if err := reg.AddRepository(repo); err != nil {
-		t.Fatalf("AddRepository: %v", err)
-	}
-	if err := reg.SetIndexed("web", "graph", true); err != nil {
-		t.Fatalf("SetIndexed: %v", err)
-	}
-	got, err := reg.Repository("web")
-	if err != nil {
-		t.Fatalf("Repository: %v", err)
-	}
-	if !got.IndexedBy("graph") {
-		t.Fatal("SetIndexed(true) did not stick")
-	}
-	if err := reg.SetIndexed("nope", "graph", true); contract.KindOf(err) != contract.FailureNotFound {
-		t.Errorf("unknown repository: kind = %v", contract.KindOf(err))
 	}
 }
 
@@ -391,7 +358,8 @@ func TestReadsAreDefensiveCopies(t *testing.T) {
 func TestConcurrentReadsAndHealthWrites(t *testing.T) {
 	reg := seeded(t)
 	if err := reg.AddRepository(contract.NewRepository(
-		"web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		"web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified,
+	)); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}
 	done := make(chan struct{})
@@ -443,7 +411,7 @@ func TestAStateFileWithNoObservationsForARepositoryStillTakesAProbe(t *testing.T
 		t.Fatalf("AddImplementation: %v", err)
 	}
 	if err := reg.AddRepository(contract.NewRepository("api", "/srv/api", nil,
-		contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		contract.ScaleSmall, contract.VCSUnspecified)); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}
 

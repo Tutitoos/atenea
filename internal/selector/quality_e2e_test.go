@@ -16,15 +16,15 @@ import (
 func TestRuntimeIdentitySelectRecordRestartQuality(t *testing.T) {
 	root := t.TempDir()
 	ledger := filepath.Join(root, "quality.json")
-	repo := contract.NewRepository("repo", root, []string{"go"}, contract.ScaleSmall, contract.VCSAbsent, nil)
+	repo := contract.NewRepository("repo", root, []string{"go"}, contract.ScaleSmall, contract.VCSAbsent)
 	impl := func(id, provider, digest string) contract.Implementation {
 		return contract.Implementation{ID: id, Provider: provider, Capability: "code.context", ConfigDigest: digest,
 			Health: contract.Health{State: contract.HealthAlive, Score: 0.8},
 			Cost:   contract.Cost{Estimated: contract.Sample{Duration: 10}}}
 	}
-	candidates := []contract.Implementation{impl("route-a", "kivgraph", "cfg-a"), impl("route-b", "tokensave", "cfg-b")}
+	candidates := []contract.Implementation{impl("route-a", "omp", "cfg-a"), impl("route-b", "tokensave", "cfg-b")}
 	providers := map[string]contract.CacheIdentity{
-		"route-a": {ToolVersion: "v1", Instance: "cfg-a@session-a", Provider: "kivgraph", Tool: "graph_status", Observed: true},
+		"route-a": {ToolVersion: "v1", Instance: "cfg-a@session-a", Provider: "omp", Tool: "status", Observed: true},
 		"route-b": {ToolVersion: "v1", Instance: "cfg-b@session-b", Provider: "tokensave", Tool: "tokensave_status", Observed: true},
 	}
 	identity := func(id string) contract.CacheIdentity { return providers[id] }

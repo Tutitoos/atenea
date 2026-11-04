@@ -35,29 +35,6 @@ func TestDashboardCheckDoesNotOpenBrowser(t *testing.T) {
 	}
 }
 
-func TestKivgraphDashboardCheckUsesOrchestratorDeclaration(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	path := filepath.Join(t.TempDir(), "atenea.toml")
-	// endpoint alongside the dashboard: writing anything under
-	// [orchestrator.kivgraph] makes the table explicit, and an explicit table
-	// has to say where the server is -- a dashboard is a viewer, not a far side.
-	body := settings + "\n[orchestrator.kivgraph]\nendpoint = \"http://127.0.0.1:7788/mcp\"\ndashboard = \"" + server.URL + "\"\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
-	out, err := cli(t, "--config", path, "dashboard", "kivgraph", "--check")
-	if err != nil {
-		t.Fatalf("kivgraph dashboard --check: %v", err)
-	}
-	if !strings.Contains(out, "dashboard kivgraph accessible") {
-		t.Fatalf("out = %q", out)
-	}
-}
-
 func TestDashboardOpenUsesLauncherSeam(t *testing.T) {
 	old := dashboardOpen
 	var opened string

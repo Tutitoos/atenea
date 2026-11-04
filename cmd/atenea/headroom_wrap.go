@@ -101,7 +101,7 @@ func launchViaHeadroom(client, realBinary, ateneaBinary string, args []string, a
 
 // verifyHeadroomPort fails closed when the requested port is already owned by
 // another HTTP service. Headroom treats any listener as an existing proxy; a
-// Kivgraph dashboard (or an unrelated process) would therefore make a wrapped
+// dashboard (or an unrelated process) would therefore make a wrapped
 // client send provider traffic to the wrong service. A refused connection is
 // the only state in which Headroom is allowed to attempt a bind itself.
 func verifyHeadroomPort(port int) error {

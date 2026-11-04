@@ -44,7 +44,7 @@ func request(t *testing.T, root string, payload map[string]any) contract.RunRequ
 	return contract.RunRequest{
 		Capability:     codeSearch(),
 		Implementation: contract.Implementation{ID: "codex.search", Provider: "codex", Capability: "code.search"},
-		Repository:     contract.NewRepository("repo", root, []string{"typescript", "dart"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		Repository:     contract.NewRepository("repo", root, []string{"typescript", "dart"}, contract.ScaleSmall, contract.VCSUnspecified),
 		Payload:        payload,
 		Permission: contract.Permission{
 			Task: "search", Effects: []contract.Effect{contract.EffectRead, contract.EffectProcess}, BudgetUSD: 0.25,

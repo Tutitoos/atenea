@@ -50,7 +50,7 @@ capability = "desktop.move"
 }
 
 func TestMCPHidesDeclaredCapabilityWithoutAttachedRunner(t *testing.T) {
-	for _, id := range []string{"symbol.unresolved", "symbol.implementations", "symbol.search"} {
+	for _, id := range []string{"symbol.calls", "symbol.overview", "code.context"} {
 		t.Run(id, func(t *testing.T) {
 			settings := mcpSettings(t) + `
 
@@ -66,7 +66,7 @@ effects = ["read"]
 			for _, capability := range status.Capabilities {
 				if capability.ID == id {
 					if capability.Offered {
-						t.Fatal("symbol.unresolved was marked offered without an implementation")
+						t.Fatal("symbol.calls was marked offered without an implementation")
 					}
 					if status.Light == core.LightRed {
 						t.Fatal("a dormant capability degraded the global status to red")
@@ -74,7 +74,7 @@ effects = ["read"]
 					goto statusChecked
 				}
 			}
-			t.Fatal("symbol.unresolved was missing from status")
+			t.Fatal("symbol.calls was missing from status")
 
 		statusChecked:
 
@@ -84,7 +84,7 @@ effects = ["read"]
 			for _, raw := range listed["tools"].([]any) {
 				tool, _ := raw.(map[string]any)
 				if tool["name"] == id {
-					t.Fatal("symbol.unresolved was advertised without an implementation")
+					t.Fatal("symbol.calls was advertised without an implementation")
 				}
 			}
 			answer := result(t, c.call("tools/call", map[string]any{
@@ -106,23 +106,23 @@ func TestMCPHidesCapabilityWhoseRunnerIsNotAttached(t *testing.T) {
 	settings := mcpSettings(t) + `
 
 [[capability]]
-id = "symbol.unresolved"
+id = "symbol.calls"
 version = "1.0.0"
 summary = "Find unresolved references."
 effects = ["read"]
 
 [[implementation]]
-id = "ghost.unresolved"
+id = "ghost.calls"
 provider = "ghost"
-capability = "symbol.unresolved"
+capability = "symbol.calls"
 `
 	atenea := buildService(t, settings)
 	defer serve(t, atenea)()
 
 	status := atenea.Status()
 	for _, capability := range status.Capabilities {
-		if capability.ID == "symbol.unresolved" && capability.Offered {
-			t.Fatal("symbol.unresolved was offered without an attached runner")
+		if capability.ID == "symbol.calls" && capability.Offered {
+			t.Fatal("symbol.calls was offered without an attached runner")
 		}
 	}
 
@@ -131,13 +131,13 @@ capability = "symbol.unresolved"
 	listed := result(t, c.call("tools/list", nil), "tools/list")
 	for _, raw := range listed["tools"].([]any) {
 		tool, _ := raw.(map[string]any)
-		if tool["name"] == "symbol.unresolved" {
+		if tool["name"] == "symbol.calls" {
 			t.Fatal("capability without an attached runner was advertised")
 		}
 	}
 	answer := result(t, c.call("tools/call", map[string]any{
-		"name": "symbol.unresolved", "arguments": map[string]any{},
-	}), "symbol.unresolved")
+		"name": "symbol.calls", "arguments": map[string]any{},
+	}), "symbol.calls")
 	if answer["isError"] != true {
 		t.Fatalf("capability without an attached runner was not rejected: %v", answer)
 	}

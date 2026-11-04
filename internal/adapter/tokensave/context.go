@@ -161,8 +161,7 @@ type contextReport struct {
 // exclude_node_ids and the report's own seen_node_ids are deliberately not
 // declared on either side. They are tokensave node ids: a capability whose
 // input only one provider could ever produce is that provider's passthrough
-// wearing a funnel costume -- the same reason symbol.consumers refuses to take
-// a kivgraph stable_key.
+// wearing a funnel costume.
 func (r *Runner) runContext(ctx context.Context, sess *mcpstdio.Session, prefix string,
 	req contract.RunRequest) (map[string]any, []string, error) {
 

@@ -105,14 +105,14 @@ func TestStatusReportsAnOnDemandProcessBeforeAndAfterItGoesDown(t *testing.T) {
 	if len(before) != 1 {
 		t.Fatalf("processes = %+v, want exactly one entry", before)
 	}
-	if before[0].ID != "kivgraph" || before[0].State != "stopped" || before[0].Light != core.LightGreen {
-		t.Errorf("idle process = %+v, want kivgraph/stopped/green", before[0])
+	if before[0].ID != "tokensave" || before[0].State != "stopped" || before[0].Light != core.LightGreen {
+		t.Errorf("idle process = %+v, want tokensave/stopped/green", before[0])
 	}
 
 	// One dispatch is enough to force the guard to try, fail, and mark the
 	// process down for good (restart_limit = 0 in the fixture).
 	if _, err := atenea.Ask(context.Background(), orchestrator.Question{
-		Capability: "symbol.definition",
+		Capability: "symbol.overview",
 		Repository: "api",
 		Payload:    map[string]any{"file": "main.go"},
 	}); err != nil {

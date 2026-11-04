@@ -12,7 +12,7 @@ import (
 )
 
 // managedCatalog is the fixture for the guard/supervisor wiring tests: one
-// symbol capability answered by a Kivgraph Atenea is told to launch and watch
+// symbol capability answered by a tokensave Atenea is told to launch and watch
 // itself, pointed at a command that cannot exist on any machine.
 // restart_limit = 0 means the first failed spawn goes straight to down, with
 // no retry delay to wait out -- fast and deterministic, the same shape a
@@ -24,19 +24,20 @@ contract = "5.0.0"
 shutdown_grace = "2s"
 
 [orchestrator]
-runners = ["kivgraph"]
+runners = ["tokensave"]
 
-  [orchestrator.kivgraph]
-  implementations = ["kivgraph.definition"]
+  [orchestrator.tokensave]
+  root = "/srv/api"
+  implementations = ["tokensave.overview"]
   timeout = "5s"
 
-  [orchestrator.kivgraph.process]
-  command = "/nonexistent/atenea-test-kivgraph-binary"
+  [orchestrator.tokensave.process]
+  command = "/nonexistent/atenea-test-tokensave-binary"
   lifecycle = "on_demand"
   restart_limit = 0
 
 [[capability]]
-id = "symbol.definition"
+id = "symbol.overview"
 version = "1.0.0"
 summary = "Resolve a definition."
 effects = ["read"]
@@ -47,7 +48,7 @@ effects = ["read"]
   required = true
 
   [[capability.output]]
-  name = "locations"
+  name = "symbols"
   type = "record_list"
   required = true
 
@@ -57,9 +58,9 @@ effects = ["read"]
     required = true
 
 [[implementation]]
-id = "kivgraph.definition"
-provider = "kivgraph"
-capability = "symbol.definition"
+id = "tokensave.overview"
+provider = "tokensave"
+capability = "symbol.overview"
 
   [implementation.health]
   state = "alive"
@@ -81,20 +82,22 @@ scale = "small"
 // call to reach the guard at all.
 func onDisk(t *testing.T, body string) string {
 	t.Helper()
-	return strings.Replace(body, `path = "/srv/api"`, `path = "`+t.TempDir()+`"`, 1)
+	dir := t.TempDir()
+	body = strings.Replace(body, `root = "/srv/api"`, `root = "`+dir+`"`, 1)
+	return strings.Replace(body, `path = "/srv/api"`, `path = "`+dir+`"`, 1)
 }
 
-// A managed Kivgraph that can never spawn must fail the call at the guard, not
+// A managed tokensave that can never spawn must fail the call at the guard, not
 // at the adapter -- EnsureReady is the gate, and the adapter's own dial is
 // never supposed to be reached behind a process Atenea itself could not
 // start. Ask does not return the step's error as its own: a runner failure
 // is recorded on the step and reviewed, the same as any other capability
 // outcome, so the assertion belongs on result.Steps, not on err.
-func TestManagedKivgraphGuardsDispatchUntilReady(t *testing.T) {
+func TestManagedTokensaveGuardsDispatchUntilReady(t *testing.T) {
 	atenea := build(t, onDisk(t, managedCatalog))
 
 	result, err := atenea.Ask(context.Background(), orchestrator.Question{
-		Capability: "symbol.definition",
+		Capability: "symbol.overview",
 		Repository: "api",
 		Payload:    map[string]any{"file": "main.go"},
 	})
@@ -109,7 +112,7 @@ func TestManagedKivgraphGuardsDispatchUntilReady(t *testing.T) {
 		t.Errorf("kind = %v, want unavailable; failure = %q", step.FailureKind, step.Failure)
 	}
 	// "did not come up" is the guard's own wording (guardFailure), distinct
-	// from anything the kivgraph adapter itself would say about a connection
+	// from anything the tokensave adapter itself would say about a connection
 	// it never got to attempt.
 	if !strings.Contains(step.Failure, "did not come up") {
 		t.Errorf("failure = %q, want the guard's wording, not the adapter's", step.Failure)
@@ -160,7 +163,7 @@ func TestASharedDeclarationStaysOneProcess(t *testing.T) {
 	for _, p := range atenea.Status().Processes {
 		ids = append(ids, p.ID)
 	}
-	if want := []string{"kivgraph"}; !slices.Equal(ids, want) {
+	if want := []string{"tokensave"}; !slices.Equal(ids, want) {
 		t.Fatalf("processes = %v, want %v", ids, want)
 	}
 }

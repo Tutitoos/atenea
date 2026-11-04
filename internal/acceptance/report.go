@@ -112,7 +112,7 @@ type Report struct {
 
 var productGates = []Gate{
 	{ID: "context", Title: "Workspace context scope", ScenarioIDs: []string{"S04"}, Packages: []string{"./internal/workspacecontext"}},
-	{ID: "mcp", Title: "Legacy and modern MCP contracts", ScenarioIDs: []string{"S08", "S09"}, Packages: []string{"./internal/mcpcompat", "./internal/mcphttp", "./internal/mcpstdio", "./internal/mcpprobe", "./internal/passthrough"}},
+	{ID: "mcp", Title: "Legacy and modern MCP contracts", ScenarioIDs: []string{"S08", "S09"}, Packages: []string{"./internal/mcpcompat", "./internal/mcpstdio", "./internal/mcpprobe", "./internal/passthrough"}},
 }
 
 // GateInput is part of ATENEA's public orchestration contract.

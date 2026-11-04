@@ -64,7 +64,7 @@ func qualityContextFixture(t *testing.T, root string) *registry.Registry {
 			t.Fatal(err)
 		}
 	}
-	if err := reg.AddRepository(contract.NewRepository("repo", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+	if err := reg.AddRepository(contract.NewRepository("repo", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)); err != nil {
 		t.Fatal(err)
 	}
 	return reg
@@ -80,7 +80,7 @@ func TestAgentRuntimeIdentityQualityRestart(t *testing.T) {
 	runner := &qualityRouteRunner{
 		results: map[string][]bool{"route-a": {true, false}, "route-b": {true, true, true}},
 		identity: map[string]contract.CacheIdentity{
-			"route-a": {Observed: true, ToolVersion: "v1", Instance: "cfg-route-a@session", Provider: "route-a", Tool: "graph_status"},
+			"route-a": {Observed: true, ToolVersion: "v1", Instance: "cfg-route-a@session", Provider: "route-a", Tool: "status"},
 			"route-b": {Observed: true, ToolVersion: "v1", Instance: "cfg-route-b@session", Provider: "route-b", Tool: "tokensave_status"},
 		},
 	}

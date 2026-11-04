@@ -61,7 +61,7 @@ func catalog(t testHelper) *registry.Registry {
 		},
 		{
 			ID: "fixture.search", Provider: "fixture", Capability: "code.search",
-			Constraints: contract.Constraints{RequiresIndex: true},
+			Constraints: contract.Constraints{RequiresVCS: true},
 			Health:      contract.Health{State: contract.HealthAlive, Score: 1},
 		},
 	}
@@ -71,8 +71,8 @@ func catalog(t testHelper) *registry.Registry {
 		}
 	}
 	repos := []contract.Repository{
-		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, []string{"fixture"}),
-		contract.NewRepository("web", "/srv/web", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSPresent),
+		contract.NewRepository("web", "/srv/web", []string{"typescript"}, contract.ScaleSmall, contract.VCSAbsent),
 	}
 	for _, repo := range repos {
 		if err := reg.AddRepository(repo); err != nil {
@@ -121,9 +121,7 @@ func (f *fakeRunner) Implementations() []string { return f.serves }
 // the fixture catalogs name, and the wiring check that reads this lives in
 // core, not here.
 func (f *fakeRunner) Capabilities() []string {
-	return []string{"code.context", "code.search", "symbol.definition", "symbol.references",
-		"symbol.implementations", "symbol.overview", "symbol.calls",
-		"code.impact", "repository.index"}
+	return []string{"code.context", "code.search", "symbol.overview", "symbol.calls"}
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
@@ -700,7 +698,7 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 	runner := &fakeRunner{
 		serves: []string{"fixture.search"},
 		answer: func(req contract.RunRequest) (contract.Outcome, error) {
-			if req.Repository.ID == "web" {
+			if req.Repository.ID == "api2" {
 				return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 					"fixture has no working language server for this request")
 			}
@@ -710,15 +708,15 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 	agent, reg := build(t, runner, 0, "")
 	// Both repositories must reach the same implementation, or the failure on
 	// one could never have reached the other and the test proves nothing.
-	if err := reg.SetIndexed("web", "fixture", true); err != nil {
-		t.Fatalf("SetIndexed: %v", err)
+	if err := reg.AddRepository(contract.NewRepository("api2", "/srv/api2", []string{"go"}, contract.ScaleSmall, contract.VCSPresent)); err != nil {
+		t.Fatalf("AddRepository: %v", err)
 	}
-	// web first, so its verdict is on the books before api is ever asked.
+	// api2 first, so its verdict is on the books before api is ever asked.
 	for _, tc := range []struct {
 		repository string
 		want       contract.Verdict
 	}{
-		{"web", contract.VerdictFailed},
+		{"api2", contract.VerdictFailed},
 		{"api", contract.VerdictOK},
 	} {
 		result, err := askLogin(t.Context(), agent, tc.repository)
@@ -733,15 +731,15 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 
 	// And the record says which repository found it, so the status screen can
 	// name the one that is actually broken.
-	if _, where, ok := reg.Observations("fixture.search"); !ok || where != "web" {
-		t.Errorf("observation = %q (recorded=%v), want it against web", where, ok)
+	if _, where, ok := reg.Observations("fixture.search"); !ok || where != "api2" {
+		t.Errorf("observation = %q (recorded=%v), want it against api2", where, ok)
 	}
 
 	// The other half of remembering: asked again, web is refused by the funnel
 	// on what the last call found, instead of dispatching into the same wall.
 	// Without that, a recorded verdict is a note nobody reads.
 	before := len(runner.requests())
-	again, err := askLogin(t.Context(), agent, "web")
+	again, err := askLogin(t.Context(), agent, "api2")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -751,7 +749,7 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 	if got := len(runner.requests()); got != before {
 		t.Errorf("%d call(s) reached the provider after it was recorded down", got-before)
 	}
-	if failure := again.Steps[0].Failure; !strings.Contains(failure, "is down for repository web") {
+	if failure := again.Steps[0].Failure; !strings.Contains(failure, "is down for repository api2") {
 		t.Errorf("failure = %q, want the funnel's own refusal", failure)
 	}
 }
@@ -769,8 +767,8 @@ func TestTheFunnelIsConsultedPerRepository(t *testing.T) {
 		}
 		chosen[repository] = result.Steps[0].Decision.Chosen.ID
 	}
-	// api has a warm Fixture index and Fixture scores higher; web has none, so
-	// Fixture is dropped on constraints and ripgrep is left.
+	// api sits under version control and Fixture scores higher; web does not,
+	// so Fixture is dropped on constraints and ripgrep is left.
 	if chosen["api"] != "fixture.search" {
 		t.Errorf("api chose %s, want fixture.search", chosen["api"])
 	}

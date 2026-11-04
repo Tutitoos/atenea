@@ -72,7 +72,7 @@ func (r cachedRunner) Run(ctx context.Context, req contract.RunRequest) (contrac
 		return r.Runner.Run(ctx, req)
 	}
 	validationStarted := time.Now()
-	validation := &contract.CacheValidation{Called: true, Provider: req.Implementation.Provider, Tool: "graph_status"}
+	validation := &contract.CacheValidation{Called: true, Provider: req.Implementation.Provider, Tool: "status"}
 	attachValidation := func(out contract.Outcome, runErr error) (contract.Outcome, error) {
 		out.CacheValidation = validation
 		return out, runErr

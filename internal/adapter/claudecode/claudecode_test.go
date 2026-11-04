@@ -83,7 +83,7 @@ func TestClaudeRunnerIdentitySurfaceAndCapabilities(t *testing.T) {
 
 func request(t *testing.T, payload map[string]any, effects ...contract.Effect) contract.RunRequest {
 	t.Helper()
-	repo := contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
 	return contract.RunRequest{
 		Capability:     codeSearch(),
 		Implementation: implementation(),

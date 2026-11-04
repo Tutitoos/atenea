@@ -32,29 +32,24 @@ type Registry struct {
 	// implementation itself because the two answer different questions: the
 	// declaration is what the operator believes about the provider, and this
 	// is what the last call against one repository actually got.
-	observed map[string]map[string]contract.Health
-	// indexOverrides stores probe results separately from the declared
-	// repository copy so they can be restored before repositories are added.
-	indexOverrides map[string]map[string]bool
-	statePath      string
+	observed  map[string]map[string]contract.Health
+	statePath string
 }
 
 // New returns an empty registry.
 func New() *Registry {
 	return &Registry{
-		capabilities:   make(map[string]contract.Capability),
-		implementers:   make(map[string]contract.Implementation),
-		repositories:   make(map[string]contract.Repository),
-		byCapability:   make(map[string][]string),
-		observed:       make(map[string]map[string]contract.Health),
-		indexOverrides: make(map[string]map[string]bool),
+		capabilities: make(map[string]contract.Capability),
+		implementers: make(map[string]contract.Implementation),
+		repositories: make(map[string]contract.Repository),
+		byCapability: make(map[string][]string),
+		observed:     make(map[string]map[string]contract.Health),
 	}
 }
 
 type persistedState struct {
-	Version   int                                   `json:"version"`
-	Health    map[string]map[string]contract.Health `json:"health,omitempty"`
-	IndexedBy map[string]map[string]bool            `json:"indexed_by,omitempty"`
+	Version int                                   `json:"version"`
+	Health  map[string]map[string]contract.Health `json:"health,omitempty"`
 }
 
 // NewWithState restores runtime observations from a private state file.
@@ -83,9 +78,9 @@ func NewWithState(path string) (*Registry, error) {
 		return nil, contract.Fail(contract.FailureUnavailable,
 			"registry state: unsupported version %d", state.Version)
 	}
-	// Cloned repository by repository rather than assigned whole, for the
-	// same reason IndexedBy below is: a decoded map is only as well-formed as
-	// the file it came from. `{"health":{"api":null}}` decodes to a key that
+	// Cloned repository by repository rather than assigned whole: a decoded
+	// map is only as well-formed as the file it came from.
+	// `{"health":{"api":null}}` decodes to a key that
 	// exists whose value is a nil map, so SetHealth's `_, ok := r.observed[id]`
 	// answered true and the write that followed went to a nil map and panicked
 	// -- taking down the core on the first probe after a truncated or
@@ -100,9 +95,6 @@ func NewWithState(path string) (*Registry, error) {
 			continue
 		}
 		r.observed[repo] = maps.Clone(byImpl)
-	}
-	for repo, providers := range state.IndexedBy {
-		r.indexOverrides[repo] = maps.Clone(providers)
 	}
 	return r, nil
 }
@@ -187,11 +179,6 @@ func (r *Registry) AddRepository(repo contract.Repository) error {
 	if _, exists := r.repositories[repo.ID]; exists {
 		return contract.Fail(contract.FailureInvalidInput,
 			"repository %s is already registered", repo.ID)
-	}
-	if overrides := r.indexOverrides[repo.ID]; len(overrides) > 0 {
-		for provider, ready := range overrides {
-			repo = repo.SetIndexed(provider, ready)
-		}
 	}
 	r.repositories[repo.ID] = repo.Clone()
 	return nil
@@ -452,36 +439,13 @@ func (r *Registry) Observations(implementationID string) (contract.Health, strin
 	return worst, where, found
 }
 
-// SetIndexed corrects one repository's belief about whether a provider has a
-// ready index for it.
-//
-// Like SetHealth, this is one of the few places a catalog entry changes
-// while Atenea runs: indexed_by is what the settings file declared as a
-// starting point, and from here on whoever actually probes the provider owns
-// the value.
-func (r *Registry) SetIndexed(repositoryID, provider string, ready bool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	repo, ok := r.repositories[repositoryID]
-	if !ok {
-		return contract.Fail(contract.FailureNotFound, "unknown repository %s", repositoryID)
-	}
-	r.repositories[repositoryID] = repo.SetIndexed(provider, ready)
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if r.indexOverrides[repositoryID] == nil {
-		r.indexOverrides[repositoryID] = make(map[string]bool)
-	}
-	r.indexOverrides[repositoryID][provider] = ready
-	return r.persistLocked()
-}
-
 // persistLocked atomically writes runtime observations. Callers hold r.mu.
 func (r *Registry) persistLocked() error {
 	if r.statePath == "" {
 		return nil
 	}
 	raw, err := json.MarshalIndent(persistedState{
-		Version: 1, Health: r.observed, IndexedBy: r.indexOverrides,
+		Version: 1, Health: r.observed,
 	}, "", "  ")
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable, "registry state: encoding: %v", err)
@@ -519,19 +483,4 @@ func (r *Registry) persistLocked() error {
 			"registry state: replacing %s: %v", r.statePath, err)
 	}
 	return nil
-}
-
-// InvalidateProviderHealth permits a fresh probe after verified shared maintenance.
-// It changes only existing observations belonging to that provider.
-func (r *Registry) InvalidateProviderHealth(provider, reason string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, observations := range r.observed {
-		for id := range observations {
-			if r.implementers[id].Provider == provider {
-				observations[id] = contract.Health{State: contract.HealthUnknown, Reason: reason, ObservedAt: time.Now().UTC()}
-			}
-		}
-	}
-	return r.persistLocked()
 }

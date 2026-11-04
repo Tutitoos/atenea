@@ -19,8 +19,7 @@ import (
 
 // --- fake tokensave child ---------------------------------------------------
 //
-// Same arrangement as the kivgraph adapter's own fake, and for the same
-// reason: mcpstdio.Session is a concrete struct, so the only way to hand the
+// mcpstdio.Session is a concrete struct, so the only way to hand the
 // adapter a live one without spawning `tokensave serve` is a peer speaking the
 // same newline-delimited JSON-RPC over an io.Pipe pair. Every call is recorded,
 // so a test asserts what was asked and not only what came back.
@@ -308,7 +307,7 @@ func workspace(t *testing.T) (root string, repo contract.Repository) {
 	if err := os.MkdirAll(filepath.Join(path, "internal"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	return root, contract.NewRepository("api", path, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	return root, contract.NewRepository("api", path, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
 }
 
 func writeFile(t *testing.T, name, body string) {
@@ -618,7 +617,7 @@ func TestRunRefusesAnEmptyGraph(t *testing.T) {
 func TestRunRefusesARepositoryOutsideTheRoot(t *testing.T) {
 	root, _ := workspace(t)
 	outside := contract.NewRepository("elsewhere", t.TempDir(), nil,
-		contract.ScaleSmall, contract.VCSUnspecified, nil)
+		contract.ScaleSmall, contract.VCSUnspecified)
 	fake, sess := newFakeTokensave(t)
 	fake.on(toolStatus, readyStatus, false)
 
@@ -643,7 +642,7 @@ func TestRunRefusesARepositoryOutsideTheRoot(t *testing.T) {
 func TestTheDeclaredScopeIsExactlyWhatRunWillAnswerFor(t *testing.T) {
 	root, repo := workspace(t)
 	outside := contract.NewRepository("elsewhere", t.TempDir(), nil,
-		contract.ScaleSmall, contract.VCSUnspecified, nil)
+		contract.ScaleSmall, contract.VCSUnspecified)
 	_, sess := newFakeTokensave(t)
 	runner := newTestRunner(t, root, sess)
 
@@ -703,7 +702,7 @@ func TestRunCallsNeitherReportsNorReadsAHopOutsideTheServedRoot(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	// The repository IS the served root, so the prefix is empty.
-	repo := contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
 	writeFile(t, filepath.Join(root, "client.go"), "package redis\n\nfunc NewClient() {}\n")
 
 	fake, sess := newFakeTokensave(t)
@@ -746,7 +745,7 @@ func TestRunCallsReadsNoSnippetThroughASymlinkLeavingTheRoot(t *testing.T) {
 	if err := os.Symlink(parent, filepath.Join(root, "vendor")); err != nil {
 		t.Skipf("this filesystem cannot make the symlink the check exists for: %v", err)
 	}
-	repo := contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
 	writeFile(t, filepath.Join(root, "client.go"), "package redis\n\nfunc NewClient() {}\n")
 
 	fake, sess := newFakeTokensave(t)

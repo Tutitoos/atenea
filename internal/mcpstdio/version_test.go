@@ -12,8 +12,7 @@ import (
 // A far side that introduces itself has to be believed over anything written
 // down about it, and until now nothing over stdio asked.
 //
-// internal/mcphttp already captured serverInfo.version on the handshake; the
-// stdio transport dropped the initialize result on the floor, so every
+// The stdio transport used to drop the initialize result on the floor, so every
 // provider reached this way filed its measurements under no version at all.
 // The cost of that is not abstract: a comment in a retired adapter
 // named a version read out of documentation rather than measured, and it was

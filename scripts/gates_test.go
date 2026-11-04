@@ -388,9 +388,8 @@ func (r *repository) git(t *testing.T, arguments ...string) {
 	// half missing. command.Dir says where to RUN; GIT_DIR says which
 	// repository git is IN, and it wins. A git hook exports it, so a suite run
 	// from lefthook's pre-push inherits one pointing at the real checkout and
-	// every `git init` here lands there instead. Measured the hard way -- see
-	// gitEnv in internal/adapter/kivgraph/impact_index_test.go for what it
-	// cost.
+	// every `git init` here lands there instead. Measured the hard way -- that
+	// is what it cost.
 	command.Env = append(withoutGitSteering(),
 		"GIT_AUTHOR_NAME=atenea", "GIT_AUTHOR_EMAIL=atenea@example.invalid",
 		"GIT_COMMITTER_NAME=atenea", "GIT_COMMITTER_EMAIL=atenea@example.invalid",

@@ -19,7 +19,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
 	"github.com/Tutitoos/atenea/internal/config"
-	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -93,7 +92,6 @@ provider = "fixture"
 capability = "code.search"
 
   [implementation.constraints]
-  requires_index = true
 
 [[repository]]
 id = "api"
@@ -519,7 +517,7 @@ func TestSelectPrintsTheChoiceAndTheFunnel(t *testing.T) {
 	for _, want := range []string{
 		"chosen      ripgrep",
 		"2 in -> 1 out: ripgrep",
-		"dropped fixture.search: needs an index from provider fixture",
+		"dropped fixture.search: no attached runner serves it",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("select output is missing %q:\n%s", want, out)
@@ -943,7 +941,6 @@ func TestConfigAndIntentReportsExposeTheirSources(t *testing.T) {
 languages = ["go"]
 scale = "small"
 vcs = "present"
-indexed_by = ["ripgrep"]
 
 [[selector.rule]]
 capability = "code.search"
@@ -1059,24 +1056,8 @@ func TestCommandArgumentGuardsDoNotStartExternalWork(t *testing.T) {
 	}
 }
 
-func TestReadOnlyStatusAndIndexRenderers(t *testing.T) {
+func TestReadOnlyStatusRenderers(t *testing.T) {
 	var out bytes.Buffer
-	printIndexReports(&out, nil)
-	if !strings.Contains(out.String(), "no attached provider") {
-		t.Fatalf("empty index report = %q", out.String())
-	}
-	out.Reset()
-	printIndexReports(&out, []core.IndexReport{
-		{Repository: "api", Provider: "fixture", Err: "probe failed"},
-		{Repository: "web", Provider: "fixture", Ready: true},
-		{Repository: "docs", Provider: "fixture", Hint: "index missing"},
-	})
-	for _, want := range []string{"could not tell: probe failed", "ready", "not ready: index missing"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("index report missing %q: %s", want, out.String())
-		}
-	}
-	out.Reset()
 	if err := cmdService("", []string{"status"}, &out); err != nil {
 		t.Fatalf("service status: %v", err)
 	}

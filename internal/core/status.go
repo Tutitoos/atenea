@@ -373,7 +373,6 @@ type RepositoryStatus struct {
 	Scale     string
 	VCS       string
 	Languages []string
-	Indexes   []string
 }
 
 // ChatStatus is one open session: who it belongs to, what it may authorize
@@ -713,7 +712,6 @@ func (c *Core) Status() Status {
 			Scale:     repo.Scale.String(),
 			VCS:       repo.VCS.String(),
 			Languages: repo.Languages,
-			Indexes:   repo.Indexes(),
 		})
 	}
 

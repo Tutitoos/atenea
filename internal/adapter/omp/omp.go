@@ -388,8 +388,7 @@ func targets(root string, scope []string, repositoryID string) ([]string, error)
 // cannot see the case it exists to stop: "vendor/secret.go" climbs out of
 // nothing at all, and if vendor is a link to the directory above then omp was
 // pointed outside the repository and its hits were reported as if they were
-// inside it. The kivgraph adapter has always decided the same question this
-// way, with the same reasoning.
+// inside it.
 //
 // A path that does not exist keeps the lexical verdict: a scope naming a
 // directory that is not there is omp's answer to give, not this function's,

@@ -381,7 +381,7 @@ func TestSessionCallFailsCanceledWhenContextIsCanceled(t *testing.T) {
 // bufio.Reader.ReadString, which read() used, grows a slice until it finds
 // the delimiter, so the reader's size only sets how much is read per syscall
 // and nothing puts a roof on one message. The children behind this package
-// are the ones internal/supervisor launches -- kivgraph and tokensave -- and
+// are the ones internal/supervisor launches -- tokensave and the desktop helper -- and
 // the supervisor already caps their stderr with a ring for exactly this
 // reason, which left the pipe carrying the protocol as the only unbounded
 // one. Without the ceiling the flood is simply swallowed and the caller waits

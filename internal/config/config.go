@@ -30,7 +30,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
-	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
@@ -381,7 +380,6 @@ type Orchestrator struct {
 	OMP        OMPAdapter
 	ClaudeCode ClaudeCodeAdapter
 	Codex      CodexAdapter
-	Kivgraph   KivgraphAdapter
 	Tokensave  TokensaveAdapter
 	Desktop    DesktopAdapter
 	Android    AndroidAdapter
@@ -539,77 +537,25 @@ type ManagedProcess struct {
 	Instance Instance
 }
 
-// KivgraphAdapter configures the Kivgraph adapter.
-//
-// Kivgraph is the second far side that is not a CLI. For most of this
-// adapter's life it was never anything else either: no proxy to point at, no
-// externally managed instance to assume was already running, so the only
-// child was a persistent stdio-MCP server Atenea itself spawned and
-// supervised -- see Process below and supervisor.TransportStdio. Kivgraph
-// 0.9.2 changed that: `kivgraph daemon` serves the same MCP tool surface over
-// streamable HTTP at a fixed local URL, refuses every request without a
-// bearer token (401), and is ordinarily already running under its own
-// systemd user unit before Atenea starts, the same "assume it is there"
-// externally managed endpoint model. Endpoint and Token name
-// that server; Process remains for the stdio child, now one of two ways to
-// reach Kivgraph rather than the only one.
-type KivgraphAdapter struct {
-	IndexEnv              []string
-	AutoReindexRegistered bool
-	// Endpoint is where the kivgraph daemon's MCP server is listening.
-	// Mutually exclusive with Process: a server is reached one way, and
-	// declaring both leaves an operator's later "the other one" edit
-	// silently ignored instead of refused.
-	Endpoint string
-	// Token is the bearer token the daemon at Endpoint requires; the daemon
-	// answers 401 without one. Meaningless without Endpoint, so build refuses
-	// a Token with no Endpoint to send it to.
-	Token string
-	// Binary is Kivgraph's official CLI, used only by repository.index. It is
-	// independent from Endpoint and does not supervise another MCP server.
-	Binary string
-	// Implementations the adapter answers for.
-	Implementations []string
-	// Timeout caps one call, allowing for a cold graph database to open.
-	Timeout time.Duration
-	// IndexTimeout caps a full repository.index rebuild separately from reads.
-	IndexTimeout time.Duration
-	// Dashboard is the optional read-only web viewer exposed by a separate
-	// Kivgraph UI process. The viewer is deliberately a different process and
-	// transport from whichever one of Endpoint or Process reaches the MCP
-	// server itself.
-	Dashboard string
-	// DashboardProcess is the optional supervised HTTP viewer process.
-	DashboardProcess *ManagedProcess
-	// Process launches and supervises the kivgraph server itself over a
-	// stdio transport, the alternative to dialing Endpoint. Optional now
-	// that Endpoint exists: build refuses both set and refuses neither, so a
-	// non-nil Process here always means Endpoint is empty.
-	Process *ManagedProcess
-}
-
 // TokensaveAdapter configures the tokensave adapter.
 //
-// Same transport as Kivgraph -- a stdio MCP server Atenea spawns and
-// supervises -- and one field Kivgraph does not need: Root.
-// Kivgraph publishes one corpus addressed by repository NAME, while
-// tokensave serves ONE project rooted at a directory and speaks paths
-// relative to it, so the adapter cannot translate a repository-relative path
-// in either direction without being told where that root is. It is declared
-// rather than derived: a root guessed from the repository list would be
-// silently wrong the day a repository is added outside it.
+// A stdio MCP server Atenea spawns and supervises. tokensave serves ONE
+// project rooted at a directory and speaks paths relative to it, so the
+// adapter cannot translate a repository-relative path in either direction
+// without being told where that root is. It is declared rather than derived:
+// a root guessed from the repository list would be silently wrong the day a
+// repository is added outside it.
 type TokensaveAdapter struct {
 	// Root is the directory the supervised server was pointed at, absolute.
 	// Every repository this adapter answers for lives under it.
 	Root string
 	// Implementations the adapter answers for.
 	Implementations []string
-	// Timeout caps one call. It sits at Kivgraph's own ceiling: tokensave
-	// re-syncs its index before answering, which is slow long before it is
-	// stuck.
+	// Timeout caps one call. Tokensave re-syncs its index before answering,
+	// which is slow long before it is stuck.
 	Timeout time.Duration
-	// Process launches and supervises the tokensave server itself. As with
-	// Kivgraph this is not optional: a stdio server has no address to dial.
+	// Process launches and supervises the tokensave server itself. It is not
+	// optional: a stdio server has no address to dial.
 	Process *ManagedProcess
 }
 
@@ -630,7 +576,7 @@ type DesktopAdapter struct {
 	// measured 609ms while its whole tree was 91KB.
 	Timeout time.Duration
 	// Process launches and supervises the helper. Not optional, for the same
-	// reason as Kivgraph and tokensave: a stdio server has no address to dial.
+	// reason as tokensave: a stdio server has no address to dial.
 	Process *ManagedProcess
 }
 
@@ -747,7 +693,7 @@ type Security struct {
 	Sensitive []string
 }
 
-// RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
+// RunnerOMP, RunnerClaudeCode, RunnerCodex,
 // RunnerTokensave, RunnerDesktop, RunnerAndroid and RunnerLocal are the
 // values orchestrator.runners accepts.
 const (
@@ -757,8 +703,6 @@ const (
 	RunnerClaudeCode = "claudecode"
 	// RunnerCodex is part of ATENEA's public orchestration contract.
 	RunnerCodex = "codex"
-	// RunnerKivgraph is part of ATENEA's public orchestration contract.
-	RunnerKivgraph = "kivgraph"
 	// RunnerTokensave is part of ATENEA's public orchestration contract.
 	RunnerTokensave = "tokensave"
 	// RunnerDesktop is part of ATENEA's public orchestration contract.
@@ -1154,7 +1098,6 @@ type fileOrchestrator struct {
 	OMP        fileOMPAdapter        `toml:"omp"`
 	ClaudeCode fileClaudeCodeAdapter `toml:"claudecode"`
 	Codex      fileCodexAdapter      `toml:"codex"`
-	Kivgraph   fileKivgraphAdapter   `toml:"kivgraph"`
 	Tokensave  fileTokensaveAdapter  `toml:"tokensave"`
 	Desktop    fileDesktopAdapter    `toml:"desktop"`
 	Android    fileAndroidAdapter    `toml:"android"`
@@ -1190,25 +1133,6 @@ type fileCodexAdapter struct {
 	Timeout         string    `toml:"timeout"`
 }
 
-// fileKivgraphAdapter is the TOML shape of KivgraphAdapter. It reuses
-// fileManagedProcess for its own .process table: the shape a supervised
-// server takes in the settings file does not depend on which transport it
-// talks over, only fileManagedProcess.build's caller does (see the section
-// parameter it takes below).
-type fileKivgraphAdapter struct {
-	IndexEnv              *[]string           `toml:"index_env"`
-	AutoReindexRegistered *bool               `toml:"auto_reindex_registered"`
-	Endpoint              string              `toml:"endpoint"`
-	Token                 string              `toml:"token"`
-	Binary                string              `toml:"binary"`
-	Implementations       *[]string           `toml:"implementations"`
-	Timeout               string              `toml:"timeout"`
-	IndexTimeout          string              `toml:"index_timeout"`
-	Dashboard             string              `toml:"dashboard"`
-	DashboardProcess      *fileManagedProcess `toml:"dashboard_process"`
-	Process               *fileManagedProcess `toml:"process"`
-}
-
 // fileTokensaveAdapter is the TOML shape of TokensaveAdapter. `root` is the
 // one key its neighbor has no counterpart for: see TokensaveAdapter.Root.
 type fileDesktopAdapter struct {
@@ -1234,7 +1158,7 @@ type fileTokensaveAdapter struct {
 }
 
 // fileManagedProcess uses a pointer on the field above so an omitted
-// [orchestrator.kivgraph.process] table and a present-but-empty one are
+// [orchestrator.tokensave.process] table and a present-but-empty one are
 // different: the first leaves Process nil (unmanaged, unchanged behavior),
 // the second is a user who opted in without a command, which is an error
 // worth naming rather than silently doing nothing.
@@ -1319,11 +1243,10 @@ type fileImpl struct {
 }
 
 type fileConstraints struct {
-	Languages     []string `toml:"languages"`
-	RequiresIndex bool     `toml:"requires_index"`
-	RequiresVCS   bool     `toml:"requires_vcs"`
-	MinScale      string   `toml:"min_scale"`
-	MaxScale      string   `toml:"max_scale"`
+	Languages   []string `toml:"languages"`
+	RequiresVCS bool     `toml:"requires_vcs"`
+	MinScale    string   `toml:"min_scale"`
+	MaxScale    string   `toml:"max_scale"`
 	// MaxInput bounds request inputs by name, inclusive. It is the one
 	// constraint here that reads what was asked for rather than where.
 	MaxInput map[string]int `toml:"max_input"`
@@ -1350,7 +1273,6 @@ type fileRepository struct {
 	Languages []string `toml:"languages"`
 	Scale     string   `toml:"scale"`
 	VCS       string   `toml:"vcs"`
-	IndexedBy []string `toml:"indexed_by"`
 }
 
 type fileMCPServer struct {
@@ -1589,10 +1511,10 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 
 // validateAbsoluteURL checks that raw is a URL a plain http(s) client could
 // dial: some scheme, some host, nothing fancier. This is the shape the far
-// side of an MCP connection itself takes -- mcp_server's own url and
-// KivgraphAdapter's Endpoint -- as opposed to validateDashboardURL just
-// below, which is a viewer bolted onto a server rather than the server
-// itself and carries a dashboard alias requirement neither of these needs.
+// side of an MCP connection itself takes -- mcp_server's own url -- as
+// opposed to validateDashboardURL just below, which is a viewer bolted onto a
+// server rather than the server itself and carries a dashboard alias
+// requirement this one does not.
 func validateAbsoluteURL(source, section, id, field, raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -1709,6 +1631,9 @@ func parse(raw []byte, source string) (Config, error) {
 		if msg, ok := retiredSections[top]; ok && !named[top] {
 			named[top] = true
 			gone = append(gone, msg)
+		} else if msg := retiredKeyMessage(key.String()); msg != "" && !named[msg] {
+			named[msg] = true
+			gone = append(gone, msg)
 		}
 	}
 	if len(gone) > 0 {
@@ -1787,6 +1712,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	for _, rule := range decoded.Selector.Rules {
+		if retiredCapabilities[rule.Capability] {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source, retiredCapability(rule.Capability))
+		}
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
 			Capability: rule.Capability,
 			Repository: rule.Repository,
@@ -1811,6 +1739,9 @@ func parse(raw []byte, source string) (Config, error) {
 		cfg.Selector.HealthStaleAfter = staleAfter
 	}
 	for _, raw := range decoded.Capabilities {
+		if retiredCapabilities[raw.ID] {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source, retiredCapability(raw.ID))
+		}
 		capability, err := raw.build(source)
 		if err != nil {
 			return Config{}, err
@@ -1825,15 +1756,19 @@ func parse(raw []byte, source string) (Config, error) {
 		if impl.Provider == "serena" || strings.HasPrefix(impl.ID, "serena.") {
 			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: Serena is retired; remove implementation %s", source, impl.ID)
 		}
+		if impl.Provider == "kivgraph" || strings.HasPrefix(impl.ID, "kivgraph.") {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source,
+				retired("[[implementation]] "+impl.ID, "the Kivgraph provider", "delete the block"))
+		}
+		if retiredCapabilities[impl.Capability] {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source, retiredCapability(impl.Capability))
+		}
 		cfg.Implementations = append(cfg.Implementations, impl)
 	}
 	for _, raw := range decoded.Repositories {
 		repo, err := raw.build(source)
 		if err != nil {
 			return Config{}, err
-		}
-		if repo.IndexedBy("serena") {
-			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: Serena is retired; remove indexed_by entry from %s", source, repo.ID)
 		}
 		cfg.Repositories = append(cfg.Repositories, repo)
 	}
@@ -1843,13 +1778,7 @@ func parse(raw []byte, source string) (Config, error) {
 	// can say which one it meant.
 	//
 	// A dashboard alias is the server's own id, so the same check covers it:
-	// there used to be a second map here guarding aliases, and it could never
-	// fire, because two blocks claiming one alias are two blocks claiming one
-	// id and the line above has already refused them. Its message even named
-	// the same id twice. The conflict that IS real -- a [[mcp_server]] whose
-	// alias collides with the graph viewer's -- is between this file and
-	// orchestrator.kivgraph.dashboard, and dashboard.AllConfig makes it where
-	// both are in hand.
+	// two blocks claiming one alias are two blocks claiming one id.
 	seen := make(map[string]bool, len(decoded.MCPServers))
 	for _, raw := range decoded.MCPServers {
 		server, err := raw.build(source)
@@ -1930,9 +1859,6 @@ var defaultClaudeImplementations = []string{"claude.search"}
 
 var defaultCodexImplementations = []string{"codex.search"}
 
-// Kivgraph and Tokensave defaults come from their own packages so they cannot
-// drift from the adapters. Neither adapter imports internal/config.
-
 // clientDeniedCapabilitiesDefault is the first-phase MCP surface. The list
 // is capability-level rather than effect-level: desktop.move only causes
 // read + device, so a client floor that allows observation would otherwise
@@ -1970,6 +1896,49 @@ func retired(section, with, remedy string) string {
 	return fmt.Sprintf("%s was removed in contract 5.0.0 with %s; %s (see docs/content/migration-5.md)", section, with, remedy)
 }
 
+// retiredKeys are keys and sub-tables, by dotted path prefix, that contract
+// 5.0.0 removed from tables that still exist. parse names the edit instead of
+// reporting them as typos.
+var retiredKeys = map[string]string{
+	"orchestrator.kivgraph":                     retired("[orchestrator.kivgraph]", "the Kivgraph provider", "delete the table and every sub-table"),
+	"repository.indexed_by":                     retired("indexed_by", "the Kivgraph provider, the only provider that indexed repositories", "delete the key from every [[repository]] block"),
+	"implementation.constraints.requires_index": retired("requires_index", "the Kivgraph provider, the only provider that needed an index", "delete the key from every [[implementation.constraints]] table"),
+}
+
+// retiredRunners are the orchestrator.runners names that no longer exist.
+var retiredRunners = map[string]string{
+	"kivgraph": retired(`runner "kivgraph"`, "the Kivgraph provider", "delete the entry from orchestrator.runners"),
+}
+
+// retiredCapabilities are the capability ids whose only implementations were
+// Kivgraph's. They left the shipped catalog with it, so a settings file that
+// still declares, implements or routes one is refused rather than left as a
+// capability nothing can serve.
+var retiredCapabilities = map[string]bool{
+	"symbol.search": true, "symbol.intent_search": true, "symbol.definition": true,
+	"symbol.references": true, "symbol.implementations": true, "symbol.dependencies": true,
+	"symbol.consumers": true, "symbol.get": true, "symbol.unresolved": true,
+	"symbol.source": true, "symbol.impact": true, "graph.status": true,
+	"graph.repositories": true, "graph.ensure_fresh": true, "repository.index": true,
+	"code.impact": true,
+}
+
+func retiredCapability(id string) string {
+	return retired(fmt.Sprintf("capability %q", id), "the Kivgraph provider, the only implementation it had",
+		"delete its [[capability]] block, every [[implementation]] that serves it and every [[selector.rule]] that names it")
+}
+
+// retiredKeyMessage returns the retirement message for an undecoded settings
+// key that sits under a retired path, or "" when it is not one.
+func retiredKeyMessage(key string) string {
+	for prefix, msg := range retiredKeys {
+		if key == prefix || strings.HasPrefix(key, prefix+".") {
+			return msg
+		}
+	}
+	return ""
+}
+
 // contractRemedy names the edit that fixes a refused settings file, because
 // the two numbers alone do not say which of them is meant to move.
 //
@@ -1980,7 +1949,7 @@ func retired(section, with, remedy string) string {
 // confusing failure.
 func contractRemedy(declared contract.Version) string {
 	if declared.Major < contract.Current.Major {
-		remedy := fmt.Sprintf("contract 5.0.0 removed the agents, the workflow engine, the decide command and the knowledge store: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables if present, then change the contract line to %q (see docs/content/migration-5.md)", contract.Current)
+		remedy := fmt.Sprintf("contract 5.0.0 removed the agents, the workflow engine, the decide command, the knowledge store and the Kivgraph provider: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables, the [orchestrator.kivgraph] tables, the \"kivgraph\" runner, the kivgraph.* implementations, the capabilities named in docs/content/migration-5.md and every indexed_by key if present, then change the contract line to %q (see docs/content/migration-5.md)", contract.Current)
 		if declared.Major < 4 {
 			remedy = "remove Serena runner, adapter/process, MCP, implementations and indexed_by entries, and " + remedy
 		}
@@ -2015,14 +1984,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			AppBinary:       codex.DefaultAppBinary,
 			Implementations: defaultCodexImplementations,
 			Timeout:         codex.DefaultTimeout,
-		},
-		Kivgraph: KivgraphAdapter{
-			IndexEnv:        []string{},
-			Endpoint:        kivgraph.DefaultEndpoint,
-			Binary:          kivgraph.DefaultBinary,
-			Implementations: kivgraph.DefaultImplementations(),
-			Timeout:         kivgraph.DefaultTimeout,
-			IndexTimeout:    kivgraph.DefaultIndexTimeout,
 		},
 		Tokensave: TokensaveAdapter{
 			Implementations: tokensave.DefaultImplementations(),
@@ -2103,13 +2064,17 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
+			case RunnerOMP, RunnerClaudeCode, RunnerCodex,
 				RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerLocal:
 			default:
+				if msg, gone := retiredRunners[name]; gone {
+					return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+						"settings %s: orchestrator.runners has %q: %s", source, name, msg)
+				}
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s",
 					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex,
-					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerLocal)
+					RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -2154,11 +2119,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.Codex = codexAdapter
-	graph, err := o.Kivgraph.build(source, out.Kivgraph)
-	if err != nil {
-		return Orchestrator{}, err
-	}
-	out.Kivgraph = graph
 	index, err := o.Tokensave.build(source, out.Tokensave)
 	if err != nil {
 		return Orchestrator{}, err
@@ -2441,130 +2401,6 @@ func (c fileCodexAdapter) build(source string, out CodexAdapter) (CodexAdapter, 
 	return out, nil
 }
 
-// build is additive over the passed-in defaults, never zeroing: an omitted
-// key keeps whatever the caller already put in out (the compiled-in
-// defaults), the same shape every other adapter's build follows -- with one
-// exception. A file that leaves the whole orchestrator.kivgraph table
-// untouched is left exactly as out already was, kivgraph.DefaultEndpoint and
-// all: the daemon is assumed already available at the compiled endpoint. The moment any field in this table IS written,
-// though, the operator has started answering "where is this server" for
-// themselves, and endpoint and process are the two answers TOML can give:
-// naming both, or naming neither, is refused here instead of discovered
-// later as a provider with no door in and no door out.
-func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (KivgraphAdapter, error) {
-	if l == (fileKivgraphAdapter{}) {
-		return out, nil
-	}
-	hasEndpoint := strings.TrimSpace(l.Endpoint) != ""
-	hasProcess := l.Process != nil
-	hasToken := strings.TrimSpace(l.Token) != ""
-	switch {
-	case hasEndpoint && hasProcess:
-		return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.kivgraph has both endpoint and process; a server is reached one way", source)
-	case !hasEndpoint && !hasProcess && !hasToken:
-		return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.kivgraph needs an endpoint or a process", source)
-	}
-	if hasEndpoint {
-		validated, err := validateAbsoluteURL(source, "orchestrator.kivgraph", "kivgraph", "endpoint", l.Endpoint)
-		if err != nil {
-			return KivgraphAdapter{}, err
-		}
-		out.Endpoint = validated
-	}
-	if hasToken {
-		if !hasEndpoint {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.token is set without endpoint; a bearer token for a stdio child has no server to authenticate against", source)
-		}
-		out.Token = strings.TrimSpace(l.Token)
-	}
-	if l.Binary != "" {
-		out.Binary = strings.TrimSpace(l.Binary)
-		if out.Binary == "" {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.binary must not be blank", source)
-		}
-	}
-	if l.Implementations != nil {
-		out.Implementations = *l.Implementations
-	}
-	if l.Timeout != "" {
-		timeout, err := time.ParseDuration(l.Timeout)
-		if err != nil {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.timeout %q: %v", source, l.Timeout, err)
-		}
-		if timeout <= 0 {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.timeout must be above 0, got %s", source, timeout)
-		}
-		out.Timeout = timeout
-	}
-	if l.IndexTimeout != "" {
-		timeout, err := time.ParseDuration(l.IndexTimeout)
-		if err != nil || timeout <= 0 {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.index_timeout %q must be a positive duration", source, l.IndexTimeout)
-		}
-		out.IndexTimeout = timeout
-	}
-	if l.AutoReindexRegistered != nil {
-		out.AutoReindexRegistered = *l.AutoReindexRegistered
-	}
-	if l.IndexEnv != nil {
-		for _, value := range *l.IndexEnv {
-			key, _, ok := strings.Cut(value, "=")
-			if !ok || strings.TrimSpace(key) == "" {
-				return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput, "kivgraph.index_env entries must be KEY=value")
-			}
-		}
-		out.IndexEnv = slices.Clone(*l.IndexEnv)
-	}
-	if strings.TrimSpace(l.Dashboard) != "" {
-		validated, err := validateDashboardURL(source, "orchestrator.kivgraph", "kivgraph", l.Dashboard)
-		if err != nil {
-			return KivgraphAdapter{}, err
-		}
-		out.Dashboard = validated
-	}
-	if l.DashboardProcess != nil {
-		process, err := l.DashboardProcess.build(source, "orchestrator.kivgraph.dashboard_process")
-		if err != nil {
-			return KivgraphAdapter{}, err
-		}
-		if process.Port == 0 {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.dashboard_process.port must be fixed when a dashboard URL is configured", source)
-		}
-		if out.Dashboard == "" {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.dashboard is required with dashboard_process", source)
-		}
-		parsed, _ := url.Parse(out.Dashboard)
-		if parsed.Port() == "" || parsed.Port() != strconv.Itoa(process.Port) {
-			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.kivgraph.dashboard port must match dashboard_process.port %d", source, process.Port)
-		}
-		out.DashboardProcess = &process
-	}
-	if l.Process != nil {
-		process, err := l.Process.build(source, "orchestrator.kivgraph.process")
-		if err != nil {
-			return KivgraphAdapter{}, err
-		}
-		out.Process = &process
-		// The compiled kivgraph.DefaultEndpoint fallback out arrived with is
-		// exactly the "nothing was said" default this operator just said
-		// something about: declaring process is a deliberate choice of the
-		// stdio child over it, and leaving the fallback in place would leave
-		// the built adapter naming both, contradicting the refusal above.
-		out.Endpoint = ""
-	}
-	return out, nil
-}
-
 // settingsPath is the one rule every path a settings file writes has to pass,
 // and it is orchestrator.tokensave.root's rule generalized: a relative path is
 // refused here rather than resolved, because "resolved against what" has no
@@ -2697,10 +2533,9 @@ func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (Tokens
 
 // build turns the file shape of a process table into a ManagedProcess.
 // section is the settings key path this table lives at (e.g.
-// "orchestrator.kivgraph.process"), used to name it in every error below --
+// "orchestrator.tokensave.process"), used to name it in every error below --
 // this one function backs every supervised-process table in the file, and a
-// provider-specific error naming kivgraph's own mistake would send the reader
-// to the wrong block.
+// provider-specific error would send the reader to the wrong block.
 func (p fileManagedProcess) build(source, section string) (ManagedProcess, error) {
 	if strings.TrimSpace(p.Command) == "" {
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
@@ -3089,12 +2924,11 @@ func (i fileImpl) build(source string) (contract.Implementation, error) {
 		Capability:     i.Capability,
 		ScopeGuarantee: scopeGuarantee,
 		Constraints: contract.Constraints{
-			Languages:     languages,
-			RequiresIndex: i.Constraints.RequiresIndex,
-			RequiresVCS:   i.Constraints.RequiresVCS,
-			MinScale:      minScale,
-			MaxScale:      maxScale,
-			MaxInput:      maps.Clone(i.Constraints.MaxInput),
+			Languages:   languages,
+			RequiresVCS: i.Constraints.RequiresVCS,
+			MinScale:    minScale,
+			MaxScale:    maxScale,
+			MaxInput:    maps.Clone(i.Constraints.MaxInput),
 		},
 		Cost: contract.Cost{
 			Estimated:   estimated,
@@ -3124,7 +2958,7 @@ func (r fileRepository) build(source string) (contract.Repository, error) {
 		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: repository %s: vcs: %v", source, r.ID, err)
 	}
-	out := contract.NewRepository(r.ID, r.Path, r.Languages, scale, vcs, r.IndexedBy)
+	out := contract.NewRepository(r.ID, r.Path, r.Languages, scale, vcs)
 	if err := out.Validate(); err != nil {
 		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %v", source, err)

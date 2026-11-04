@@ -42,7 +42,7 @@ const commandTool = "atenea.command"
 
 var readOnlyCommands = []string{
 	"help", "status", "metrics", "catalog", "doctor",
-	"detect", "incidents", "config", "intent", "device.sessions", "device.help", "maintenance",
+	"detect", "incidents", "config", "intent", "device.sessions", "device.help",
 }
 
 // Command answers the small read-only surface intended for chat shortcuts.
@@ -71,18 +71,6 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 
 	response := CommandResponse{Command: name, Status: "ok"}
 	switch name {
-	case "maintenance":
-		response.Summary = "Kivgraph maintenance"
-		if c.graphMaintenance == nil {
-			response.Data = map[string]any{"state": "not_configured"}
-		} else {
-			job, err := c.graphMaintenance.MaintenanceID(req.ID)
-			if err != nil {
-				return CommandResponse{}, err
-			}
-
-			response.Data = job
-		}
 	case "device.help":
 		response.Summary = "Agent-device arguments and session recovery"
 		response.Data = map[string]any{"version": agentdevice.Version, "supported_versions": agentdevice.SupportedVersions(), "candidate_catalog": "core", "click": agentdevice.Help("click"), "wait": agentdevice.Help("wait")}
@@ -139,11 +127,11 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 			"repositories": c.Registry().Repositories(),
 		}
 	case "detect":
-		detection, err := c.Detect(ctx, req.Repository)
+		detection, err := c.Detect(ctx)
 		if err != nil {
 			return CommandResponse{}, err
 		}
-		response.Summary = "Provider and index detection"
+		response.Summary = "MCP server detection"
 		response.Data = detection
 	case "incidents":
 		book, err := c.Incidents()

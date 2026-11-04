@@ -17,7 +17,7 @@ func askCatalog(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "atenea.toml")
-	if err := os.WriteFile(path, body, 0600); err != nil {
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -26,9 +26,9 @@ func askCatalog(t *testing.T) string {
 	return path
 }
 
-// The payload is typed by the capability's own declaration, so a line number
-// that is not a number is refused at the door rather than sent as a string for
-// the far side to trip over.
+// The payload is typed by the capability's own declaration, so a depth that is
+// not a number is refused at the door rather than sent as a string for the far
+// side to trip over.
 func TestTheAskPayloadIsTypedByTheCapability(t *testing.T) {
 	settingsPath := askCatalog(t)
 
@@ -37,12 +37,12 @@ func TestTheAskPayloadIsTypedByTheCapability(t *testing.T) {
 		args []string
 		want int
 	}{
-		{"not a number", []string{"--set", "file=a.go", "--set", "line=soon", "--set", "column=1"}, 2},
+		{"not a number", []string{"--set", "file=a.go", "--set", "depth=soon"}, 2},
 		{"unknown field", []string{"--set", "file=a.go", "--set", "color=blue"}, 2},
 		{"not name=value", []string{"--set", "file"}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{"--config", settingsPath, "ask", "symbol.definition", "--repo", "current"}, tc.args...)
+			args := append([]string{"--config", settingsPath, "ask", "symbol.overview", "--repo", "current"}, tc.args...)
 			out, err := cli(t, args...)
 			if err == nil {
 				t.Fatalf("accepted a bad payload:\n%s", out)

@@ -1,13 +1,11 @@
 package supervisor
 
 // probe speaks just enough MCP to answer one question: is a real MCP server
-// listening and willing to open a session. It is a second, small
-// implementation of the same wire format internal/mcphttp/mcphttp.go
-// already speaks, kept apart on purpose -- that file is the adapter's own
-// connection, held open and reused across calls; this one is a health check
-// that opens a session, learns the answer, and throws it away. Sharing code
-// between the two would mean the adapter reaching into a package that exists
-// to watch it, which is the wrong direction for that dependency to point.
+// listening and willing to open a session. It is a health check that opens a
+// session, learns the answer, and throws it away, kept apart from every
+// adapter's own connection: sharing code with one would mean the adapter
+// reaching into a package that exists to watch it, which is the wrong
+// direction for that dependency to point.
 
 import (
 	"bufio"
@@ -40,7 +38,7 @@ func probeHTTP(ctx context.Context, client *http.Client, endpoint string) error 
 }
 
 // protocolVersion is the MCP revision the probe declares in its handshake.
-// It matches internal/mcphttp/mcphttp.go's own constant: a server that
+// A server that
 // cannot answer this revision should say so at the handshake, which is
 // exactly the failure this probe exists to catch before a real call does.
 const protocolVersion = string(mcpcompat.Legacy)
