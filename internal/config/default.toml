@@ -4515,33 +4515,6 @@ pool = "review"
     summary = "Deterministic result of checking this citation"
 
 [[agent]]
-name = "plan-check"
-kind = "specialized"
-summary = "Reads a plan as TOML and says whether the engine would accept it"
-command = "$atenea"
-args = ["agent-exec", "plan-check"]
-context = ["repository"]
-effects = ["read"]        # it compiles a graph in memory; nothing is written
-max_duration = "30s"
-max_tokens = 1            # it spends no tokens: the compiler is the reviewer
-# A review-pool type, because it is one: it audits what `plan` answered, and
-# it is the cheapest reviewer in the file -- the engine's own compiler,
-# quoted back at the planner in the compiler's own words.
-pool = "review"
-
-  [[agent.result]]
-  name = "steps"
-  type = "int"
-  required = true
-  summary = "How many steps the accepted graph declares"
-
-  [[agent.result]]
-  name = "subject"
-  type = "string"
-  required = true
-  summary = "The run whose plan was compiled"
-
-[[agent]]
 name = "semantic-reviewer"
 kind = "specialized"
 summary = "Uses the configured explore model to judge whether an agent conclusion follows from its evidence"

@@ -80,12 +80,6 @@ Commands:
   agent TYPE [FILE]      Run one declared agent type as a process, once;
                          --objective/--criterion set the task; --confirm
                          approves write or external effects
-  agents scorecard       Show durable agent runs, tokens and measurement coverage
-  workflow VERB          Draw, launch and steer a graph of agent steps:
-                         create, launch, run, propose, approve, reject,
-                         resume, redo, list, show. Money is granted per graph
-                         and split between its steps; nothing spawns until a
-                         person launches it
   traces                 What agents ran and how they ended; filter with
                          --type, --verdict, --open, --since, --id, --limit
   stats                  Colored activity tables; --today, --week, --month, --watch
@@ -110,8 +104,6 @@ Commands:
                          moment ago; --via-headroom composes Headroom too
   compat-overlay --client CLIENT
                          Emit the machine-readable ephemeral wrap overlay
-  recovery pilot --fixture --root PATH --sentinel PATH [--json]
-                         Run the deterministic, read-only recovery pilot
   codex agents sync --global|--project PATH [--prune]
                          Sync canonical native Codex agent profiles atomically
   codex agents check [--global|--project PATH]
@@ -145,11 +137,6 @@ Global flags:
 // their flags even see anything -- "atenea ask -h" would otherwise be
 // swallowed as the capability id, not recognized as a request for help.
 var commandHelp = map[string]string{
-	"agents": `Usage: atenea agents scorecard [--traces PATH]
-
-Show the durable cross-workflow scorecard for agents. Measured, estimated and
-unknown usage remain separate; this command does not invoke a model.
-`,
 	"codex": `Usage: atenea codex agents sync --global|--project PATH [--prune]
        atenea codex agents check [--global|--project PATH]
        atenea codex certify start --desktop [--ttl 30d]
@@ -426,95 +413,6 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
-	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|answer|cancel|resume|redo|native-fork|list|status|export|compare
-
-Run a graph of agent steps. The graph comes from a TOML file and is executed
-exactly as written: nothing here plans, splits or grows it.
-
-Steps with no unmet dependency run together, up to the ceiling of their lane
-(workflow.max_parallel_agent and max_parallel_review). A step that fails takes
-only its dependents with it. Two steps that can run at once may not both touch
-a file when one writes it -- that is refused before anything spawns.
-
-An edge carries order; a subject carries the answer:
-
-  needs = ["read-a"]    run after read-a, and only if it ended ok
-  subject = "read-a"    hand this step read-a's whole report -- implies the edge
-  on = "answered"       what the subject must have reached: answered (the
-                        default: ok, failed or incomplete) or ok
-
-A subject is for review-pool agent types, one upstream each. A reviewer with
-no subject is refused, and so is a subject handed to a type that never reads
-one. A step nobody judged clears no bar: what depended on it reads blocked and
-says which command would clear it.
-
-A plan is read before it is run, so those are two commands. "run PATH" is both
-at once: the person typed the path. Over MCP there is no shortcut -- a plan and
-the permission to run it must not arrive in one message.
-
-The graph may grow mid-run, three times at most. While a gate waits nothing new
-is dispatched and what is already spawned finishes; waiting never times out. A
-proposal may only replace steps that have NOT STARTED, which is what makes a
-stale approval impossible to construct rather than a race to catch. The answer
-is a row, so a gate outlives the atenea that opened it.
-
-A step's budget_usd is a FORECAST, not a ceiling. Every share is checked against
-the grant before anything spawns, and a plan whose steps are funded below what
-starting a turn costs is refused -- but nothing stops a turn once it is running.
-The provider's own --max-budget-usd is checked between messages, so it decides
-whether to start another one and never what the one in flight costs. Measured on
-a 23-step run 2026-08-16: a $0.09 share spent $0.41, and a $5.22 grant was
-charged $5.88. Budget for the work, then expect a step to exceed its share by up
-to the cost of one turn, and the run to exceed its grant by the sum of those.
-
-limits.max_tokens is carried and validated as an advisory declaration. The
-model client can use its separate ReadTokens allowance to stop an observed
-conversation, but no provider-independent hard token ceiling is promised.
-
-Status and compare accept their documented flags before or after ids.
-
-  create PATH           write the graph down and print the plan; spawn nothing
-  launch ID             commit the grant and run it
-  run PATH              create and launch in one command
-  propose ID PATH       put an expansion to whoever is running it
-  approve ID            let a waiting expansion in
-  reject --reason W ID  turn it down; a refused launch stops the run, a refused
-                        expansion leaves the approved graph to finish
-  resume ID             continue a run that was cut, or whose atenea died
-  redo --step S=USD ID  dispatch a step that was cut at its own ceiling, at a
-                        raised share; reopens a finished run to do it
-  list                  the runs on record
-  show ID               one run, step by step, and its gate log
-  status ID             durable state; --format compact|markdown|json
-  export ID             complete deterministic --format markdown|json view
-  compare A B           compare recorded tokens and duration between workflows
-  native-fork inspect   inspect a pending or completed Codex child relationship
-  native-fork bind      bind a verified child after an uncertain fork outcome
-
-Flags:
-  --traces PATH         state database (workflows live beside the traces)
-  --repository ID       repository to serve at the repository context level
-  --redo STEP           with resume: dispatch a step nobody judged; repeatable
-  --step ID=USD         with redo: a step and its raised share; repeatable
-  --grant USD           with redo: the run's new total; default leaves it alone
-  --replaces STEP       with propose: a step it removes; repeatable
-  --reason WHY          with reject: required
-  --limit N             with list: how many runs
-  --activity-after N    with status/show: resume activity after a durable cursor
-  --format FORMAT       with status/export: compact, markdown or json as supported
-
-Ctrl-C cuts the running agents and spawns nothing queued. What was cut is
-recorded as interrupted -- nobody judged it -- and resume redoes the read-only
-ones by itself. A step that may have written something waits for --redo.
-
-A step cut at its SPENDING ceiling is a different case: it was judged -- it
-reported, and the report said incomplete -- so resume leaves it alone and redo
-is what dispatches it. Every share redo takes must be higher than the one that
-was cut, because the same share buys the same result, and it is never automatic
-for the same reason. What the record keeps afterwards is the pair: the attempt
-cut at $0.62, and the one that finished at $0.80. Measured 2026-08-16: 150 steps
-had been cut at a ceiling and 2 had ever been re-dispatched.
-`,
 	"traces": `Usage: atenea traces [flags]
 
 What agents ran and how they ended. A row with no ending is a run nobody saw
@@ -605,8 +503,7 @@ it is derived from the same row: the smallest share past which half of it,
 the read allowance, outweighs the turn's own first assistant event. A step
 funded below it clears the floor and still dies with nothing written,
 because the model is nudged to answer before it has read anything of its
-own -- 'workflow create' refuses a plan on this number the same way it
-refuses one on the floor. A row is marked stale when its CLI version does
+own. A row is marked stale when its CLI version does
 not match the CLI installed on this machine right now -- the system prompt
 and tool schemas ship WITH the CLI, so a new CLI is a new floor even
 against the same repository, agent and model. A row measured before
@@ -707,11 +604,6 @@ the corresponding Atenea entries remain the single advertised copy.
 Emit the machine-readable ephemeral overlay generated by the same wrap
 renderers used for a compatibility pilot. Supported clients: codex, claude,
 opencode.
-`,
-	"recovery": `Usage: atenea recovery pilot --fixture --root PATH --sentinel PATH [--json]
-
-Run the deterministic read-only recovery pilot. It uses fixture evidence only;
-real providers, rebuilds and external gates are not started.
 `,
 }
 
@@ -921,8 +813,6 @@ func run(args []string, out io.Writer) error {
 		return cmdIncidents(settingsPath, commandArgs, out)
 	case "agent":
 		return cmdAgent(settingsPath, commandArgs, out)
-	case "agents":
-		return cmdAgents(commandArgs, out)
 	case "agent-exec":
 		// The far side of a spawn, not something a person types. Atenea
 		// names it in the shipped agent declaration and starts it with an
@@ -934,8 +824,6 @@ func run(args []string, out io.Writer) error {
 		return cmdAgentRun(commandArgs[0], os.Stdin, out)
 	case headroomReentryCommand:
 		return cmdHeadroomReentry(commandArgs)
-	case "workflow":
-		return cmdWorkflow(settingsPath, commandArgs, out)
 	case "traces":
 		return cmdTraces(commandArgs, out)
 	case "stats":
@@ -958,8 +846,6 @@ func run(args []string, out io.Writer) error {
 		return cmdWrap(settingsPath, commandArgs, os.Stderr)
 	case "compat-overlay":
 		return cmdCompatOverlay(commandArgs, out)
-	case "recovery":
-		return cmdRecovery(commandArgs, out)
 	case "statusline":
 		return cmdStatusLine(commandArgs, out)
 	case "help", "-h", "--help":
@@ -2467,10 +2353,9 @@ func commissionError(ctx context.Context, result *orchestrator.Result, runErr er
 	return nil
 }
 
-// cmdAsk dispatches one capability. It is the atomic base a workflow is built
-// out of, and the only way a caller who already has a position -- an editor,
-// a client with a cursor -- can hand it over: exploring finds text, and a text
-// hit is not a cursor.
+// cmdAsk dispatches one capability: the only way a caller who already has a
+// position -- an editor, a client with a cursor -- can hand it over: exploring
+// finds text, and a text hit is not a cursor.
 func cmdAsk(settingsPath string, args []string, out io.Writer) (err error) {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
