@@ -162,7 +162,6 @@ The source includes these adapters and the local stand-in:
 | `kivgraph` | Structural search, source, references, dependencies, impact, context and graph maintenance | Configured MCP transport and registered, indexed repositories |
 | `tokensave` | Context, symbol calls and overview | Configured stdio process and repository scope |
 | `desktop` | macOS application inspection, screenshots and interaction | Local Swift helper and macOS permissions |
-| `scrapling` | Web fetching, extraction and crawling | Configured MCP provider; crawling also needs the Python Spider helper |
 | `local` | Filesystem `code.search` | No external client; intended for local development and smoke tests |
 
 OpenCode is a supported client and optional model backend for agents; it is not
@@ -203,8 +202,6 @@ a guarantee that every external provider can stop at the exact monetary limit.
 
 For desktop setup and interaction rules, see
 [Computer Use](docs/content/computer-use.md) and the [helper guide](helper/README.md).
-For web crawling prerequisites, see the
-[Scrapling Spider helper](helper/scrapling-spider/README.md).
 
 ## Run the service and connect clients
 
@@ -367,7 +364,7 @@ and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 | [`internal/`](internal/) | Core, adapters, runners, agents, workflows, storage and transports |
 | [`pkg/contract/`](pkg/contract/) | Versioned capability and adapter contracts |
 | [`dashboard/`](dashboard/) | React dashboard source, built with Bun and embedded in Go |
-| [`helper/`](helper/) | Swift desktop helper and Python Scrapling Spider helper |
+| [`helper/`](helper/) | Swift desktop helper |
 | [`docs/`](docs/) | Hugo documentation sources and configuration |
 | [`benchmarks/`](benchmarks/) | Recorded runs and reproducible benchmark evidence |
 | [`scripts/`](scripts/) | Build, installation, validation and smoke-test scripts |
@@ -378,7 +375,6 @@ and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 
 Atenea builds on [ripgrep](https://github.com/BurntSushi/ripgrep),
 [Kivgraph](https://github.com/Luqueee/kivgraph),
-[Scrapling](https://github.com/D4Vinci/Scrapling) and
 [DuckDB](https://github.com/duckdb/duckdb), along with the CLIs and MCP providers
 configured by its users. Documentation uses [Hugo](https://github.com/gohugoio/hugo)
 and [hugo-book](https://github.com/alex-shpak/hugo-book).

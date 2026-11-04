@@ -1,5 +1,7 @@
 # Audit remediation — September 2026
 
+Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). Every Scrapling and web.* mention in this document is dated evidence.
+
 ## 01: Diagnostics and dashboard (B04, A07)
 
 New diagnostic secrets are redacted before persistence; old stats diagnostics are redacted on read without rewriting stored history. Dashboard hosts must be local or match the configured listener IP. Forwarded host headers do not grant access.

@@ -48,6 +48,8 @@ Declared interfaces audited in September 2026. Tests validate Atenea routing and
 | web.extract | scrapling.extract_request, scrapling.extract_fetch, scrapling.extract_stealth | Declaration and local contracts |
 | web.crawl | scrapling.crawl, scrapling.crawl_stealth | Declaration and local contracts |
 
+Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). The web.* rows above are dated evidence.
+
 ## Raw tool declarations
 
 claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207). Its rows below are dated evidence.

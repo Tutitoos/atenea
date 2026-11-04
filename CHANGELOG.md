@@ -37,6 +37,14 @@ The `claude-mem` MCP server is no longer a supported or declared backend, so
 `tools/mcp-agree` and `scripts/v1-policy-check.sh` stop expecting it. Dated
 audit evidence that measured it is kept and marked as such (#207).
 
+The Scrapling provider and the `web.fetch`, `web.extract` and `web.crawl`
+capabilities are removed: the adapter, the Spider helper, its CI jobs, the `[web]`
+and `[orchestrator.scrapling]` settings and the shipped declarations are gone.
+A settings file that still names `scrapling` in `orchestrator.runners`, or keeps
+`[web]` or `[orchestrator.scrapling]`, is refused at load as unknown or invalid;
+remove them. The contract version is unchanged. Dated audit evidence that
+measured Scrapling is kept and marked as such (#210).
+
 The `chrome-devtools`, `context7` and diagram MCP servers are no longer supported
 or declared backends: `tools/mcp-agree` stops expecting them, `scripts/v1-policy-check.sh`
 no longer requires Context7 in the final audit, and tests use neutral server ids.

@@ -8,6 +8,8 @@ weight: 7
 
 # v1 readiness
 
+Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). Every Scrapling mention in this document is dated evidence.
+
 This page is the acceptance record for the published releases. The evidence below the
 "Latest 1.0.5 verification" heading was measured against that release and stays
 filed under it; what was checked for 1.1.0 has a section of its own at the end.

@@ -167,7 +167,7 @@ budget_usd = 0.90           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
 client_denied_capabilities = ["desktop.move", "desktop.click"] # MCP kill switch
-  runners = ["omp"]           # any of omp, claudecode, codex, kivgraph, tokensave, desktop, scrapling, local; [] dispatches nowhere
+  runners = ["omp"]           # any of omp, claudecode, codex, kivgraph, tokensave, desktop, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
@@ -930,217 +930,18 @@ is the only process that can perform it. Note that it dispatches over the same
 socket a client uses, so it is governed by `client_effects` too — the
 confirmation is a control on top of the floor, never instead of it.
 
-## The web allow-list
+## Payloads a shell cannot express
 
-```toml
-[web]
-domains = []              # empty: any PUBLIC host. Non-empty: only these.
-denied  = ["127.0.0.0/8", "169.254.0.0/16", "10.0.0.0/8", "*.lan", "*.local"]
-```
-
-`domains` empty means *any public host*, and that is deliberately not how
-`[desktop] applications` reads. There, empty denies everything, because any
-window on this machine can be a credential. Here it does not, because an
-arbitrary public web page is not the hazard — the hazard is the inside of this
-network, and refusing that is `denied`'s job. Inverting this list too would put
-one settings edit per site exactly where the risk is not, and the predictable
-end of that trade is somebody emptying `denied` to make the nuisance stop.
-
-A non-empty `domains` narrows to the hosts it names. A bare domain covers its
-subdomains, so `example.com` reaches `api.example.com`.
-
-`denied` always wins, takes CIDR blocks and host patterns in one list — the
-thing being refused is one idea, "the inside of this network", that is spelled
-two ways — and is seeded rather than empty. The shipped entries are loopback,
-link-local, the RFC1918 ranges and the mDNS suffixes. Deleting the block
-restores them; writing an explicitly empty list is a statement and is honored,
-and it is the one setting on this page that hands out an unrestricted HTTP
-client. A malformed entry is refused at load rather than skipped at call time:
-a denial rule nobody can parse is a denial that silently does not apply.
-
-`169.254.0.0/16` is the entry worth reading twice. `169.254.169.254` is the
-cloud metadata endpoint on every major provider, it answers over plain HTTP
-with no authentication at all, and reaching it is the single most valuable
-thing anybody can do with somebody else's fetcher.
-
-**The check runs against the resolved address, never the name.** A hostname is
-somebody else's claim about where it points, and there are as many public names
-with an `A` record to `127.0.0.1` as anybody cares to publish — `localtest.me`
-is one. Every address a name resolves to is judged, not the first, so a name
-with one public and one private record does not pass on resolver ordering.
-
-One hole is left open and named rather than papered over: the far side follows
-redirects inside its own process, so a URL that passes the gate can still end
-somewhere that would not have. What Atenea can do it does — the destination the
-server reports having landed on goes back through the same gate before the
-answer is handed over, and an answer from a refused address is a failure rather
-than a result. What it cannot do is stop the request from having been made.
-`scrapling.request` could be made airtight (its far side can be told not to
-follow redirects at all), but the two browser levels cannot, so the limit is
-documented as one that applies everywhere rather than fixed in one of three
-places — see [what is not built yet](not-built-yet.md).
-
-## Reaching the web
-
-```toml
-[orchestrator.scrapling]
-implementations = ["scrapling.fetch", "scrapling.request", "scrapling.stealth",
-                   "scrapling.extract_fetch", "scrapling.extract_request",
-                   "scrapling.extract_stealth", "scrapling.crawl",
-                   "scrapling.crawl_stealth"]
-timeout = "30s"
-
-  [orchestrator.scrapling.process]
-  command = "/absolute/path/to/scrapling-mcp"
-  instance = "shared"       # a fetcher holds no per-repository state
-  lifecycle = "on_demand"
-  ready_timeout = "30s"
-
-  [orchestrator.scrapling.spider]
-  command = "/absolute/path/to/python3.12"
-  args = ["/absolute/path/to/helper/scrapling-spider/atenea_spider.py"]
-  instance = "shared"
-  lifecycle = "on_demand"
-  ready_timeout = "30s"
-```
-
-Off unless `runners` names it. `web.fetch` causes the `external` effect, which
-no floor grants by default.
-
-Three implementations answer the one capability, because they are the same
-question at very different prices: `scrapling.request` is a plain HTTP request
-with browser impersonation, `scrapling.fetch` renders in a real browser, and
-`scrapling.stealth` defeats anti-bot interstitials. Ranking equivalent work by
-measured cost is the whole job of the funnel, so the level is not an input the
-caller picks.
-
-An interstitial has to be a failure rather than a result. A challenge page
-arrives as a successful `200` carrying a page about how much the site cares
-about security; reported as an answer, the funnel would learn that the cheapest
-level works every time and hand back challenge pages as content forever. The
-two cheaper levels report it as `unavailable`. `scrapling.stealth` does not,
-because it is the last level there is and there is nobody to fall back to.
-
-**The escalation happens across calls, not inside one.** There is one dispatch
-per commission: an `unavailable` marks that implementation unhealthy, and it is
-the next call whose funnel drops it at the health stage and reaches for the
-level above. A page behind Cloudflare therefore takes three calls to come back
-the first time, after which the funnel goes straight to stealth for as long as
-the health record stands — `health_stale_after` under `[selector]`, 24 hours as
-shipped.
-
-Health is isolated by host for these web implementations. One protected site
-does not mark `scrapling.request` down for unrelated sites, while cost samples
-remain shared because they describe the same far-side operation. The health
-subject is derived from `url` (or `start_url` for a crawl), and can be inspected
-per host in the structured status output.
-
-`timeout` is sized for that last level rather than for the average: a plain
-request is milliseconds, and a stealth render starts a browser and waits a
-challenge out on purpose. `instance` accepts only `shared`; a fetcher holds no
-per-repository state, so a server per repository would be several browsers
-idling to answer questions none of them holds anything about.
-
-The server is installed on this machine and ships in no release:
+`atenea ask --set NAME=VAL` cannot express a `record_list` input and refuses
+rather than half-parsing JSON. `--payload FILE` takes the whole payload as JSON
+instead, which is the same document an MCP client would have sent:
 
 ```sh
-pip install "scrapling[fetchers,ai]"
-scrapling install     # downloads Chromium; several hundred MB
-```
-
-## Reading named fields off a page
-
-`web.extract` takes a list of `{name, selector}` and answers with one row per
-match: `{field, index, value}`. Same gate, same three levels, same escalation
-as `web.fetch` — the implementations are `scrapling.extract_request`,
-`scrapling.extract_fetch` and `scrapling.extract_stealth`.
-
-**The answer is long, not wide.** Rows keyed by field name rather than one
-record with a column per field, and that is forced rather than chosen: output
-fields are declared statically in the catalog, so a shape that depends on the
-selectors a caller passes cannot be named in advance. The alternative is an
-untyped bag, which is a promise that says nothing.
-
-The long shape also survives ragged data, which the wide one does not. Measured
-against the Hacker News front page: 30 titles, 30 ages, and 29 scores — one job
-posting carries no score. Long format simply has one fewer row for that field;
-a wide one would have to invent a null or misalign the column.
-
-**It costs one request per field.** The far side takes one selector per call,
-so three named fields are three fetches of the same page, about 0.75s each once
-the server is warm. Two consequences worth knowing before reaching for it: the
-origin sees N requests for one page, and the fields are read seconds apart, so
-a page changing underneath yields a record that was never true all at once. For
-anything that moves, fetch once with `web.fetch` and read the whole thing.
-
-Fetching once and applying the selectors inside Atenea was the alternative and
-was refused: it needs a CSS engine in Go, which would mean `.foo` matching
-differently in `web.extract` than in `web.fetch`. A selector that means two
-things in one system is worse than a capability that costs more.
-
-There is no per-field `attribute` input. The far side renders text, html or
-markdown and does not extract attributes, so declaring one would promise what
-nothing here can honor. `format = "html"` returns matched elements whole, hrefs
-included, for a caller that needs them.
-
-**From the command line it needs `--payload`.** `--set NAME=VAL` cannot express
-a `record_list` and refuses rather than half-parsing JSON — a deliberate limit
-that `web.extract` was simply the first capability to meet. `--payload FILE`
-takes the whole payload as JSON instead, which is the same document an MCP
-client would have sent:
-
-```sh
-atenea ask web.extract --repo current --allow external --payload fields.json
+atenea ask workspace.context --repo api --repo web --payload context.json --json
 ```
 
 The two are mutually exclusive: one is the whole payload and the other is a
 field of it, and merging them would mean a rule about which wins per field.
-
-## Walking a site
-
-```toml
-[orchestrator.scrapling.spider]
-command = "~/.local/share/uv/tools/scrapling/bin/python"
-args = ["/absolute/path/to/helper/scrapling-spider/atenea_spider.py"]
-instance = "shared"
-lifecycle = "on_demand"
-ready_timeout = "30s"
-```
-
-`web.crawl` takes a `start_url` and returns the pages it reached, with the
-depth each one was found at. Its far side is **not** `scrapling-mcp`: those
-thirteen tools do not include a crawl, so the Spider API is reached through a
-helper this repository ships at
-[`helper/scrapling-spider/`](https://github.com/Tutitoos/atenea/tree/main/helper/scrapling-spider).
-
-Omit the block and the capability is simply not served. The adapter does not
-claim implementations it has no far side for — claiming them and failing at
-dispatch would have the funnel rank one, choose it, and learn at the far side
-that it was never there.
-
-Two levels rather than three: `scrapling.crawl` and `scrapling.crawl_stealth`.
-A crawl is already many requests, and a middle tier would multiply the cost
-that is the whole reason to reach for `web.fetch` when one page will do.
-Neither escalates — with two levels the cheap one moving up *is* the ladder,
-and a walk that spent its page budget being challenged has spent it.
-
-**A crawl cannot leave the host it started on**, and that is a property rather
-than an option. The destination gate resolves a hostname and judges the
-address, and it lives in Go; a crawler's frontier is discovered as it goes, and
-it is discovered in the helper. Gating it there would mean a second copy of the
-gate in Python, and a security control with two implementations has two
-behaviors. So the frontier is pinned to the host the gate already approved.
-
-**`robots.txt` is always obeyed** and is not an argument. Scrapling defaults it
-off, so the helper turns it on deliberately. A caller who could turn it back
-off per call would make "does Atenea respect robots.txt" a question with no
-answer.
-
-Bounded twice: `max_depth` is what the caller asked for and `max_pages` is the
-ceiling that makes a mistake in the first one survivable, because a depth of
-three on a site with a calendar is not a small number. Why the walk *ended*
-comes back as a discovery, because a budget that ran out and a site with no
-more links produce the same rows and only one of them means there is more here.
 
 ## Security
 
@@ -1222,7 +1023,7 @@ tool says what it can be asked.
 
 ```toml
 [[capability]]
-id = "web.fetch"
+id = "example.fetch"
 subject_from = "url"        # which input says what this call is about
 subject_kind = "url_host"   # how to read it
 ```
@@ -1230,11 +1031,11 @@ subject_kind = "url_host"   # how to read it
 Both keys or neither, and most capabilities declare neither. Health and cost
 are recorded per repository, which is the only dimension a code capability
 has — and a capability that ignores the repository entirely has nowhere to hang
-them. `web.fetch` reaches the open web and never looks at a checkout, so before
-this existed every site landed in one bucket.
+them. A capability that reaches the open web and never looks at a checkout used to put
+every site in one bucket.
 
 What that cost was measured, not imagined: one page behind Cloudflare marked
-the cheapest implementation of `web.fetch` unhealthy, and the next fetch of an
+the cheapest implementation of a page-fetch capability unhealthy, and the next fetch of an
 unrelated site skipped that implementation too — with a drop reason still
 quoting the first site's url. One protected page paid for a browser on every
 page after it, for as long as `health_stale_after` stood.
