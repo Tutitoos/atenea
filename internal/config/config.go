@@ -1636,6 +1636,7 @@ func parse(raw []byte, source string) (Config, error) {
 			gone = append(gone, msg)
 		}
 	}
+	gone = append(gone, retiredCatalog(decoded)...)
 	if len(gone) > 0 {
 		sort.Strings(gone)
 		return Config{}, contract.Fail(contract.FailureInvalidInput,
@@ -1712,9 +1713,6 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	for _, rule := range decoded.Selector.Rules {
-		if retiredCapabilities[rule.Capability] {
-			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source, retiredCapability(rule.Capability))
-		}
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
 			Capability: rule.Capability,
 			Repository: rule.Repository,
@@ -1739,9 +1737,6 @@ func parse(raw []byte, source string) (Config, error) {
 		cfg.Selector.HealthStaleAfter = staleAfter
 	}
 	for _, raw := range decoded.Capabilities {
-		if retiredCapabilities[raw.ID] {
-			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source, retiredCapability(raw.ID))
-		}
 		capability, err := raw.build(source)
 		if err != nil {
 			return Config{}, err
@@ -1755,13 +1750,6 @@ func parse(raw []byte, source string) (Config, error) {
 		}
 		if impl.Provider == "serena" || strings.HasPrefix(impl.ID, "serena.") {
 			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: Serena is retired; remove implementation %s", source, impl.ID)
-		}
-		if impl.Provider == "kivgraph" || strings.HasPrefix(impl.ID, "kivgraph.") {
-			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source,
-				retired("[[implementation]] "+impl.ID, "the Kivgraph provider", "delete the block"))
-		}
-		if retiredCapabilities[impl.Capability] {
-			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s", source, retiredCapability(impl.Capability))
 		}
 		cfg.Implementations = append(cfg.Implementations, impl)
 	}
@@ -1923,9 +1911,58 @@ var retiredCapabilities = map[string]bool{
 	"code.impact": true,
 }
 
-func retiredCapability(id string) string {
-	return retired(fmt.Sprintf("capability %q", id), "the Kivgraph provider, the only implementation it had",
-		"delete its [[capability]] block, every [[implementation]] that serves it and every [[selector.rule]] that names it")
+// retiredCatalog names, in one message per kind, everything a settings file
+// still declares that left the shipped catalog with the Kivgraph provider: the
+// runner name, the kivgraph.* implementation blocks and the capabilities only it
+// served, wherever the file names them. It reads the decoded file rather than
+// the built catalog so a file written for the old defaults is told about all of
+// it at once instead of one refusal per edit.
+func retiredCatalog(decoded file) []string {
+	var out []string
+	if decoded.Orchestrator.Runners != nil {
+		for _, name := range *decoded.Orchestrator.Runners {
+			if msg, gone := retiredRunners[name]; gone {
+				out = append(out, msg)
+			}
+		}
+	}
+	var impls []string
+	named := map[string]bool{}
+	for _, impl := range decoded.Implementations {
+		if impl.Provider == "kivgraph" || strings.HasPrefix(impl.ID, "kivgraph.") {
+			impls = append(impls, impl.ID)
+		}
+		if retiredCapabilities[impl.Capability] {
+			named[impl.Capability] = true
+		}
+	}
+	for _, capability := range decoded.Capabilities {
+		if retiredCapabilities[capability.ID] {
+			named[capability.ID] = true
+		}
+	}
+	for _, rule := range decoded.Selector.Rules {
+		if retiredCapabilities[rule.Capability] {
+			named[rule.Capability] = true
+		}
+	}
+	if len(impls) > 0 {
+		out = append(out, retired("[[implementation]] "+strings.Join(impls, ", "), "the Kivgraph provider", "delete the blocks"))
+	}
+	if len(named) > 0 {
+		ids := slices.Sorted(maps.Keys(named))
+		section := fmt.Sprintf("capability %q", ids[0])
+		if len(ids) > 1 {
+			quoted := make([]string, len(ids))
+			for i, id := range ids {
+				quoted[i] = fmt.Sprintf("%q", id)
+			}
+			section = "capabilities " + strings.Join(quoted, ", ")
+		}
+		out = append(out, retired(section, "the Kivgraph provider, the only implementation they had",
+			"delete their [[capability]] blocks, every [[implementation]] that serves them and every [[selector.rule]] that names them"))
+	}
+	return out
 }
 
 // retiredKeyMessage returns the retirement message for an undecoded settings
@@ -2067,10 +2104,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			case RunnerOMP, RunnerClaudeCode, RunnerCodex,
 				RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerLocal:
 			default:
-				if msg, gone := retiredRunners[name]; gone {
-					return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-						"settings %s: orchestrator.runners has %q: %s", source, name, msg)
-				}
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
 					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s",
 					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex,

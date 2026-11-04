@@ -104,6 +104,54 @@ func TestAFileWithSeveralRemovedKivgraphSettingsIsToldAboutAll(t *testing.T) {
 	}
 }
 
+// A file written for the old shipped catalog names the runner, the table, the
+// implementation blocks and the capabilities together, and is told about all of
+// them in one refusal instead of one per edit.
+func TestAFileWrittenForTheOldCatalogIsToldAboutEverythingAtOnce(t *testing.T) {
+	body := minimal + `
+[orchestrator]
+runners = ["omp", "kivgraph"]
+
+  [orchestrator.kivgraph]
+  endpoint = "http://127.0.0.1:7788/mcp"
+
+[[capability]]
+id = "symbol.definition"
+version = "1.0.0"
+summary = "x"
+effects = ["read"]
+
+[[implementation]]
+id = "kivgraph.definition"
+provider = "kivgraph"
+capability = "symbol.definition"
+
+[[implementation]]
+id = "kivgraph.references"
+provider = "kivgraph"
+capability = "symbol.references"
+
+[[selector.rule]]
+capability = "symbol.get"
+prefer = "kivgraph.get"
+`
+	_, err := config.Load(write(t, body))
+	if err == nil {
+		t.Fatal("file accepted")
+	}
+	for _, want := range []string{
+		`runner "kivgraph" was removed`,
+		"[orchestrator.kivgraph] was removed",
+		"[[implementation]] kivgraph.definition, kivgraph.references was removed",
+		`capabilities "symbol.definition", "symbol.get", "symbol.references" was removed`,
+		"migration-5.md",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
+	}
+}
+
 // A 4.x file is told, before anything else, which of the retired settings to
 // delete, and the sentence now names the Kivgraph ones too.
 func TestTheContractRemedyNamesTheKivgraphSettings(t *testing.T) {
