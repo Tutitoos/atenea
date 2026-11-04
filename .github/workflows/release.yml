@@ -32,10 +32,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.0
-
       - name: Require current real Codex certification
         run: |
           set -eu
@@ -47,13 +43,6 @@ jobs:
           git merge-base --is-ancestor "$certified_commit" "$GITHUB_SHA"
           git diff --exit-code "$certified_commit" "$GITHUB_SHA" -- certifications/codex-certifier.pub
           git diff --exit-code "$certified_commit" "$GITHUB_SHA" -- . ":(exclude)$certificate" ":(exclude)certifications/codex-certifier.pub"
-
-      - name: Verify embedded dashboard
-        run: |
-          bun ci --cwd dashboard
-          bun run --cwd dashboard check
-          bun run --cwd dashboard build
-          git diff --exit-code -- internal/dashboard/web/dist
 
       - name: The tag must be the version the binary reports
         run: |

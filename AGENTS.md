@@ -17,7 +17,6 @@ These instructions apply to the entire repository.
 ## Validation
 
 - Go changes: focused tests, `go vet ./...`, `$(go env GOPATH)/bin/golangci-lint run`, and the race suite when required by scope or publication gates.
-- Dashboard changes: `bun run --cwd dashboard check` and `bun run --cwd dashboard build`.
 - Documentation changes: build Hugo.
 - Skill changes: run the skill validator and its behavioral tests.
 - Preserve measured, estimated, partial, unknown, local, provider-real, and client-real evidence distinctions.

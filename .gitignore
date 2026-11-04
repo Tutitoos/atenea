@@ -2,11 +2,6 @@
 # cmd/atenea package directory.
 /bin/
 /dist/
-/dashboard/node_modules/
-/dashboard/build/
-/dashboard/.react-router/
-/dashboard/test-results/
-/dashboard/playwright-report/
 /tmp/
 /atenea
 /coverage-summary.txt
