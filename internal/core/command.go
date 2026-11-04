@@ -9,10 +9,8 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/agentdevice"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
-	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
-	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -26,11 +24,6 @@ type CommandRequest struct {
 	Implementation string `json:"implementation,omitempty"`
 	Repository     string `json:"repository,omitempty"`
 	ID             string `json:"id,omitempty"`
-	Type           string `json:"type,omitempty"`
-	Verdict        string `json:"verdict,omitempty"`
-	Open           bool   `json:"open,omitempty"`
-	Since          string `json:"since,omitempty"`
-	Limit          int    `json:"limit,omitempty"`
 	All            bool   `json:"all,omitempty"`
 	Client         string `json:"client,omitempty"`
 	Profile        string `json:"profile,omitempty"`
@@ -48,8 +41,8 @@ type CommandResponse struct {
 const commandTool = "atenea.command"
 
 var readOnlyCommands = []string{
-	"help", "status", "metrics", "traces", "catalog", "doctor",
-	"detect", "incidents", "floor", "config", "intent", "device.sessions", "device.help", "maintenance",
+	"help", "status", "metrics", "catalog", "doctor",
+	"detect", "incidents", "config", "intent", "device.sessions", "device.help", "maintenance",
 }
 
 // Command answers the small read-only surface intended for chat shortcuts.
@@ -74,10 +67,6 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 	if format != "markdown" && format != "json" && format != "text" {
 		return CommandResponse{}, contract.Fail(contract.FailureInvalidInput,
 			"unsupported command format %q; use markdown, json or text", req.Format)
-	}
-	if req.Limit < 0 {
-		return CommandResponse{}, contract.Fail(contract.FailureInvalidInput,
-			"limit must not be negative")
 	}
 
 	response := CommandResponse{Command: name, Status: "ok"}
@@ -143,34 +132,6 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 		}
 		response.Summary = fmt.Sprintf("%d measurement row(s)", len(filtered))
 		response.Data = filtered
-	case "traces":
-		store, err := trace.Open(ctx, trace.DefaultPath())
-		if err != nil {
-			return CommandResponse{}, err
-		}
-		defer func() { _ = store.Close() }()
-		filter := trace.Filter{ID: req.ID, TypeName: req.Type, OpenOnly: req.Open, Limit: req.Limit}
-		if req.Verdict != "" {
-			verdict, err := contract.ParseVerdict(req.Verdict)
-			if err != nil {
-				return CommandResponse{}, err
-			}
-			filter.Verdict = verdict
-		}
-		if req.Since != "" {
-			window, err := time.ParseDuration(req.Since)
-			if err != nil || window <= 0 {
-				return CommandResponse{}, contract.Fail(contract.FailureInvalidInput,
-					"since must be a positive duration, got %q", req.Since)
-			}
-			filter.Since = time.Now().Add(-window)
-		}
-		rows, err := store.List(ctx, filter)
-		if err != nil {
-			return CommandResponse{}, err
-		}
-		response.Summary = fmt.Sprintf("%d trace row(s)", len(rows))
-		response.Data = rows
 	case "catalog":
 		response.Summary = "Atenea capability catalog"
 		response.Data = map[string]any{
@@ -194,17 +155,6 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 		}
 		response.Summary = fmt.Sprintf("%d incident(s)", len(book.Incidents))
 		response.Data = book
-	case "floor":
-		store, err := floor.Open("")
-		if err != nil {
-			return CommandResponse{}, err
-		}
-		rows, err := store.List()
-		if err != nil {
-			return CommandResponse{}, err
-		}
-		response.Summary = fmt.Sprintf("%d floor measurement(s)", len(rows))
-		response.Data = rows
 	case "config":
 		settings := c.Settings()
 		effects := make([]string, 0, len(settings.Orchestrator.ClientEffects))
@@ -359,22 +309,6 @@ func commandMarkdown(response CommandResponse) string {
 		}
 		encoded, _ := json.MarshalIndent(data, "", "  ")
 		fmt.Fprintf(&b, "```json\n%s\n```\n", encoded)
-	case []trace.Row:
-		b.WriteString("| Started | Type | Verdict | Status | Objective |\n")
-		b.WriteString("|---|---|---|---|---|\n")
-		for _, row := range data {
-			state := row.Verdict.String()
-			if row.Open() {
-				state = "open"
-			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", row.StartedAt.Local().Format("2006-01-02 15:04:05"), md(row.TypeName), md(row.Verdict.String()), state, md(row.Objective))
-		}
-	case []floor.Measurement:
-		b.WriteString("| Repository | Agent | Model | USD | Prefix tokens |\n")
-		b.WriteString("|---|---|---|---:|---:|\n")
-		for _, row := range data {
-			fmt.Fprintf(&b, "| %s | %s | %s | %.4f | %d |\n", md(row.Repository), md(row.Agent), md(row.Model), row.USD, row.Prefix())
-		}
 	case notebook.Read:
 		if len(data.Incidents) == 0 {
 			b.WriteString("No hay incidencias nuevas.\n")

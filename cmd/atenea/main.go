@@ -77,11 +77,6 @@ Commands:
                          with the system; 'uninstall' undoes it, 'status'
                          says where it stands
   incidents              Read the crash notebook; add 'clear' to mark it read
-  agent TYPE [FILE]      Run one declared agent type as a process, once;
-                         --objective/--criterion set the task; --confirm
-                         approves write or external effects
-  traces                 What agents ran and how they ended; filter with
-                         --type, --verdict, --open, --since, --id, --limit
   stats                  Colored activity tables; --today, --week, --month, --watch
   metrics                What the base measured, per capability and provider;
                          'clear' empties it, narrowed by --capability,
@@ -93,10 +88,6 @@ Commands:
   backup promote TARGET Promote the retained pre-restore directory
   backup discard TARGET --confirm
                          Permanently remove the retained pre-restore directory
-  floor                  What starting one turn already costs, measured per
-                         repository, per agent and per model; 'measure
-                         --repo ID --agent TYPE' spends real money to find
-                         out, never invented
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
   config show            Print the settings that apply here, and from where
@@ -165,8 +156,8 @@ any recorded binary, schema, profile, presentation, commit or machine drift.
 	"command": `Usage: atenea command NAME [flags]
 
 Run a closed, read-only command for chat adapters. Markdown is the default.
-Names: help, status, metrics, traces, catalog, doctor, detect, incidents,
-floor, config, intent.
+Names: help, status, metrics, catalog, doctor, detect, incidents,
+config, intent.
 
 Flags:
   --markdown       print Markdown (default)
@@ -386,48 +377,6 @@ Read the crash notebook. With no arguments, shows what has not been read
 yet. --all shows the whole notebook, read or not. 'clear' marks the shown
 entries read.
 `,
-	"agent": `Usage: atenea agent TYPE [flags] [files...]
-
-Run one declared [[agent]] type as a real process, once. The type is
-resolved by name against the settings file; nothing ranks agents and nothing
-falls back to another one.
-
-Flags come before file names -- Go's parser stops at the first word that is
-not a flag, so a flag after a file name would be read as another file.
-
-Flags:
-  --objective TEXT      what the agent is being asked to do
-  --criterion TEXT      what done looks like
-  --repository ID       repository to serve at the repository context level
-  --traces PATH         trace database (default: the one atenea traces reads)
-  --quiet               print the verdict line only
-  --review TYPE         audit the answer with this agent type
-  --confirm             approve write or external effects; required, and
-                        asked again on the terminal, for a type that
-                        declares either -- without it the run is refused
-
-An agent that exits zero without writing a report has not answered: it is
-recorded as incomplete, not as success.
-
---review hands the answer to a second agent. A refusal relaunches the work
-once, carrying the rejected answer and the reason it was rejected; a second
-refusal ends it. Each attempt and each review is its own trace row.
-`,
-	"traces": `Usage: atenea traces [flags]
-
-What agents ran and how they ended. A row with no ending is a run nobody saw
-finish; the next atenea closes it as incomplete once it has checked that the
-process which opened it is really gone.
-
-Flags:
-  --type NAME           narrow to one agent type
-  --verdict V           ok, failed, incomplete or canceled
-  --open                only runs still waiting for an ending
-  --id ID               one run
-  --since DURATION      only runs started within it, e.g. 2h
-  --limit N             how many rows at most
-  --traces PATH         trace database to read
-`,
 	"metrics": `Usage: atenea metrics [clear] [flags]
 
 What the base measured, per capability and provider. 'clear' empties it
@@ -449,85 +398,6 @@ an in-place restore. Without --replace, restore requires a new target. With
 --replace, the current target is retained as TARGET.atenea-previous. Promote
 rolls that state back and retains the current target as TARGET.atenea-current.
 Discard is destructive and requires --confirm.
-`,
-	"floor": `Usage: atenea floor
-       atenea floor measure --repo ID --agent TYPE [--dry-run] [--confirm]
-
-What starting a single turn already costs on a repository, before any file
-is read: the tokens the CLI spends writing its system prompt and tool
-schemas into cache, priced in dollars. It is never invented -- there is no
-default and no formula here, only what 'measure' found by spending one real
-turn to find out.
-
-A floor is per repository, per agent and per model, never per repository
-and model alone: --agent names which declared agent type's tool surface to
-measure, any name this settings file's own [[agent]] blocks declare -- an
-undeclared name is refused, listing what is declared, rather than silently
-falling back to one of two hardcoded choices the way it used to. What
-actually drives the cost is the tool surface that type starts a turn with,
-not which model answers it. Measured 2026-08-15, same repository and same
-model: explore (Atenea's own tools plus Read and Glob) costs $0.27, 26,603
-prefix tokens; plan (no tools at all) costs $0.06, 4,991 -- 81% of the
-$0.27 floor is the tool definitions written into cache before the model
-reads a single file. --agent was called --model until 2026-08-14, which is
-exactly why the two measurements used to collide: the flag never selected
-a model, only ever the agent.
-
-'measure' prices prefix tokens, not cache-write tokens: probed cold and
-warm an hour apart, the same surface wrote 26,603 and read 0 the first
-time, then wrote 3,325 and read 23,278 the second -- two splits of the
-same 26,603 total, because the split moves with cache state and the total
-does not. A probe that lands warm has no receipt of its own to price by,
-so 'measure' prices its tokens at the rate of the most recent COLD reading
-on the same model, from any repository or agent. Nothing has ever been
-measured cold on that model -- refused rather than guessed at: wait for
-the warm cache entry to age out (roughly an hour with no probe of that
-repository, agent and model; every probe refreshes it) and measure again.
-
-filereader, reviewer and plan-check spend nothing to measure: they are
-deterministic Go on the far side of the spawn and call no model at all, so
-'measure' stores a zero floor for them instead of pricing a turn that
-agent type never runs.
-
-With no subcommand, floor lists every stored measurement: repository,
-agent, model, the warm and cold prices, prefix tokens, the block that
-arrives with the first tool call, the rescuable share, CLI version and how
-long ago it was taken. Warm is what a step pays and cold is what
-establishing the cache costs on whichever run of the hour is first: the
-prefix and the first-call block are written once per machine per cache
-lifetime and read at a twentieth of the price by every step after, so a
-plan is refused against the warm figure wherever a row carries one. A dash
-means no probe has made a tool call on that row yet, and the cold price is
-charged instead. The rescuable share is not a second measurement either --
-it is derived from the same row: the smallest share past which half of it,
-the read allowance, outweighs the turn's own first assistant event. A step
-funded below it clears the floor and still dies with nothing written,
-because the model is nudged to answer before it has read anything of its
-own. A row is marked stale when its CLI version does
-not match the CLI installed on this machine right now -- the system prompt
-and tool schemas ship WITH the CLI, so a new CLI is a new floor even
-against the same repository, agent and model. A row measured before
---agent existed prints with no agent and must be re-measured -- see
-'floor measure' -- rather than be guessed at.
-
-'measure' spends real money on every agent type except the three named
-above: one turn, priced at roughly what it finds. It prints what the last
-probe of the same repository, agent and model was billed if anything did,
-before it spends anything. It never tops a stored figure up -- a
-re-measurement replaces the row outright.
-
-Neither flag has a default, because the only thing a default could do here
-is spend a turn on something nobody named. 'atenea floor' with no
-subcommand lists every type already measured, and costs nothing.
-
-Flags (measure):
-  --repo ID     repository id or path to measure (required)
-  --agent TYPE  which declared agent type's tool surface to measure
-                (required -- it spends a turn, so there is no default)
-  --dry-run     resolve the repository, the agent type and the model, print
-                what the turn would be billed, and spend nothing
-  --confirm     ask at the terminal before spending it, quoting the estimate;
-                refused outright when stdin is not a terminal
 `,
 	"config": `Usage: atenea config init [--force]
        atenea config path
@@ -811,29 +681,14 @@ func run(args []string, out io.Writer) error {
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
 		return cmdIncidents(settingsPath, commandArgs, out)
-	case "agent":
-		return cmdAgent(settingsPath, commandArgs, out)
-	case "agent-exec":
-		// The far side of a spawn, not something a person types. Atenea
-		// names it in the shipped agent declaration and starts it with an
-		// assignment on stdin.
-		if len(commandArgs) != 1 {
-			return contract.Fail(contract.FailureInvalidInput,
-				"agent-exec takes one built-in agent name")
-		}
-		return cmdAgentRun(commandArgs[0], os.Stdin, out)
 	case headroomReentryCommand:
 		return cmdHeadroomReentry(commandArgs)
-	case "traces":
-		return cmdTraces(commandArgs, out)
 	case "stats":
 		return cmdStats(settingsPath, commandArgs, out)
 	case "metrics":
 		return cmdMetrics(settingsPath, commandArgs, out)
 	case "backup":
 		return cmdBackup(settingsPath, commandArgs, out)
-	case "floor":
-		return cmdFloor(settingsPath, commandArgs, out)
 	case "config":
 		return cmdConfig(settingsPath, commandArgs, out)
 	case "wrap":

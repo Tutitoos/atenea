@@ -215,7 +215,7 @@ func TestAteneaPromptsExposeTheReadOnlyCommandSurface(t *testing.T) {
 	c.handshake("claude-code")
 	list := result(t, c.call("prompts/list", nil), "prompts/list")
 	prompts, _ := list["prompts"].([]any)
-	if len(prompts) != 11 {
+	if len(prompts) != 9 {
 		t.Fatalf("prompts = %d, want all read-only commands: %v", len(prompts), list)
 	}
 	get := result(t, c.call("prompts/get", map[string]any{

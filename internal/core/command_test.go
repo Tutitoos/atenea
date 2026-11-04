@@ -5,13 +5,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
-	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
-	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -66,12 +63,11 @@ func TestCommandHelpSupportsAllOutputFormats(t *testing.T) {
 	}
 }
 
-func TestCommandRejectsUnknownFormatAndNegativeLimit(t *testing.T) {
+func TestCommandRejectsUnknownNameAndFormat(t *testing.T) {
 	var service *Core
 	for _, request := range []CommandRequest{
 		{Name: "unknown"},
 		{Name: "help", Format: "yaml"},
-		{Name: "help", Limit: -1},
 	} {
 		if _, err := service.Command(context.Background(), request); err == nil {
 			t.Fatalf("request %#v was accepted", request)
@@ -88,7 +84,7 @@ func TestCommandReadsCoreBackedViews(t *testing.T) {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	for _, name := range []string{"status", "metrics", "traces", "catalog", "doctor", "incidents", "floor", "config"} {
+	for _, name := range []string{"status", "metrics", "catalog", "doctor", "incidents", "config"} {
 		response, err := service.Command(context.Background(), CommandRequest{
 			Name: name, Client: "claude", Profile: "claude",
 		})
@@ -103,8 +99,10 @@ func TestCommandReadsCoreBackedViews(t *testing.T) {
 
 func TestConfigDoctorAndStatusExposeDesktopActionInheritance(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	cfg := config.Config{Desktop: config.Desktop{Applications: []string{"com.apple.finder"},
-		ActionApplications: []string{"com.apple.iphonesimulator"}, ActionApplicationsInherited: false}}
+	cfg := config.Config{Desktop: config.Desktop{
+		Applications:       []string{"com.apple.finder"},
+		ActionApplications: []string{"com.apple.iphonesimulator"}, ActionApplicationsInherited: false,
+	}}
 	service, err := New(cfg, Command)
 	if err != nil {
 		t.Fatal(err)
@@ -157,8 +155,6 @@ func TestCommandAliasesAndSafeErrors(t *testing.T) {
 	}
 
 	for _, request := range []CommandRequest{
-		{Name: "traces", Since: "not-a-duration"},
-		{Name: "traces", Verdict: "passed"},
 		{Name: "intent"},
 		{Name: "intent", Repository: "missing"},
 	} {
@@ -178,9 +174,6 @@ func TestCommandMarkdownCoversReadOnlyDataShapes(t *testing.T) {
 		{name: "status", data: Status{}, want: "**Luz:**"},
 		{name: "status permissions", data: Status{Orchestrator: OrchestratorStatus{ClientFloor: []string{"read"}}}, want: "Permisos de cliente"},
 		{name: "empty metrics", data: []metrics.Row{}, want: "No hay mediciones"},
-		{name: "traces", data: []trace.Row{{TypeName: "worker", Objective: "goal"}}, want: "| Started |"},
-		{name: "closed trace", data: []trace.Row{{StartedAt: time.Now(), EndedAt: time.Now(), TypeName: "worker", Objective: "goal"}}, want: "| goal |"},
-		{name: "floor", data: []floor.Measurement{{}}, want: "| Repository |"},
 		{name: "empty incidents", data: notebook.Read{}, want: "No hay incidencias"},
 		{name: "commands map", data: map[string]any{"commands": []string{"status"}}, want: "/atenea status"},
 		{name: "capabilities map", data: map[string]any{"capabilities": []contract.Capability{}}, want: "## Atenea"},
@@ -207,14 +200,14 @@ func TestPromptsListAndGetUseStrictTypedArguments(t *testing.T) {
 		t.Fatalf("unexpected prompts list: %#v", listed)
 	}
 
-	got, getErr := conv.promptsGet(json.RawMessage(`{"name":"traces","arguments":{"id":"run-1","type":"worker","verdict":"ok","open":"true","since":"24h","limit":"4"}}`))
+	got, getErr := conv.promptsGet(json.RawMessage(`{"name":"metrics","arguments":{"id":"run-1","capability":"code.search"}}`))
 	if getErr != nil {
 		t.Fatalf("prompts/get: %v", getErr)
 	}
 	payload := got.(map[string]any)
 	messages := payload["messages"].([]any)
 	content := messages[0].(map[string]any)["content"].(map[string]any)
-	if !strings.Contains(content["text"].(string), `"name":"traces"`) {
+	if !strings.Contains(content["text"].(string), `"name":"metrics"`) {
 		t.Fatalf("prompt did not encode the command request: %#v", got)
 	}
 
@@ -223,8 +216,7 @@ func TestPromptsListAndGetUseStrictTypedArguments(t *testing.T) {
 		`{"name":"missing"}`,
 		`{"name":"status","arguments":{"unknown":"x"}}`,
 		`{"name":"incidents","arguments":{"all":"sometimes"}}`,
-		`{"name":"traces","arguments":{"limit":"many"}}`,
-		`{"name":"traces","arguments":{"open":"sometimes"}}`,
+		`{"name":"incidents","arguments":{"limit":"4"}}`,
 		`{"name":"status"} {}`,
 	} {
 		if _, err := conv.promptsGet(json.RawMessage(raw)); err == nil {

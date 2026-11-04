@@ -34,12 +34,7 @@ func cmdCommand(settingsPath string, args []string, out io.Writer) error {
 	implementation := flags.String("implementation", "", "filter metrics by implementation")
 	repository := flags.String("repository", "", "filter metrics by repository")
 	flags.StringVar(repository, "repo", "", "alias for --repository")
-	id := flags.String("id", "", "filter traces by execution id")
-	typeName := flags.String("type", "", "filter traces by type")
-	verdict := flags.String("verdict", "", "filter traces by verdict")
-	open := flags.Bool("open", false, "show only open traces")
-	since := flags.String("since", "", "trace window, for example 24h")
-	limit := flags.Int("limit", 0, "maximum trace rows")
+	id := flags.String("id", "", "execution id for maintenance")
 	all := flags.Bool("all", false, "include all incidents")
 	client := flags.String("client", "", "client for doctor")
 	profile := flags.String("profile", "", "desktop profile for doctor")
@@ -82,8 +77,7 @@ func cmdCommand(settingsPath string, args []string, out io.Writer) error {
 	response, err := atenea.Command(context.Background(), core.CommandRequest{
 		Name: name, Format: format, Capability: *capability,
 		Implementation: *implementation, Repository: *repository,
-		ID: *id, Type: *typeName, Verdict: *verdict, Open: *open,
-		Since: *since, Limit: *limit, All: *all, Client: *client, Profile: *profile,
+		ID: *id, All: *all, Client: *client, Profile: *profile,
 	})
 	if err != nil {
 		return err

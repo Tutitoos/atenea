@@ -8,13 +8,11 @@ import (
 )
 
 // internalCommands are dispatched but deliberately absent from the operator's
-// listing: agent-exec is how a spawned agent re-enters this binary, and
-// help/-h/--help are the listing itself.
+// listing: help/-h/--help are the listing itself.
 var internalCommands = map[string]bool{
-	"agent-exec": true,
-	"help":       true,
-	"-h":         true,
-	"--help":     true,
+	"help":   true,
+	"-h":     true,
+	"--help": true,
 }
 
 // dispatched reads the command names out of run()'s own switch.
