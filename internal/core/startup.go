@@ -18,7 +18,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/platform"
-	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -218,7 +217,7 @@ func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, r
 			Name:  jobRetention,
 			Every: cfg.Retention.Every,
 			Run: watch.wrap(jobRetention, func(ctx context.Context) error {
-				return pruneHistory(ctx, cfg, receipts)
+				return pruneHistory(cfg, receipts)
 			}),
 		})
 	}
@@ -269,64 +268,27 @@ func fileRecovery(book *notebook.Notebook, found Recovery) {
 
 // pruneHistory removes the record of runs older than the retention window.
 //
-// Two stores, one pass, and the trace database owns the mark: it is the one of
-// the two that can read and write "when did this last run" inside the same
-// transaction as the delete, which is what stops two Ateneas starting together
-// from both deciding they are the one to do it. The receipts follow the answer
-// rather than keeping a second mark that could disagree with the first.
-//
-// The trace store is opened here rather than held by the core because nothing
-// else in the core has one: traces are opened per command, by whoever is about
-// to write to them. A daily pass can afford to open a file.
-func pruneHistory(ctx context.Context, cfg config.Config, receipts *checkpoint.Store) error {
-	traces, err := trace.Open(ctx, "")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = traces.Close() }()
-
-	now := time.Now()
-	rows, err := traces.PruneIfDue(ctx, now, cfg.Retention.Keep, cfg.Retention.Every)
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		// Not due, or nothing old enough. Either way the receipts are not
-		// walked: reading every one of them to find nothing is the cost this
-		// mark exists to avoid paying on every beat.
-		return nil
-	}
-	_, err = receipts.Prune(now.Add(-cfg.Retention.Keep))
+// The receipts store owns the mark that says when this last ran, so a pass
+// that is not due costs one small file read and the receipts are not walked.
+func pruneHistory(cfg config.Config, receipts *checkpoint.Store) error {
+	_, err := receipts.PruneIfDue(time.Now(), cfg.Retention.Keep, cfg.Retention.Every)
 	return err
 }
 
-// quiesce folds both write-ahead logs into their database files, so the copy
-// about to be taken is a copy of a settled tree.
+// quiesce folds the metrics write-ahead log into its database file, so the
+// copy about to be taken is a copy of a settled tree.
 //
-// The two databases in the state root are the only files in it that are not
-// finished the moment they are written: DuckDB and SQLite both keep a log
-// beside the file, and a directory copier reaches the two halves at two
-// different instants. What that produced was a snapshot that opens and is
-// missing whatever had not been folded in -- crash-consistent, not consistent,
-// and silent about the difference.
-//
-// The trace store is opened here rather than held, for the same reason
-// pruneHistory opens one: nothing else in the core has a trace store, and a
-// rhythm that fires every six hours can afford to open a file.
+// DuckDB keeps a log beside the file, and a directory copier reaches the two
+// halves at two different instants. What that produced was a snapshot that
+// opens and is missing whatever had not been folded in -- crash-consistent,
+// not consistent, and silent about the difference.
 //
 // A failure stops the copy. A snapshot of a tree nobody could settle is
 // exactly the snapshot this exists to avoid, and taking it anyway would put
 // the failure in a place nobody reads while the copy claims to be fine.
 func quiesce(ctx context.Context, store *metrics.Store) error {
-	if store != nil {
-		if err := store.Checkpoint(ctx); err != nil {
-			return err
-		}
+	if store == nil {
+		return nil
 	}
-	traces, err := trace.Open(ctx, "")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = traces.Close() }()
-	return traces.Checkpoint(ctx)
+	return store.Checkpoint(ctx)
 }
