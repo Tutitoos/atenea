@@ -18,25 +18,8 @@ required=(
 	"code.search|claude.search"
 	"code.search|codex.search"
 	"code.context|tokensave.context"
-	"code.impact|kivgraph.impact"
-	"symbol.definition|kivgraph.definition"
-	"symbol.references|kivgraph.references"
-	"symbol.implementations|kivgraph.implementations"
-	"symbol.overview|kivgraph.overview"
 	"symbol.overview|tokensave.overview"
 	"symbol.calls|tokensave.calls"
-	"symbol.intent_search|kivgraph.intent_search"
-	"symbol.dependencies|kivgraph.dependencies"
-	"symbol.consumers|kivgraph.cross_repo_consumers"
-	"symbol.get|kivgraph.get"
-	"symbol.search|kivgraph.search"
-	"symbol.source|kivgraph.source"
-	"symbol.impact|kivgraph.symbol_impact"
-	"graph.repositories|kivgraph.repositories"
-	"graph.ensure_fresh|kivgraph.ensure_fresh"
-	"code.context|kivgraph.context"
-	"graph.status|kivgraph.status"
-	"repository.index|kivgraph.index"
 	# The desktop edges. Checked here for the reason the gate exists at all: an
 	# implementation registered against the wrong capability is the one mistake
 	# a catalog cannot notice on its own, and on this provider it would mean a
@@ -86,13 +69,21 @@ if [[ "$(wc -l <<<"$edges" | tr -d ' ')" -ne "${#required[@]}" ]]; then
 	exit 1
 fi
 
-# Retired-provider guard: the neutral contracts remain, but have no edges.
-for capability in symbol.unresolved; do
-	if grep -q "^$capability|" <<<"$edges"; then
-		echo "$capability unexpectedly has a provider edge" >&2
+# Removed-provider guard: Kivgraph and the capabilities only it served left the
+# shipped catalog together (#208), and Serena before it.
+for capability in symbol.search symbol.intent_search symbol.definition symbol.references \
+	symbol.implementations symbol.dependencies symbol.consumers symbol.get symbol.unresolved \
+	symbol.source symbol.impact graph.status graph.repositories graph.ensure_fresh \
+	repository.index code.impact; do
+	if grep -q "^capability $capability " <<<"$catalog"; then
+		echo "$capability reappeared in the catalog although no provider serves it" >&2
 		exit 1
 	fi
 done
+if grep -qi kivgraph <<<"$catalog"; then
+	echo "removed Kivgraph provider reappeared in the catalog" >&2
+	exit 1
+fi
 if grep -qi serena <<<"$catalog"; then
 	echo "retired Serena provider reappeared in the catalog" >&2
 	exit 1
