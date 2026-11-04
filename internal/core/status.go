@@ -759,7 +759,7 @@ func (c *Core) Status() Status {
 		status.Light = worst(status.Light, p.Light)
 	}
 	// Deliberately not folded into status.Light. A raw stdio backend is spawned
-	// on demand, so "failed" here can mean nobody has started chrome-devtools
+	// on demand, so "failed" here can mean nobody has started the backend
 	// today, and turning the whole screen amber for that would teach an
 	// operator to ignore the top line. The capability path already moves the
 	// light where a failure actually costs a capability, above.

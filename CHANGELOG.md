@@ -37,6 +37,11 @@ The `claude-mem` MCP server is no longer a supported or declared backend, so
 `tools/mcp-agree` and `scripts/v1-policy-check.sh` stop expecting it. Dated
 audit evidence that measured it is kept and marked as such (#207).
 
+The `chrome-devtools`, `context7` and diagram MCP servers are no longer supported
+or declared backends: `tools/mcp-agree` stops expecting them, `scripts/v1-policy-check.sh`
+no longer requires Context7 in the final audit, and tests use neutral server ids.
+Dated audit evidence that measured them is kept and marked as such (#209).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

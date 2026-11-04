@@ -85,7 +85,7 @@ func TestReadsBothClients(t *testing.T) {
 	  "dart":   {"type": "stdio", "command": "dart"}
 	}}`)
 	write(t, root, ".claude/settings.local.json", `{"enabledMcpjsonServers": ["fixture"]}`)
-	write(t, root, "opencode.json", `{"mcp": {"context7": {"type": "local", "enabled": false}}}`)
+	write(t, root, "opencode.json", `{"mcp": {"docsrv": {"type": "local", "enabled": false}}}`)
 	write(t, root, ".claude/skills/deploying/SKILL.md",
 		"---\nname: deploying\ndescription: >\n  How this service reaches\n  production.\n---\n\n# Deploying\n")
 
@@ -109,8 +109,8 @@ func TestReadsBothClients(t *testing.T) {
 	if state["dart"] {
 		t.Error("dart is absent from enabledMcpjsonServers and came back on")
 	}
-	if state["context7"] {
-		t.Error("context7 is enabled=false in opencode.json and came back on")
+	if state["docsrv"] {
+		t.Error("docsrv is enabled=false in opencode.json and came back on")
 	}
 
 	skills := reading.Skills()
@@ -271,7 +271,7 @@ func catalog() clientconfig.Catalog {
 			{ID: "fixture.references", Provider: "fixture", Capability: "symbol.references"},
 			{ID: "ripgrep", Provider: "ripgrep", Capability: "code.search"},
 		},
-		Vouched: []string{"context7", "semgrep"},
+		Vouched: []string{"docsrv", "semgrep"},
 	}
 }
 
@@ -280,7 +280,7 @@ func TestTranslationNamesEveryOutcome(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, ".mcp.json", `{"mcpServers": {
 	  "fixture":   {"type": "stdio"},
-	  "context7": {"type": "stdio"},
+	  "docsrv": {"type": "stdio"},
 	  "dart":     {"type": "stdio"}
 	}}`)
 	write(t, root, ".claude/skills/deploying/SKILL.md", "---\nname: deploying\n---\n")
@@ -297,7 +297,7 @@ func TestTranslationNamesEveryOutcome(t *testing.T) {
 	}
 	for name, want := range map[string]clientconfig.Answer{
 		"fixture":   clientconfig.AnswerFunnel,
-		"context7":  clientconfig.AnswerVouched,
+		"docsrv":    clientconfig.AnswerVouched,
 		"dart":      clientconfig.AnswerNone,
 		"deploying": clientconfig.AnswerNotACapability,
 	} {
@@ -507,12 +507,12 @@ func TestFoldingTheEnabledUnionKeepsANoteThatIsNotAboutBeingOff(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, ".mcp.json", `{"mcpServers": {
 	  "dart":     {"type": "stdio"},
-	  "context7": {"type": "stdio"}
+	  "docsrv": {"type": "stdio"}
 	}}`)
-	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["dart", "context7"]}`)
+	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["dart", "docsrv"]}`)
 	write(t, root, "opencode.json", `{"mcp": {
 	  "dart":     {"type": "local", "enabled": true},
-	  "context7": {"type": "local", "enabled": true}
+	  "docsrv": {"type": "local", "enabled": true}
 	}}`)
 
 	reading, err := clientconfig.Read(root)

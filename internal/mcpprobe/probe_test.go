@@ -56,7 +56,7 @@ func TestSSEFramingIsTheSameAnswerAsPlainJSON(t *testing.T) {
 	}
 }
 
-// This is the live shape of chrome-devtools on the machine this was written
+// This is the live shape of a stdio-bridged backend on the machine this was written
 // on: the port answers, but not with MCP. "Declared" and "working" part
 // company here, which is the whole reason the probe exists.
 func TestAPortThatAnswersWithoutSpeakingMCPIsNotAlive(t *testing.T) {

@@ -18,7 +18,7 @@ func TestPrintServersNeverLetsUnknownReadAsHealthy(t *testing.T) {
 		{ID: "headroom", Transport: "stdio", Expose: "off", Where: "headroom mcp serve", State: core.BackendUnknown},
 		{ID: "semgrep", Transport: "stdio", Expose: "raw", State: core.BackendOK, LastChecked: time.Now().Add(-8 * time.Second)},
 		{
-			ID: "context7", Transport: "stdio", Expose: "raw", State: core.BackendFailed,
+			ID: "agent-device", Transport: "stdio", Expose: "raw", State: core.BackendFailed,
 			Reason: "env: 'node': No such file or directory", LastChecked: time.Now().Add(-time.Minute),
 		},
 	}})
@@ -26,7 +26,7 @@ func TestPrintServersNeverLetsUnknownReadAsHealthy(t *testing.T) {
 
 	lines := map[string]string{}
 	for _, line := range strings.Split(text, "\n") {
-		for _, id := range []string{"headroom", "semgrep", "context7"} {
+		for _, id := range []string{"headroom", "semgrep", "agent-device"} {
 			if strings.Contains(line, id) {
 				lines[id] = line
 			}
@@ -46,7 +46,7 @@ func TestPrintServersNeverLetsUnknownReadAsHealthy(t *testing.T) {
 
 	// A failure has to be loud and carry its cause: FAILED upper-cased, and the
 	// server's own words for why. "failed" alone is what cost the hours.
-	failed := lines["context7"]
+	failed := lines["agent-device"]
 	if !strings.Contains(failed, "FAILED") {
 		t.Errorf("failed row = %q, want the state upper-cased", failed)
 	}

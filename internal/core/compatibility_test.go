@@ -12,8 +12,8 @@ import (
 )
 
 func TestNormalizeDesktopToolName(t *testing.T) {
-	name, fallback := normalizeDesktopToolName(" raw/context7/search ")
-	if name != "raw.context7.search" || !fallback {
+	name, fallback := normalizeDesktopToolName(" raw/agent-device/search ")
+	if name != "raw.agent-device.search" || !fallback {
 		t.Fatalf("unexpected normalized tool: %q fallback=%v", name, fallback)
 	}
 	name, fallback = normalizeDesktopToolName("catalog.repositories")

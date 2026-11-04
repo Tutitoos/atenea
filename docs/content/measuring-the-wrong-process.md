@@ -1724,6 +1724,8 @@ the capability and implementation graph, and a backend exposed raw is neither, b
 prints exactly one line about configuration -- `settings /home/tutitoos/.config/atenea/atenea.toml`
 -- the path read, never a value read from it.
 
+context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209). chrome-devtools was measured at the time of this audit; it is no longer a supported or declared backend (see #209).
+
 The number is not lost. For `agent-device`, traced in full for the entry two above, it is parsed
 once at process start into the `Spec.Timeout` field the passthrough layer applies to every call
 on that backend (`internal/passthrough/stdio.go`) -- it sits in memory the entire time the

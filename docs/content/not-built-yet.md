@@ -519,7 +519,7 @@ shim keeps alive for its web UI with a replayed `initialize` and a FIFO -- so
 somebody already needed one shared instance and solved it once, for one server,
 outside Atenea.
 
-claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207).
+claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207). chrome-devtools was measured at the time of this audit; it is no longer a supported or declared backend (see #209). context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209).
 
 The goal is that a client declares Atenea and nothing else. Nine tools of fifty
 have a capability and an adapter, so the question is what happens to the rest,
@@ -711,7 +711,7 @@ repository, which is the honest key in both policies.
 What is left of the seam:
 
 - **`shared`** -- stateless, or state that is globally consistent:
-  the graph backend, `semgrep`, `context7`. Built, and the default.
+  the graph backend and `semgrep`. Built, and the default.
 - **`per_repository`** -- the state *is* the project: `serena`. Built.
 - **`per_chat`** -- the state is the conversation. Not built. Saves no
   processes, but would keep the server declared in one file instead of five.
