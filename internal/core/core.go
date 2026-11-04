@@ -32,7 +32,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
-	"github.com/Tutitoos/atenea/internal/dashboard"
 	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/knowledge"
 	"github.com/Tutitoos/atenea/internal/mcphttp"
@@ -122,7 +121,6 @@ type Core struct {
 	processes *supervisor.Supervisor
 	agent     *orchestrator.Agent
 	events    *observability.Hub
-	dashboard *dashboard.Server
 	// knowledgeStore is optional. When absent, existing context paths keep
 	// their behavior; when configured, callers opt into the verified/fresh
 	// context seam explicitly.
@@ -642,7 +640,8 @@ func (m *maintenance) checkDrops() {
 		Op: "metrics.dropped",
 		Detail: fmt.Sprintf(
 			"%d measurements were dropped at the buffer ceiling and are gone; the baseline is short by that much",
-			dropped-seen),
+			dropped-seen,
+		),
 		Version: buildinfo.Full(),
 	})
 }
@@ -1325,7 +1324,8 @@ func (c *Core) selectWithPreference(capabilityID, repositoryID, prefer string) (
 		notices = append(notices, fmt.Sprintf(
 			"%s ranks per %s, and this question names none: the health below is what was recorded "+
 				"for no %s in particular, which a real call may not get",
-			capabilityID, capability.SubjectFrom, capability.SubjectFrom))
+			capabilityID, capability.SubjectFrom, capability.SubjectFrom,
+		))
 	}
 	reachable, unreachable := c.reach(repo)
 	decision, err := c.chooser.Select(selector.Request{
@@ -1356,14 +1356,16 @@ func firstRepositoryLanguage(repo contract.Repository) string {
 // what a provider is guessed to cost, the store knows what it did cost, and
 // the funnel is the one place the two meet.
 func (c *Core) priced(ctx context.Context, capability, repository, subject string,
-	candidates []contract.Implementation) (bool, []string) {
+	candidates []contract.Implementation,
+) (bool, []string) {
 	if c.measurements == nil {
 		return false, nil
 	}
 	base, err := c.measurements.Baselines(ctx, capability, repository, subject)
 	if err != nil {
 		return false, []string{fmt.Sprintf(
-			"the measurement base could not be read (%v); ranking on the declared estimates", err)}
+			"the measurement base could not be read (%v); ranking on the declared estimates", err,
+		)}
 	}
 	return true, metrics.Apply(base, candidates, time.Now())
 }
@@ -1799,20 +1801,6 @@ func (c *Core) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	dashboard, err := c.newDashboard()
-	if err != nil {
-		_ = listener.Close()
-		return err
-	}
-	if dashboard != nil {
-		if err := dashboard.Start(ctx); err != nil {
-			_ = listener.Close()
-			return err
-		}
-		c.mu.Lock()
-		c.dashboard = dashboard
-		c.mu.Unlock()
-	}
 	// The rhythms only exist while something is holding the core up. A CLI
 	// command lives for a second and settles its batch on the way out; a
 	// service lives for days and needs the beat.
@@ -1897,13 +1885,6 @@ func (c *Core) Shutdown() error {
 	if c.graphMaintenance != nil {
 		c.graphMaintenance.CancelMaintenance()
 	}
-	c.mu.Lock()
-	dashboard := c.dashboard
-	c.mu.Unlock()
-	if dashboard != nil {
-		_ = dashboard.Close(context.Background())
-	}
-
 	// Connection handlers and in-flight work wait together, under the one
 	// margin. They were two waits before this, and only the second of them
 	// was bounded: closeSocket ended in c.conns.Wait() with no limit at all,
@@ -2072,7 +2053,8 @@ func (c *Core) flushLast() error {
 		Detail: fmt.Sprintf(
 			"the final flush failed %d times and %d measurements are gone with the process "+
 				"(%d more were refused by a full buffer during the stop): %v",
-			settleAttempts, c.measurements.Pending(), lost, err),
+			settleAttempts, c.measurements.Pending(), lost, err,
+		),
 		Version: buildinfo.Full(),
 	})
 	return err

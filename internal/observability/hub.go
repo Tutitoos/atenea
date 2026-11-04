@@ -1,6 +1,6 @@
-// Package observability carries the small, safe event stream used by the
-// Atenea dashboard. Events are deliberately metadata-only: the stream is a
-// live view, not a second receipt store.
+// Package observability carries the small, safe event stream the core
+// publishes lifecycle changes on. Events are deliberately metadata-only: the
+// stream is a live view, not a second receipt store.
 package observability
 
 import (

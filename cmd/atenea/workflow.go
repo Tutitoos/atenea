@@ -28,7 +28,7 @@ import (
 func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
-			"workflow needs a subcommand: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, native-fork, list, status, export, compare or panel")
+			"workflow needs a subcommand: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, native-fork, list, status, export or compare")
 	}
 	sub, rest := strings.TrimSpace(args[0]), args[1:]
 	switch sub {
@@ -52,8 +52,6 @@ func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 		return workflowExport(rest, out)
 	case "compare":
 		return workflowCompare(rest, out)
-	case "panel":
-		return workflowPanel(settingsPath, rest, out)
 	case "cancel":
 		return workflowCancel(rest, out)
 	case "answer":
@@ -66,7 +64,7 @@ func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 		return workflowList(rest, out)
 	default:
 		return contract.Fail(contract.FailureInvalidInput,
-			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, native-fork, list, status, export, compare or panel", sub)
+			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, native-fork, list, status, export or compare", sub)
 	}
 }
 
@@ -592,7 +590,8 @@ func workflowShow(args []string, out io.Writer) error {
 // openWorkflow builds the engine over the same trace store the agents write
 // to, and hands back the closer for both.
 func openWorkflow(ctx context.Context, settingsPath, tracePath, repository string,
-	out io.Writer) (*workflow.Engine, func(), error) {
+	out io.Writer,
+) (*workflow.Engine, func(), error) {
 	cfg, err := config.LoadEffective(settingsPath)
 	if err != nil {
 		return nil, nil, err

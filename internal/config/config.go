@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -78,7 +77,6 @@ type Config struct {
 	// Knowledge is disabled by default. When enabled, Core opens the separate
 	// verified knowledge store and the workflow evidence database at startup.
 	Knowledge Knowledge
-	Dashboard Dashboard
 	Backup    Backup
 	// Retention is how long receipts and traces are kept. See the type.
 	Retention Retention
@@ -307,21 +305,6 @@ type Metrics struct {
 	// takes the store's own ceiling here, so the value downstream is always
 	// the one the status screen shows.
 	BufferLimit int
-}
-
-// Dashboard configures the embedded, read-only observability panel. It is
-// disabled by default; listeners are explicit so upgrading Atenea cannot open
-// a new network surface unexpectedly.
-type Dashboard struct {
-	Enabled      bool
-	Listen       string
-	Access       string
-	LANListen    string
-	LANCertFile  string
-	LANKeyFile   string
-	LANTokenFile string
-	PageLimit    int
-	SessionTTL   time.Duration
 }
 
 // Retention is how long the record of what Atenea did is kept.
@@ -1291,7 +1274,6 @@ type file struct {
 	Metrics          fileMetrics           `toml:"metrics"`
 	ResultCache      fileResultCache       `toml:"result_cache"`
 	Knowledge        fileKnowledge         `toml:"knowledge"`
-	Dashboard        fileDashboard         `toml:"dashboard"`
 	Retention        fileRetention         `toml:"retention"`
 	Backup           fileBackup            `toml:"backup"`
 	Security         fileSecurity          `toml:"security"`
@@ -1355,18 +1337,6 @@ type fileMetrics struct {
 	Flush       string `toml:"flush"`
 	Compact     string `toml:"compact"`
 	BufferLimit *int   `toml:"buffer_limit"`
-}
-
-type fileDashboard struct {
-	Enabled      *bool  `toml:"enabled"`
-	Listen       string `toml:"listen"`
-	Access       string `toml:"access"`
-	LANListen    string `toml:"lan_listen"`
-	LANCertFile  string `toml:"lan_cert_file"`
-	LANKeyFile   string `toml:"lan_key_file"`
-	LANTokenFile string `toml:"lan_token_file"`
-	PageLimit    *int   `toml:"page_limit"`
-	SessionTTL   string `toml:"session_ttl"`
 }
 
 type fileRetention struct {
@@ -2052,9 +2022,6 @@ func parse(raw []byte, source string) (Config, error) {
 			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: knowledge paths must not be empty", source)
 		}
 	}
-	if cfg.Dashboard, err = decoded.Dashboard.build(source); err != nil {
-		return Config{}, err
-	}
 	if cfg.Retention, err = decoded.Retention.build(source); err != nil {
 		return Config{}, err
 	}
@@ -2574,69 +2541,6 @@ func (m fileMetrics) build(source string) (Metrics, error) {
 	return out, nil
 }
 
-const defaultDashboardListen = "127.0.0.1:8788"
-
-func (d fileDashboard) build(source string) (Dashboard, error) {
-	out := Dashboard{Listen: defaultDashboardListen, Access: "tailscale", PageLimit: 100, SessionTTL: 12 * time.Hour}
-	if d.Enabled != nil {
-		out.Enabled = *d.Enabled
-	}
-	if strings.TrimSpace(d.Access) != "" {
-		out.Access = strings.ToLower(strings.TrimSpace(d.Access))
-	}
-	if out.Access != "tailscale" && out.Access != "loopback" {
-		return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.access must be tailscale or loopback", source)
-	}
-	if strings.TrimSpace(d.Listen) != "" {
-		host, _, err := net.SplitHostPort(d.Listen)
-		if err != nil {
-			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen %q: %v", source, d.Listen, err)
-		}
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() && (out.Access != "tailscale" || !ip.IsUnspecified()) {
-			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen must bind a loopback IP, or a wildcard IP with tailscale access", source)
-		}
-		out.Listen = d.Listen
-	}
-	if d.PageLimit != nil {
-		if *d.PageLimit <= 0 || *d.PageLimit > 1000 {
-			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.page_limit must be 1..1000", source)
-		}
-		out.PageLimit = *d.PageLimit
-	}
-	if d.SessionTTL != "" {
-		ttl, err := time.ParseDuration(d.SessionTTL)
-		if err != nil || ttl <= 0 {
-			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.session_ttl must be positive", source)
-		}
-		out.SessionTTL = ttl
-	}
-	var err error
-	out.LANListen = strings.TrimSpace(d.LANListen)
-	if out.LANListen != "" {
-		host, _, splitErr := net.SplitHostPort(out.LANListen)
-		ip := net.ParseIP(host)
-		if splitErr != nil || ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
-			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.lan_listen must bind an explicit private IP", source)
-		}
-		for key, raw := range map[string]string{"dashboard.lan_cert_file": d.LANCertFile, "dashboard.lan_key_file": d.LANKeyFile, "dashboard.lan_token_file": d.LANTokenFile} {
-			if strings.TrimSpace(raw) == "" {
-				return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s is required with dashboard.lan_listen", source, key)
-			}
-		}
-		if out.LANCertFile, err = settingsPath(source, "dashboard.lan_cert_file", d.LANCertFile); err != nil {
-			return Dashboard{}, err
-		}
-		if out.LANKeyFile, err = settingsPath(source, "dashboard.lan_key_file", d.LANKeyFile); err != nil {
-			return Dashboard{}, err
-		}
-		if out.LANTokenFile, err = settingsPath(source, "dashboard.lan_token_file", d.LANTokenFile); err != nil {
-			return Dashboard{}, err
-		}
-	}
-	return out, nil
-}
-
 const (
 	// Six hours and five copies are the design's numbers, not a guess: a day
 	// of history in four snapshots plus the one being replaced.
@@ -2662,8 +2566,10 @@ func (r fileRetention) build(source string) (Retention, error) {
 		into *time.Duration
 		zero string
 	}{
-		{"retention.keep", r.Keep, &out.Keep,
-			"use keep = \"0s\" to keep everything forever"},
+		{
+			"retention.keep", r.Keep, &out.Keep,
+			"use keep = \"0s\" to keep everything forever",
+		},
 		{"retention.every", r.Every, &out.Every, ""},
 	} {
 		if field.raw == "" {
@@ -3552,7 +3458,8 @@ func buildSubject(c fileCapability, out *contract.Capability) error {
 	}
 	if from == "" || kind == "" {
 		return fmt.Errorf(
-			"capability %s declares only half a subject: subject_from and subject_kind go together", c.ID)
+			"capability %s declares only half a subject: subject_from and subject_kind go together", c.ID,
+		)
 	}
 	parsed, err := contract.ParseSubjectKind(kind)
 	if err != nil {
@@ -3561,17 +3468,20 @@ func buildSubject(c fileCapability, out *contract.Capability) error {
 	if parsed == contract.SubjectNone {
 		return fmt.Errorf(
 			"capability %s: subject_kind is empty, which is how a capability says it has no subject -- "+
-				"drop subject_from too", c.ID)
+				"drop subject_from too", c.ID,
+		)
 	}
 	index := slices.IndexFunc(out.Inputs, func(f contract.Field) bool { return f.Name == from })
 	if index < 0 {
 		return fmt.Errorf(
-			"capability %s: subject_from names %q, which is not one of its inputs", c.ID, from)
+			"capability %s: subject_from names %q, which is not one of its inputs", c.ID, from,
+		)
 	}
 	if field := out.Inputs[index]; field.Type != contract.TypeString {
 		return fmt.Errorf(
 			"capability %s: subject_from names %q, which is a %s -- a subject is read from a string",
-			c.ID, from, field.Type)
+			c.ID, from, field.Type,
+		)
 	}
 	out.SubjectFrom, out.SubjectKind = from, parsed
 	return nil

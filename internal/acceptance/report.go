@@ -117,7 +117,7 @@ var productGates = []Gate{
 	{ID: "mcp", Title: "Legacy and modern MCP contracts", ScenarioIDs: []string{"S08", "S09"}, Packages: []string{"./internal/mcpcompat", "./internal/mcphttp", "./internal/mcpstdio", "./internal/mcpprobe", "./internal/passthrough"}},
 	{ID: "recovery", Title: "Bounded recovery and persistent workflows", ScenarioIDs: []string{"S11"}, Packages: []string{"./internal/recoverypilot", "./internal/workflow"}},
 	{ID: "quality", Title: "Outcome-backed provider quality", ScenarioIDs: []string{"S01", "S02", "S05", "S06"}, Packages: []string{"./internal/selector", "./internal/orchestrator"}},
-	{ID: "tracking", Title: "Checklist, telemetry and dashboard API", ScenarioIDs: []string{"S10", "S12"}, Packages: []string{"./internal/workflow", "./internal/dashboard", "./cmd/atenea"}},
+	{ID: "tracking", Title: "Checklist, telemetry and activity notifications", ScenarioIDs: []string{"S10", "S12"}, Packages: []string{"./internal/workflow", "./cmd/atenea"}},
 }
 
 // GateInput is part of ATENEA's public orchestration contract.
@@ -158,7 +158,7 @@ var scenarioProbes = map[string]probeSpec{
 	"S09": {Package: "./internal/mcpcompat", Tests: []string{"TestParseAcceptsOnlyExactSupportedVersions"}},
 	"S10": {Package: "./internal/workflow", Tests: []string{"TestPlanProgressUsesTwentySegmentsAndTruncatedPercent"}},
 	"S11": {Package: "./internal/recoverypilot", Tests: []string{"TestRunFixtureKivgraphScenarioUsesProductionIndexBoundary"}},
-	"S12": {Package: "./internal/dashboard", Tests: []string{"TestWorkflowDetailRouteIsReachableAndReadOnly", "TestEventsSSEReplaysAndResetsExpiredCursor"}},
+	"S12": {Package: "./internal/core", Tests: []string{"TestWorkflowLaunchSendsActivityBeforeItsResponse"}},
 }
 
 // Run is part of ATENEA's public orchestration contract.
@@ -215,7 +215,7 @@ func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Re
 		if scenario.ID == "S12" {
 			item.MeasurementState, item.EvidenceScope = Unknown, Pending
 			if probeErr == nil {
-				item.Evidence = "local API, SSE and formatting paths passed; real client rendering pending"
+				item.Evidence = "local activity-notification path passed; real client rendering pending"
 			}
 		}
 		probed[scenario.ID] = item
@@ -284,6 +284,7 @@ func artifactSHA(snapshot corpus.Snapshot, path string) string {
 	}
 	return ""
 }
+
 func allScenariosPass(items []ScenarioEvidence) bool {
 	for _, v := range items {
 		if !v.Passed {
@@ -316,7 +317,7 @@ func runScenarioProbe(ctx context.Context, root string, input ScenarioInput) (st
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	fixturePath := filepath.Join(dir, "fixture")
-	if err := os.WriteFile(fixturePath, input.FixtureBytes, 0600); err != nil {
+	if err := os.WriteFile(fixturePath, input.FixtureBytes, 0o600); err != nil {
 		return "", err
 	}
 	env := []string{"ATENEA_ACCEPTANCE_ID=" + input.Scenario.ID, "ATENEA_ACCEPTANCE_LANGUAGE=" + input.Scenario.Language, "ATENEA_ACCEPTANCE_CHECK=" + input.Scenario.Check, "ATENEA_ACCEPTANCE_FIXTURE=" + fixturePath, "ATENEA_ACCEPTANCE_SHA256=" + input.FixtureSHA256}
@@ -473,6 +474,7 @@ func command(ctx context.Context, root string, argv, extraEnv []string) (string,
 	raw, err := cmd.CombinedOutput()
 	return string(raw), err
 }
+
 func clip(v string, n int) string {
 	v = strings.TrimSpace(v)
 	if len(v) <= n {
@@ -480,6 +482,7 @@ func clip(v string, n int) string {
 	}
 	return v[:n] + "…"
 }
+
 func clipTail(v string, n int) string {
 	v = strings.TrimSpace(v)
 	if len(v) <= n {
@@ -490,7 +493,7 @@ func clipTail(v string, n int) string {
 
 // Write is part of ATENEA's public orchestration contract.
 func Write(dir string, report Report) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	if err := benchmark.WriteJSON(filepath.Join(dir, "acceptance.json"), report); err != nil {
@@ -531,12 +534,14 @@ func Markdown(r Report) string {
 	}
 	return b.String()
 }
+
 func num(v *float64) string {
 	if v == nil {
 		return "unknown"
 	}
 	return fmt.Sprintf("%.0f", *v)
 }
+
 func truth(v *bool) string {
 	if v == nil {
 		return "unknown"

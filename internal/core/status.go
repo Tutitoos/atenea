@@ -670,7 +670,7 @@ func (c *Core) Status() Status {
 				impl.Health.Reason = "Expired observation; awaiting a new probe. " + impl.Health.Reason
 			}
 			// Runtime and configured diagnostics share the public status contract.
-			// Sanitize at this boundary so CLI, MCP and dashboard consumers agree.
+			// Sanitize at this boundary so CLI and MCP consumers agree.
 			impl.Health.Reason = contract.RedactRaw(impl.Health.Reason)
 			impl.Health.Raw = contract.RedactRaw(impl.Health.Raw)
 			light := lightFor(impl.Health.State)
