@@ -328,7 +328,7 @@ type Version struct {
 // It exists because health and cost were recorded per repository, which is the
 // only dimension a code capability has, and a capability that ignores the
 // repository entirely had nowhere to hang them. Measured before it existed:
-// one page behind Cloudflare marked the cheapest implementation of web.fetch
+// one page behind Cloudflare marked the cheapest implementation of a page fetch
 // unhealthy, and the next fetch of an unrelated site skipped that
 // implementation too -- with a drop reason still quoting the first site's url.
 //

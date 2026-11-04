@@ -10,11 +10,11 @@ import (
 )
 
 // extractShaped is a capability whose required input is a record_list, which
-// is the shape --set refuses and the reason --payload exists. web.extract is
-// the real one; this is its skeleton.
+// is the shape --set refuses and the reason --payload exists. a page extractor is
+// the typical one; this is its skeleton.
 func extractShaped() contract.Capability {
 	return contract.Capability{
-		ID: "web.extract", Version: contract.Version{Major: 1},
+		ID: "page.extract", Version: contract.Version{Major: 1},
 		Summary: "Pull named fields out of one web page.",
 		Effects: []contract.Effect{contract.EffectRead, contract.EffectExternal},
 		Inputs: []contract.Field{

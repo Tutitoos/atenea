@@ -8,7 +8,7 @@ import (
 
 func urlKeyed() contract.Capability {
 	return contract.Capability{
-		ID: "web.fetch", SubjectFrom: "url", SubjectKind: contract.SubjectURLHost,
+		ID: "page.fetch", SubjectFrom: "url", SubjectKind: contract.SubjectURLHost,
 		Inputs: []contract.Field{{Name: "url", Type: contract.TypeString, Required: true}},
 	}
 }

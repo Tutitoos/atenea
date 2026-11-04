@@ -26,7 +26,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
-	"github.com/Tutitoos/atenea/internal/adapter/scrapling"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
@@ -556,8 +555,6 @@ func effectiveImplementationDigest(cfg config.Config, impl contract.Implementati
 		settings = cfg.Orchestrator.Tokensave
 	case "desktop":
 		settings = cfg.Orchestrator.Desktop
-	case "scrapling":
-		settings = cfg.Orchestrator.Scrapling
 	case "local":
 		settings = cfg.Orchestrator.Local
 	}
@@ -729,8 +726,6 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 			Timeout:         cfg.Orchestrator.Android.Timeout,
 			FrameTTL:        cfg.Orchestrator.Android.FrameTTL,
 		})
-	case config.RunnerScrapling:
-		return buildScraplingRunner(cfg, procs)
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,
@@ -898,56 +893,6 @@ func buildDesktopRunner(cfg config.Config, procs *supervisor.Supervisor) (contra
 	return guard(runner, procs, instanceID), nil
 }
 
-func buildScraplingRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
-	if cfg.Orchestrator.Scrapling.Process == nil {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: scrapling has no server to launch -- it speaks stdio, so there is "+
-				"no address to dial without one", cfg.Source)
-	}
-	runner, err := scrapling.New(scrapling.Options{
-		Implementations: cfg.Orchestrator.Scrapling.Implementations,
-		Timeout:         cfg.Orchestrator.Scrapling.Timeout,
-		Domains:         cfg.Web.Domains,
-		Denied:          cfg.Web.Denied,
-		Session: func(context.Context) (*mcpstdio.Session, error) {
-			return procs.Session(config.RunnerScrapling)
-		},
-		Spider: spiderSession(cfg, procs),
-	})
-	if err != nil {
-		return nil, err
-	}
-	// One web, so one instance id, and it does not vary by repository: which
-	// project a step belongs to says nothing about what is on the internet.
-	instanceID := func(contract.Repository) string { return config.RunnerScrapling }
-	return guard(runner, procs, instanceID), nil
-}
-
-// spiderSession hands over the crawl helper, or nothing when no settings file
-// declared one.
-//
-// Nil rather than a session that fails on use, because the two say different
-// things: a nil Spider leaves web.crawl unserved and the funnel never offers
-// it, while a session that errors would have the funnel choose an
-// implementation and learn at dispatch that it was never there.
-func spiderSession(cfg config.Config, procs *supervisor.Supervisor) func(context.Context) (*mcpstdio.Session, error) {
-	if cfg.Orchestrator.Scrapling.Spider == nil {
-		return nil
-	}
-	return func(ctx context.Context) (*mcpstdio.Session, error) {
-		// Woken here rather than by the guard around the runner, because that
-		// guard readies exactly one process -- the adapter's own -- and this
-		// adapter has two far sides. A lifecycle of on_demand means nothing
-		// starts until somebody asks, and for this process the only asker is
-		// a crawl.
-		if _, err := procs.EnsureReady(ctx, SpiderProcessID); err != nil {
-			return nil, err
-		}
-		return procs.Session(SpiderProcessID)
-	}
-}
-
-// checkReach refuses two live adapters that both claim the same
 // implementation.
 //
 // Dispatch would still work -- the first one asked would answer -- but the

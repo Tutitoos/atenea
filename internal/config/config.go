@@ -33,7 +33,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
-	"github.com/Tutitoos/atenea/internal/adapter/scrapling"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
@@ -88,8 +87,6 @@ type Config struct {
 	Desktop Desktop
 	// Android is the explicit device allow-list for the Android bridge.
 	Android Android
-	// Web is where the web capabilities may reach. See the type.
-	Web Web
 	// LocalAgents caps the agent types a repository declares for itself.
 	// Never the zero value: an absent block is DefaultLocalAgents.
 	LocalAgents     LocalAgents
@@ -432,7 +429,6 @@ type Orchestrator struct {
 	Tokensave  TokensaveAdapter
 	Desktop    DesktopAdapter
 	Android    AndroidAdapter
-	Scrapling  ScraplingAdapter
 }
 
 // Model fixes which model backs each model-backed built-in agent by role. Its fields mirror
@@ -754,37 +750,6 @@ type AndroidAdapter struct {
 	FrameTTL        time.Duration
 }
 
-// ScraplingAdapter reaches the open web through a Scrapling MCP server.
-//
-// It is off unless `runners` names it, like every adapter that can cause an
-// effect beyond reading this disk. What sits behind it is a fetcher, and the
-// gate on where it may point lives in [web] rather than here: this block says
-// how to launch the server and how long to wait for it, and the settings that
-// decide what it may reach are kept somewhere a reader will find them without
-// knowing which adapter implements the capability.
-type ScraplingAdapter struct {
-	// Implementations the adapter answers for.
-	Implementations []string
-	// Timeout caps one call. Sized for the stealth level rather than the
-	// average: a plain request is milliseconds, and a stealth render starts a
-	// browser and waits out a challenge.
-	Timeout time.Duration
-	// Process launches and supervises the server. Not optional, for the same
-	// reason as Kivgraph, tokensave and desktop: a stdio server has no
-	// address to dial.
-	Process *ManagedProcess
-	// Spider launches the crawl helper, which is a DIFFERENT far side from
-	// the one above: Scrapling's MCP server has thirteen tools and none of
-	// them crawls, so web.crawl reaches the Spider API through a helper this
-	// repository ships.
-	//
-	// Optional, and absence is not an error. It leaves the crawl
-	// implementations unserved, which is exactly what a settings file that
-	// never mentioned the helper is saying -- the same reading `runners`
-	// gives an adapter nobody attached.
-	Spider *ManagedProcess
-}
-
 // Desktop is what the desktop capabilities are allowed to look at.
 //
 // Two lists rather than one because they answer different questions and one of
@@ -878,63 +843,6 @@ func DefaultDesktop() Desktop {
 	}
 }
 
-// Web is where the `web.*` capabilities are allowed to reach.
-//
-// Two lists, like Desktop, and for the same reason: one of them must not be
-// editable into a permission by omission. What is deliberately NOT like
-// Desktop is the reading of an empty allow-list. There, empty denies
-// everything, because any window on a machine can be a credential. Here it
-// does not, because an arbitrary public web page is not the hazard -- the
-// hazard is the inside of this network, and refusing that is Denied's job.
-//
-// Inverting Domains as well would have put the maintenance (one settings edit
-// per site anybody wants to read) exactly where the risk is not, and the
-// predictable result of that trade is somebody emptying Denied to make the
-// nuisance stop.
-type Web struct {
-	// Domains narrows what may be reached, by host. EMPTY MEANS ANY PUBLIC
-	// HOST; a non-empty list means those and nothing else. A bare domain
-	// covers its subdomains, so "example.com" reaches "api.example.com".
-	Domains []string
-	// Denied always wins, and is seeded rather than empty. It holds CIDR
-	// blocks and host patterns in one list because what it refuses is one
-	// idea -- the private side of this network -- that is spelled two ways.
-	//
-	// An explicitly empty Denied is honored, and it is the one setting in
-	// this file that hands out an unrestricted HTTP client. Somebody who
-	// writes it has said so out loud, which is the only form of that request
-	// worth answering.
-	Denied []string
-}
-
-// DefaultWeb is the shipped posture: the open web, minus this machine and the
-// network it sits on.
-//
-// The link-local block is the one worth naming. 169.254.169.254 is the cloud
-// metadata endpoint on every major provider, it answers over plain HTTP with
-// no authentication at all, and reaching it is the single most valuable thing
-// an attacker can do with somebody else's fetcher.
-func DefaultWeb() Web {
-	return Web{
-		Domains: nil,
-		Denied: []string{
-			"127.0.0.0/8",
-			"::1/128",
-			"169.254.0.0/16",
-			"fe80::/10",
-			"10.0.0.0/8",
-			"172.16.0.0/12",
-			"192.168.0.0/16",
-			"fc00::/7",
-			"0.0.0.0/8",
-			"*.lan",
-			"*.local",
-			"*.internal",
-			"localhost",
-		},
-	}
-}
-
 // Security is the one place delicate files are declared.
 type Security struct {
 	// Sensitive holds the path patterns that carry secrets. Reading is free by
@@ -1012,7 +920,7 @@ func DefaultLocalAgents() LocalAgents {
 }
 
 // RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
-// RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerScrapling and RunnerLocal are the
+// RunnerTokensave, RunnerDesktop, RunnerAndroid and RunnerLocal are the
 // values orchestrator.runners accepts.
 const (
 	// RunnerOMP is part of ATENEA's public orchestration contract.
@@ -1029,8 +937,6 @@ const (
 	RunnerDesktop = "desktop"
 	// RunnerAndroid is part of ATENEA's public orchestration contract.
 	RunnerAndroid = "android"
-	// RunnerScrapling is part of ATENEA's public orchestration contract.
-	RunnerScrapling = "scrapling"
 	// RunnerLocal is part of ATENEA's public orchestration contract.
 	RunnerLocal = "local"
 )
@@ -1391,7 +1297,6 @@ type file struct {
 	Security         fileSecurity          `toml:"security"`
 	Desktop          fileDesktop           `toml:"desktop"`
 	Android          fileAndroid           `toml:"android"`
-	Web              fileWeb               `toml:"web"`
 	LocalAgents      fileLocalAgents       `toml:"local_agents"`
 	Selector         fileSelector          `toml:"selector"`
 	Capabilities     []fileCapability      `toml:"capability"`
@@ -1505,7 +1410,6 @@ type fileOrchestrator struct {
 	Tokensave  fileTokensaveAdapter  `toml:"tokensave"`
 	Desktop    fileDesktopAdapter    `toml:"desktop"`
 	Android    fileAndroidAdapter    `toml:"android"`
-	Scrapling  fileScraplingAdapter  `toml:"scrapling"`
 }
 
 type fileLocalRunner struct {
@@ -1586,17 +1490,6 @@ type fileAndroidAdapter struct {
 	FrameTTL        string    `toml:"frame_ttl"`
 }
 
-// fileScraplingAdapter is the TOML shape of ScraplingAdapter. Identical to
-// its desktop neighbor, and kept as its own type rather than shared with it
-// so that the two can grow apart without one of them silently gaining a key
-// that means nothing on the other.
-type fileScraplingAdapter struct {
-	Implementations *[]string           `toml:"implementations"`
-	Timeout         string              `toml:"timeout"`
-	Process         *fileManagedProcess `toml:"process"`
-	Spider          *fileManagedProcess `toml:"spider"`
-}
-
 type fileTokensaveAdapter struct {
 	Root            string              `toml:"root"`
 	Implementations *[]string           `toml:"implementations"`
@@ -1641,13 +1534,6 @@ type fileDesktop struct {
 
 type fileAndroid struct {
 	AllowedSerials *[]string `toml:"allowed_serials"`
-}
-
-// fileWeb is [web] as written. Pointers, so an omitted list inherits the
-// shipped one and an explicitly empty list is honored as the statement it is.
-type fileWeb struct {
-	Domains *[]string `toml:"domains"`
-	Denied  *[]string `toml:"denied"`
 }
 
 type fileSelector struct {
@@ -2182,7 +2068,6 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Android, err = decoded.Android.build(source); err != nil {
 		return Config{}, err
 	}
-	cfg.Web = decoded.Web.build()
 	for _, rule := range decoded.Selector.Rules {
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
 			Capability: rule.Capability,
@@ -2451,10 +2336,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Timeout:         android.DefaultTimeout,
 			FrameTTL:        android.DefaultFrameTTL,
 		},
-		Scrapling: ScraplingAdapter{
-			Implementations: scrapling.DefaultImplementations(),
-			Timeout:         scrapling.DefaultTimeout,
-		},
 	}
 	if o.MaxParallel != nil {
 		if *o.MaxParallel < 0 || *o.MaxParallel > maxMaxParallel {
@@ -2519,12 +2400,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		for _, name := range *o.Runners {
 			switch name {
 			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
-				RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerScrapling, RunnerLocal:
+				RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s, %s",
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
 					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex,
-					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerScrapling, RunnerLocal)
+					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -2589,11 +2470,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.Android = androidAdapter
-	web, err := o.Scrapling.build(source, out.Scrapling)
-	if err != nil {
-		return Orchestrator{}, err
-	}
-	out.Scrapling = web
 	return out, nil
 }
 
@@ -3143,39 +3019,6 @@ func (a fileAndroidAdapter) build(source string, out AndroidAdapter) (AndroidAda
 	return out, nil
 }
 
-func (s fileScraplingAdapter) build(source string, out ScraplingAdapter) (ScraplingAdapter, error) {
-	if s.Implementations != nil {
-		out.Implementations = *s.Implementations
-	}
-	if s.Timeout != "" {
-		timeout, err := time.ParseDuration(s.Timeout)
-		if err != nil {
-			return ScraplingAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.scrapling.timeout %q: %v", source, s.Timeout, err)
-		}
-		if timeout <= 0 {
-			return ScraplingAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.scrapling.timeout must be above 0, got %s", source, timeout)
-		}
-		out.Timeout = timeout
-	}
-	if s.Process != nil {
-		process, err := s.Process.build(source, "orchestrator.scrapling.process")
-		if err != nil {
-			return ScraplingAdapter{}, err
-		}
-		out.Process = &process
-	}
-	if s.Spider != nil {
-		spider, err := s.Spider.build(source, "orchestrator.scrapling.spider")
-		if err != nil {
-			return ScraplingAdapter{}, err
-		}
-		out.Spider = &spider
-	}
-	return out, nil
-}
-
 func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (TokensaveAdapter, error) {
 	root, err := settingsPath(source, "orchestrator.tokensave.root", t.Root)
 	if err != nil {
@@ -3401,21 +3244,6 @@ func (a fileAndroid) build(source string) (Android, error) {
 		out.AllowedSerials = append(out.AllowedSerials, serial)
 	}
 	return out, nil
-}
-
-// build reads [web] with each list independent of the other, the same way
-// [desktop] is read. Absent takes the shipped value; present-but-empty is a
-// statement and is honored -- an explicitly empty Denied is somebody asking
-// for a fetcher with no destination gate and saying so.
-func (w fileWeb) build() Web {
-	out := DefaultWeb()
-	if w.Domains != nil {
-		out.Domains = *w.Domains
-	}
-	if w.Denied != nil {
-		out.Denied = *w.Denied
-	}
-	return out
 }
 
 func (s fileSecurity) build() Security {

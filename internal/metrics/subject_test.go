@@ -8,10 +8,10 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// blockedOn is one failed fetch of one host, the shape web.fetch writes when a
+// blockedOn is one failed fetch of one host, the shape page.fetch writes when a
 // site answers with an anti-bot challenge instead of a page.
 func blockedOn(at time.Time, subject string) Measurement {
-	m := attempt(at, "web.fetch", "scrapling.request")
+	m := attempt(at, "page.fetch", "fetcher.request")
 	m.Subject = subject
 	m.OK = false
 	m.FailureKind = contract.FailureUnavailable.String()
@@ -31,10 +31,10 @@ func recordAll(t *testing.T, s *Store, ms ...Measurement) {
 
 // The defect this column exists for, reproduced and then closed.
 //
-// Health was recorded per (capability, repository), and web.fetch ignores the
+// Health was recorded per (capability, repository), and page.fetch ignores the
 // repository -- so a run of failures against one site WAS the health of that
 // implementation everywhere. Measured through the real funnel before the fix:
-// after example.com challenged scrapling.request, a fetch of iana.org went
+// after example.com challenged fetcher.request, a fetch of iana.org went
 // straight to the stealth level, and the drop reason still quoted example.com.
 func TestFailuresOnOneSubjectDoNotCondemnAnother(t *testing.T) {
 	s := store(t, Options{})
@@ -45,8 +45,8 @@ func TestFailuresOnOneSubjectDoNotCondemnAnother(t *testing.T) {
 	}
 	recordAll(t, s, failures...)
 
-	blocked := costsForSubject(t, s, "web.fetch", "current", "blocked.example")
-	health, said := blocked["scrapling.request"].Health(now)
+	blocked := costsForSubject(t, s, "page.fetch", "current", "blocked.example")
+	health, said := blocked["fetcher.request"].Health(now)
 	if !said {
 		t.Fatal("five straight failures on this subject produced no health verdict at all")
 	}
@@ -56,8 +56,8 @@ func TestFailuresOnOneSubjectDoNotCondemnAnother(t *testing.T) {
 
 	// The whole point: another host has its own record, and that record is
 	// empty rather than inherited.
-	other := costsForSubject(t, s, "web.fetch", "current", "innocent.example")
-	if _, said := other["scrapling.request"].Health(now); said {
+	other := costsForSubject(t, s, "page.fetch", "current", "innocent.example")
+	if _, said := other["fetcher.request"].Health(now); said {
 		t.Error("failures on one host produced a health verdict for another")
 	}
 }

@@ -281,7 +281,7 @@ type Capability struct {
 	//
 	// It exists because health and cost are recorded per repository, and for a
 	// capability that ignores the repository entirely there is no other
-	// dimension to hang them on. Measured before it existed: `web.fetch`
+	// dimension to hang them on. Measured before it existed: a page fetch
 	// against a site behind Cloudflare marked its cheapest implementation
 	// unhealthy, and the next fetch of an unrelated site skipped that
 	// implementation too -- with a drop reason still quoting the first site's
