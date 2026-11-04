@@ -2857,7 +2857,7 @@ func (f *fieldList) Set(v string) error { *f = append(*f, v); return nil }
 // refuses a record: "Records are a shape a shell cannot express without
 // becoming a JSON parser. Refusing is honest; a half-parser would be worse."
 // That refusal still stands. What it did not anticipate is a capability whose
-// REQUIRED input is a record_list -- web.extract's `fields` -- which made the
+// REQUIRED input is a record_list -- a field list, as page extraction had -- which made the
 // capability reachable from every MCP client and from nothing on the command
 // line.
 //
@@ -2963,7 +2963,7 @@ func coerce(field contract.Field, raw string) (any, error) {
 		// The refusal predates any capability that could trip it, and it was
 		// right then and is right now. What was missing was the other half of
 		// the sentence: a caller told only what they cannot do has to go and
-		// find out what they can, and web.extract was reachable from every MCP
+		// find out what they can, and such a capability was reachable from every MCP
 		// client and from nothing here.
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"%s is a %s, which --set cannot express -- pass the whole payload as json with --payload FILE",

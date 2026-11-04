@@ -15,7 +15,7 @@ import (
 // internal/mcphttp already captured serverInfo.version on the handshake; the
 // stdio transport dropped the initialize result on the floor, so every
 // provider reached this way filed its measurements under no version at all.
-// The cost of that is not abstract: a comment in internal/adapter/scrapling
+// The cost of that is not abstract: a comment in a retired adapter
 // named a version read out of documentation rather than measured, and it was
 // wrong by two minor releases. A handshake that is already paid for is the
 // cheapest possible place to stop guessing.
@@ -51,7 +51,7 @@ func serverSpeaking(t *testing.T, serverInfo any) *mcpstdio.Session {
 }
 
 func TestTheHandshakeRemembersWhatTheServerCalledItself(t *testing.T) {
-	session := serverSpeaking(t, map[string]any{"name": "Scrapling", "version": "0.4.15"})
+	session := serverSpeaking(t, map[string]any{"name": "Example", "version": "0.4.15"})
 
 	// Nothing has been asked yet, so there is nothing to report -- and that is
 	// a different state from a server that stayed quiet.

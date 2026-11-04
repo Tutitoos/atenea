@@ -137,8 +137,6 @@ jobs:
           go test ./internal/config -run '^$' -fuzz '^FuzzLoadNeverPanics$' -fuzztime=30s
           go test ./internal/adapter/kivgraph -run '^$' -fuzz '^FuzzParseIndexReportNeverPanics$' -fuzztime=30s
           go test ./internal/adapter/desktop -run '^$' -fuzz '^FuzzInspectAnswerNeverPanics$' -fuzztime=30s
-          go test ./internal/adapter/scrapling -run '^$' -fuzz '^FuzzFetchAnswerNeverPanics$' -fuzztime=30s
-          go test ./internal/adapter/scrapling -run '^$' -fuzz '^FuzzTheGateNeverPanics$' -fuzztime=30s
 
       # The desktop helper is built here and shipped nowhere.
       #
@@ -181,9 +179,6 @@ jobs:
 
       - name: Declared provider matrix
         run: bash scripts/provider-matrix-check.sh
-
-      - name: Validate the Scrapling Spider helper
-        run: bash scripts/scrapling-spider-check.sh
 
       - name: Upload coverage
         uses: actions/upload-artifact@v7

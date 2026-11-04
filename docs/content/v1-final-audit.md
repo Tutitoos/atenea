@@ -74,6 +74,8 @@ claude-mem was measured at the time of this audit; it is no longer a supported o
 
 Context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209). chrome-devtools was measured at the time of this audit; it is no longer a supported or declared backend (see #209). Every row and mention of them in this document is dated evidence.
 
+Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). Every Scrapling row and mention in this document is dated evidence.
+
 ## Herramientas y MCP externos
 
 | Herramienta | Código del repo | Configuración del equipo | Estado real de esta auditoría |

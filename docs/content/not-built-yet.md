@@ -33,6 +33,8 @@ deliberate: task planning still emits only `code.search`, ranking outside the
 requested scope is not implemented, and redirect/provider limits remain bounded
 and documented rather than silently expanded.
 
+Scrapling was measured at the time of this audit; it is no longer a supported or declared provider (see #210). Every Scrapling and web.* entry in this document is dated evidence; the redirect-gate entry below no longer applies because its provider is gone.
+
 ## A capability the command line could not call — 2026-08-26, closed 2026-08-27
 
 `web.extract` takes its selectors as a `record_list`, the first input of that

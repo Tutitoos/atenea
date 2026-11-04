@@ -24,7 +24,7 @@ func withCapability(t *testing.T, body string) (config.Config, error) {
 }
 
 const subjectCapability = `[[capability]]
-id = "web.fetch"
+id = "page.fetch"
 version = "1.0.0"
 summary = "Fetch one web page."
 semantics = "One page, one answer."
