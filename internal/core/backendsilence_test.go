@@ -86,7 +86,7 @@ func TestDeadCommandIsAbsentAndRedOnScreen(t *testing.T) {
 // command, because "failed" alone sent me reading configs for hours.
 func TestABareNameNotOnPATHFailsWithAReasonThatNamesIt(t *testing.T) {
 	const missing = "atenea-test-no-such-backend"
-	atenea := buildService(t, deadServer(t, "context7", missing))
+	atenea := buildService(t, deadServer(t, "agent-device", missing))
 	defer serve(t, atenea)()
 
 	c := dial(t)
@@ -96,12 +96,12 @@ func TestABareNameNotOnPATHFailsWithAReasonThatNamesIt(t *testing.T) {
 	tools, _ := got["tools"].([]any)
 	for _, entry := range tools {
 		tool, _ := entry.(map[string]any)
-		if name, _ := tool["name"].(string); strings.HasPrefix(name, "raw.context7.") {
+		if name, _ := tool["name"].(string); strings.HasPrefix(name, "raw.agent-device.") {
 			t.Errorf("a backend that is not on PATH offered %q", name)
 		}
 	}
 
-	row := rowFor(t, atenea, "context7")
+	row := rowFor(t, atenea, "agent-device")
 	if row.State != core.BackendFailed {
 		t.Fatalf("state = %q, want %q (reason = %q)", row.State, core.BackendFailed, row.Reason)
 	}

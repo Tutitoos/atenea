@@ -2157,7 +2157,7 @@ func printServerProbes(out io.Writer, servers []core.ServerProbe, by answeredBy)
 	// verdicts were earned in the environment that matters, and repeating the
 	// old warning would teach a reader to ignore warnings. When this command
 	// answered, the difference is the whole finding: measured on this machine,
-	// a service with a minimal PATH had context7 dead while a shell called the
+	// a service with a minimal PATH had a node-based backend dead while a shell called the
 	// same server reachable in the same minute.
 	if !by.Service {
 		if inherited := inheritedPATH(servers); inherited > 0 {

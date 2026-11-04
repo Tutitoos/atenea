@@ -25,7 +25,7 @@ import (
 // The environment a verdict was earned in is part of the verdict.
 //
 // Measured on this machine while building the servers section: a service
-// started with a minimal PATH reported context7 as FAILED with "env: 'node':
+// started with a minimal PATH reported a node-based backend as FAILED with "env: 'node':
 // No such file or directory" on its status screen, while `atenea detect` run
 // from a shell seconds later called the same server reachable. Both were right
 // about their own environment, and the operator was the only one who could not

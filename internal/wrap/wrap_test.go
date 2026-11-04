@@ -326,14 +326,13 @@ func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
 //
 // Measured on this machine on 2026-08-09, against the binary as shipped: wrap
 // announced raw.fixture.<tool>, and `atenea mcp`
-// served neither -- 19 raw tools, every one of them chrome-devtools, context7
-// or semgrep, the three that carry expose. The check that exists to stop a
+// served neither -- 19 raw tools, none of them fixture. The check that exists to stop a
 // client believing an unverified claim was making two of its own.
 func TestOnlyARawBackendIsAnnouncedAsRaw(t *testing.T) {
 	url := live(t)
 	plan := wrap.Check(t.Context(), []config.MCPServer{
 		{ID: "fixture", URL: url},
-		{ID: "context7", URL: url, Expose: config.ExposeRaw},
+		{ID: "agent-device", URL: url, Expose: config.ExposeRaw},
 	}, map[string]bool{"fixture": true})
 
 	var report strings.Builder
@@ -344,8 +343,8 @@ func TestOnlyARawBackendIsAnnouncedAsRaw(t *testing.T) {
 	}
 	// The other half, or the fix is just a deletion: a backend that really
 	// is re-offered must still say so, under the name it answers to.
-	if !strings.Contains(got, "raw.context7.<tool>") {
-		t.Errorf("report drops the raw surface context7 does have:\n%s", got)
+	if !strings.Contains(got, "raw.agent-device.<tool>") {
+		t.Errorf("report drops the raw surface agent-device does have:\n%s", got)
 	}
 	// Both are held either way; the fix is about what the row says, not
 	// about who goes in the payload.

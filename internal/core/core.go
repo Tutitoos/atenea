@@ -1814,7 +1814,7 @@ type Detection struct {
 // exchange. A command that probes locally learns whether the servers are
 // reachable from a shell, which is not the question when the thing that cannot
 // reach them is the service: measured on this machine, a service with a minimal
-// PATH had context7 dead while a shell called it reachable in the same minute.
+// PATH had a node-based backend dead while a shell called it reachable in the same minute.
 func (c *Core) Detect(ctx context.Context, repositoryID string) (Detection, error) {
 	servers, err := c.DetectServers(ctx)
 	if err != nil {

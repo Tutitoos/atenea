@@ -651,7 +651,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	for _, id := range slices.Sorted(maps.Keys(v.core.backends)) {
 		// A named raw catalog is an explicit desktop selection. Do not make a
 		// focused agent-device profile wait for unrelated raw servers (for
-		// example a diagram backend that is down); those servers remain
+		// example a raw backend that is down); those servers remain
 		// available to profiles without a catalog selection or through their
 		// own direct MCP entries.
 		if len(v.policy.RawCatalogs) > 0 {
