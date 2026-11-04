@@ -38,6 +38,6 @@ atenea ask workspace.context --repo api --repo web --payload context.json --json
 The CLI resolves IDs to configured roots and the same coordinator performs the
 final physical-root and authorization preflight. Before each child, MCP sends
 one visible Markdown activity notification and the CLI prints one preamble in
-input order. These workspace notices are ephemeral outside a workflow and are
+input order. These workspace notices are ephemeral and are
 not presented as durable P05 outbox records; this operation does not add a
 second outbox or chat transport.

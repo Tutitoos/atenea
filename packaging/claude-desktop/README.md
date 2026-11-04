@@ -3,7 +3,7 @@
 Extensión MCPB que conecta Claude Desktop con el núcleo local de Atenea.
 
 El proceso de la extensión ejecuta `atenea mcp`, que es un puente: no arranca un
-segundo núcleo. El servicio central conserva el catálogo, el workflow, la
+segundo núcleo. El servicio central conserva el catálogo, la
 selección de proveedores y los permisos, y la extensión habla con él por el
 socket de siempre.
 

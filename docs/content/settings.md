@@ -519,7 +519,7 @@ fallback chain. In `auto` mode, the safe candidates are explicit in the
 router; OpenCode requires declared candidates because Atenea cannot invent
 provider/model identifiers. Atenea never silently downgrades the `plan` role:
 Claude planning remains pinned to Opus 5. The adaptive ranker only compares
-names already in the candidate set, requires three successful workflow
+names already in the candidate set, requires three successful
 samples, and requires a 15% median-cost saving. The decision trace records the
 primary, the declared fallbacks and whether history changed the choice. Raw MCP tools remain
 explicit-only because they have no semantic capability contract to rank.
@@ -1213,9 +1213,8 @@ a hard-coded path there survives exactly until the next reinstall. Any other
 harness -- differs only in what it does between reading stdin and writing
 stdout.
 
-Seven agents ship declared. `filereader` reads one file, `reviewer` audits an
-answer against the files it named, and `plan-check` compiles a plan and says
-whether the engine accepts it -- none of the three spends a token, and their
+Six agents ship declared. `filereader` reads one file and `reviewer` audits an
+answer against the files it named -- neither spends a token, and their
 `max_tokens = 1` is the honest ceiling of an agent that never calls a model.
 `semantic-reviewer` calls the configured `explore` model to assess whether a
 conclusion follows from its evidence. It returns a structured semantic
@@ -1256,7 +1255,7 @@ evenly, and every step it writes stops at a ceiling it could not have known
 was too low. Measured 2026-08-14: a plan allocated `$0.10` to a step whose type
 had never once finished under `$1.26`.
 
-The figures are read back from the workflow record — `median`, the range, and
+The figures were read back from recorded workflow steps (the engine that wrote them is gone, #212) — `median`, the range, and
 `n`, which travels with every median because three samples and thirty are
 different claims. Three exclusions are deliberate and are printed rather than
 hidden:
@@ -1332,9 +1331,8 @@ and `indeterminate` remains incomplete rather than being promoted to approval.
 defaults to `agent`. Reviews are separated because one lane holding both would
 starve auditing exactly when the machine is busiest -- every slot full of
 agents, the reviewer queued behind them, answers piling up unjudged. The
-scheduler that honours it is the workflow engine below; `atenea agent` runs one
-agent at a time and has no cap to compete for, so the lane only starts to
-matter once a graph is running.
+scheduler that honoured it was the workflow engine, which is gone; `atenea agent` runs one
+agent at a time and has no cap to compete for, so the lane does nothing today.
 
 `reads_subject` says a type is handed another step's whole answer. It is a
 separate word from `pool` because reviewing and reading a subject are two
@@ -1347,315 +1345,15 @@ to review is refused anyway -- so it is only ever written on an agent-lane
 type. Hand a subject to a type that declares neither and the graph is refused
 before anything spawns.
 
-## Workflows
+## Removed: the `[workflow]`, `[[workflow_profile]]` and `[knowledge]` tables
 
-```toml
-[workflow]
-max_parallel_agent = 4    # steps in the agent lane at once; 0 lifts the ceiling
-max_parallel_review = 4   # the review lane, sized apart from it
-```
-
-A workflow is a DAG of agent steps handed to Atenea whole:
-
-```
-atenea workflow run plan.toml
-atenea workflow list
-atenea workflow show <id>
-atenea workflow resume [--redo STEP] <id>
-```
-
-Every flag goes **before** the id. Go's flag parser stops at the first word
-that is not a flag, so `resume <id> --redo STEP` hands the subcommand three
-arguments where it expects one and exits with `workflow resume takes one
-workflow id` before it has read anything.
-
-```toml
-task = "count what the docs say"          # the commission every step is a slice of
-budget_usd = 0.50                         # the grant; step shares divide it
-
-[[step]]
-id = "read-readme"
-agent = "filereader"                      # a declared [[agent]], not a capability
-point_id = "P07"                          # stable user-visible checklist item
-point_title = "Optimize code.context"
-objective = "read README.md and answer"
-files = ["README.md"]
-criterion = "the counts match the file"
-effects = ["read"]                        # ceiling for this step, within its type's
-budget_usd = 0.25                         # this step's share
-
-[[step]]
-id = "audit-readme"
-agent = "reviewer"                        # a review-pool type; it needs a subject
-point_id = "P07"                          # several internal steps may share one point
-point_title = "Optimize code.context"
-subject = "read-readme"                   # hand it that step's answer -- implies the edge
-objective = "audit what the reader answered"
-files = ["README.md"]
-criterion = "the answer holds"
-effects = ["read"]
-budget_usd = 0.25
-```
-
-`point_id` and `point_title` are optional, but must be declared together. A
-point is checked only after every step carrying that id finishes `ok`, has a
-trace id, and reports a complete result. Pending reviews, partial answers,
-failures, interruptions and cancellations leave it unchecked. The trace ids
-are stored as its acceptance evidence.
-
-The workflow record keeps the plan revision and every point's state. Status,
-resume and show therefore recover the same ordered checklist after a restart.
-Each change is saved before Atenea emits its Markdown update. Progress uses 20
-segments and the truncated value of `accepted / active points * 100`; retired
-points remain visible but do not count in the denominator.
-
-Atenea can now write one of these, and it is still the same file. Two shipped
-agents do it: `explore` looks at the project through Atenea's own capabilities
-and reports what it found, and `plan` reads that exploration and answers with
-a graph as TOML text. What comes back is an artifact a person can read, edit
-and keep -- not a hidden structure -- and the engine executes it exactly as
-written afterwards, through `atenea workflow create` like any other plan.
-
-There is still no orchestrator inside a run: no model picks steps while the
-engine works, and a graph does not grow mid-run. Planning happens before the
-run, in a run of its own that is recorded, judged and paid for like any other
-work. That is why every refusal below happens before anything spawns -- and
-why a plan a model wrote is compiled by `plan-check`, the shipped reviewer
-that hands the planner the engine's own refusal sentence to correct.
-
-Steps with no unmet dependency run together, up to the ceiling of their lane.
-Ready steps beyond it wait: the queue is the pending set in declaration order,
-not a second list, so the same graph makes the same choices on a slower
-machine. A step whose dependency did not end `ok` never runs and reads as
-`blocked`; its siblings are untouched, which is the point of the graph being a
-graph.
-
-### What an edge carries
-
-`needs` carries order and nothing else: a step is handed the task written in
-the file, never what the step before it found.
-
-`subject` carries the answer. It names **one** upstream step, and it is an
-edge as well as a pipe -- a step reading another's answer runs after it, and
-declaring that twice would let the two halves disagree. What travels is the
-whole validated report: the result, the verdict, the reason, and the task the
-upstream was actually asked, criterion included. Never a projection of it. A
-subject narrowed to the interesting fields is a summary, and a review of a
-summary is a review of something the parent never consumed.
-
-It is the same card `atenea agent --review` hands over, built by the same
-constructor, so one answer cannot get two different reviews depending on which
-door the caller came through. The reviewer's trace row records `reviews <id>`
-either way.
-
-A review inside a graph carries the same correction rule as `atenea agent
---review`: a `failed` verdict sends its subject back **once**, and the second
-attempt is handed its own refused answer beside the input it was working
-from, plus the sentence that refused it. A second refusal stands. Only a
-judgement relaunches -- a reviewer that could not judge (`incomplete`, a
-death, a timeout) has said nothing about the work, and re-running it because
-its auditor broke spends the commission on somebody else's outage.
-
-Both attempts are on the receipt. The refused run cost real money, and a
-total that keeps only the accepted half understates the bill by exactly what
-the correction cost.
-
-Two refusals at compile time, both naming the step:
-
-- a **review-pool type with no `subject`** -- it would spawn, read an empty
-  card and answer `incomplete` saying so, after the earlier steps had run
-- a **`subject` on a type that does not read one** -- neither a review-pool
-  type nor one declaring `reads_subject`
-
-### What an edge demands
-
-```toml
-on = "answered"   # default: ok, failed or incomplete -- anything judged
-on = "ok"         # only a success
-```
-
-The line is **judged versus unjudged, not good versus bad**:
-
-| the subject ended | the dependent |
-|---|---|
-| `ok` | runs |
-| `failed` | runs -- a failure is an answer, and "it says it failed" is the claim most worth auditing |
-| `incomplete` | runs -- the agent's own word for stopping short is still an answer |
-| `interrupted` | **blocked**: nobody judged it, so there is no verdict to hand over |
-| `blocked` / `skipped` | blocked, transitively |
-
-Never a partial subject. Either the whole validated report or nothing: a card
-claiming an answer that was never given is the same class of mistake as a
-green verdict on an unmeasured surface -- it would look fine and be wrong.
-That one is not a rule layered on top, either. A subject with no verdict is
-refused by the contract itself, so it cannot be built even if a gate above it
-were wrong.
-
-A step blocked by an unjudged subject prints the command that clears it, which
-is `atenea workflow resume <id>` when the subject only read, and the same with
-`--redo <step>` when it may have written -- the one a resume deliberately
-leaves alone.
-
-`on` is a declared word rather than a second `needs` line naming the same
-step. Those two lines look redundant, and a reader tidying one away would
-leave a graph that still runs and quietly reviews things it was meant to
-skip: silent, and clean-looking. `on` with no `subject` is refused rather than
-ignored.
-
-**Two steps that can run at once may not both touch a file when one of them
-writes it.** That is refused when the graph compiles, naming both steps and the
-path -- not serialized quietly at run time, which would make the order depend
-on how busy the machine was and hide the conflict until the day it lands
-differently. "Can run at once" means neither waits on the other, whatever the
-ceilings happen to be; order them with `needs` or give them different files.
-
-### What survives
-
-The record lives in two tables in the trace database -- the graph, each step's
-status, its answer, and the trace row it ran as -- because a resumed workflow
-has to report steps it did not re-run, and because the only honest answer to
-"was this step running?" is a pid to check. Everything derivable stays in
-memory: the ready set, the queue, the lane counts and the write claims are all
-functions of the graph and the statuses, and a stored copy is a second truth
-that can disagree with the first.
-
-A step is `pending`, `running`, `ok`, `failed`, `incomplete` or `interrupted`.
-The last is a step **nobody judged**: it was running when the operator cut it
-or when Atenea died, and no report was ever read. It is not `failed` -- that is
-a judgement, and nothing here made one -- and not `incomplete`, which is the
-agent's own word for stopping short.
-
-`atenea workflow resume` continues a run that was cut or orphaned. It refuses
-while the pid on the record is still alive, because a record saying `running`
-is not evidence that anything runs and taking over a live run would double
-every step in flight. Interrupted steps that only read are dispatched again as
-a second attempt whose trace row says which run it redoes; interrupted steps
-that may `write` or reach `external` are **left alone**, because nobody saw how
-far they got and repeating them could land the same effect twice. Those wait
-for `--redo <step>`, and a run holding one is `unjudged` rather than finished.
-
-A subject survives all of this. The card handed to a reviewer on a resume is
-rebuilt from the record, so it is the answer the upstream really gave, even
-when the Atenea that heard it is gone -- and if that upstream was itself
-redone, the review audits the attempt that stands rather than the one that was
-cut.
-
-### Money
-
-`budget_usd` on the graph is the grant; the shares on the steps divide it and
-are refused if they add up to more, because money is split rather than copied.
-
-What was **spent** reads as `unmeasured`, and will until something can report a
-charge: the agent report wire carries no cost and no token count, so there is
-no number to add up. That is why the column is empty rather than zero. A
-receipt printing `$0.00 spent` for a real run would be the same lie as list
-price on subscription traffic, and worse for looking audited.
-
-### Gates
-
-A plan is a thing to read before it is a thing to run, so those are two acts
-and two commands.
-
-```
-atenea workflow create plan.toml   # writes it down, spawns nothing
-atenea workflow launch <id>        # commits the grant and runs it
-```
-
-`atenea workflow run plan.toml` is both at once, and honest about it: the
-person typed the path, so the reading and the commissioning are the same act.
-Workflows are driven from the CLI only: the MCP `workflow.*` tools were removed
-(see #212).
-
-The graph may grow mid-run, three times at most. Nothing proposes an
-expansion yet: it comes from a file, the same as the first graph did.
-
-```
-atenea workflow propose --replaces old-step <id> next.toml
-atenea workflow approve <id>
-atenea workflow reject --reason "reads two files it should not" <id>
-```
-
-**Launch** and **approve** are the same mechanism and different words.
-Launching commits a grant that nothing had claimed; approving an expansion
-extends one already in flight. `atenea workflow show` prints the log, and a
-reader can tell which happened without counting ordinals.
-
-#### What a waiting gate does to the run
-
-**The queue freezes; what is already spawned finishes.** No step is cut and no
-new step is dispatched. A gate waiting overnight holds no processes at all --
-the running ones end on their own and are not replaced. Waiting has no
-deadline: nothing times out, because a question that expires into a default is
-not a question.
-
-A proposal may only replace steps that **have not started**. Not "not
-executed" -- a running step has begun to touch the world, and replanning it
-would be a decision about work already underway.
-
-Those two rules are one design. The only thing that moves a step out of
-`pending` is a dispatch, and dispatch is frozen while a gate is open, so no
-step a proposal names can change state while somebody reads it. **Staleness
-stops being a race to detect and becomes impossible to construct.** The digest
-below is the check on that reasoning, not a substitute for it: if the freeze
-ever had a hole, the digest is what refuses the plan that fell through it.
-
-Ctrl-C during a gate cuts the running steps and records the run as `aborted`,
-and **the gate stays open**. The question was never answered, and closing it
-on the way out would answer it.
-
-#### How the answer arrives
-
-**The gate is a row, not a reply.** It lives in the trace database beside the
-graph, which is what lets it outlive the Atenea that asked: if that process
-dies mid-wait, the record still says `waiting`, the pid on it is dead, and
-`atenea workflow resume <id>` takes the run over and finds the question
-exactly where it was left. The CLI and the MCP surface write the same row.
-
-#### What the record keeps
-
-The proposal verbatim, a digest of it, when it was asked, when it was
-answered, the decision, the reason on a rejection, and the hand.
-
-The digest is what an approval is an approval **of**. The engine recomputes it
-over what it is about to apply, immediately before applying, and refuses on
-any difference: an approval names an artifact, not a moment. Reordering the
-steps of a proposal is a different plan; listing the replaced steps in another
-order is not.
-
-**The hand is what this machine can tell, and it is not an identity.** It
-records an operating-system user and the surface the answer arrived through --
-`tutitoos via cli`, `tutitoos via mcp session 0da8`. Nothing here
-authenticates anybody, so a field named for a person holding only `$USER`
-would be a claim backed by nothing, the same shape as a receipt reporting a
-charge nobody measured. A real identity needs something that verifies one, and
-there is nothing on this machine that does.
-
-#### Where it stops
-
-Two ceilings, and they run out for different reasons, so they say so
-differently:
-
-```
-expansions exhausted (3 of 3)
-grant fully allocated ($0.50 of $0.50); this proposal asks for $0.25 more
-this proposal asks for $0.80 and the grant has $0.50 left ($0.50 of $1.00 allocated)
-```
-
-The last two are the same refusal and different facts: a grant with room left
-that this proposal overruns is not a grant that is spent, and saying the
-stronger sentence would send a reader looking for steps that do not exist.
-
-**Allocated, never spent.** The second is the sum of what the steps claim,
-refused when it passes the grant. Nothing on this machine can report a charge
--- see Money above -- so there is no spend to compare against and there will
-not be one until an agent can measure what it used. An expansion past the
-grant is refused when it is proposed, not when it is approved: a person should
-not be asked to bless a plan that cannot run.
-
-A rejected **launch** stops the run: nothing ran, and it reads `rejected`
-rather than `aborted` (nobody cut anything) or `finished`. A rejected
-**expansion** is not a rejected run -- the graph already approved carries on
-and finishes, because that graph is one somebody did approve.
+The workflow engine (`atenea workflow`, `[workflow]`, `[[workflow_profile]]`,
+the recovery pilot and the knowledge store with `[knowledge]` and
+`knowledge.context`) went away in #212. A settings file that still has any of
+the three tables is refused at load, like any unknown key (for example
+`unknown key(s): workflow, workflow.max_parallel_agent`). Delete the tables.
+`knowledge.sqlite` and the workflow tables inside `traces.db` stay on disk
+untouched; nothing reads them any more.
 
 
 ## MCP servers

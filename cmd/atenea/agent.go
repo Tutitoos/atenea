@@ -7,16 +7,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/agent/filereader"
 	"github.com/Tutitoos/atenea/internal/agent/modelagent"
-	"github.com/Tutitoos/atenea/internal/agent/plancheck"
 	"github.com/Tutitoos/atenea/internal/agent/planner"
 	"github.com/Tutitoos/atenea/internal/agent/reviewer"
 	"github.com/Tutitoos/atenea/internal/agent/semanticreviewer"
@@ -240,7 +241,8 @@ func openTraces(ctx context.Context, path string, out io.Writer, quiet bool) (*t
 }
 
 func printReport(out io.Writer, assignment contract.Assignment,
-	report contract.Report, quiet bool) {
+	report contract.Report, quiet bool,
+) {
 	if assignment.ID == "" {
 		return
 	}
@@ -318,6 +320,10 @@ func resultLine(value any) string {
 	return text
 }
 
+func interruptible() (context.Context, func()) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
 // cmdAgentRun is the far side of a spawn, not a command a person types.
 //
 // It is here rather than in its own binary because a second binary is a
@@ -340,8 +346,6 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 		return reviewer.Main(stdin, stdout)
 	case "semantic-reviewer":
 		return semanticreviewer.Main(stdin, stdout)
-	case "plan-check":
-		return plancheck.Main(stdin, stdout)
 	case "explore", "reader", "plan":
 		// These three call a model, so they are the only built-ins that can
 		// be waiting on somebody else when a person gives up. A signal has
@@ -375,14 +379,14 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 // builtinAgents is the closed list of agents this binary ships, and the only
 // names cmdAgentRun will act on or write to disk.
 var builtinAgents = []string{
-	"filereader", "reviewer", "semantic-reviewer", "plan-check", "explore", "reader", "plan", "implement", "review", "audit",
+	"filereader", "reviewer", "semantic-reviewer", "explore", "reader", "plan", "implement", "review", "audit",
 }
 
 func builtinAgent(kind string) bool { return slices.Contains(builtinAgents, kind) }
 
 func unknownBuiltinAgent(kind string) error {
 	return contract.Fail(contract.FailureNotFound,
-		"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, plan-check, explore, reader, plan, implement, review and audit", kind)
+		"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, explore, reader, plan, implement, review and audit", kind)
 }
 
 // AssignmentLogEnv names a directory where the assignment each built-in agent

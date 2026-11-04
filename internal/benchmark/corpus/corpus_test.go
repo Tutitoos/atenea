@@ -19,7 +19,7 @@ func testCorpusRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "benchmarks", "corpus", "v1")
+	return filepath.Join(filepath.Dir(file), "..", "..", "..", "benchmarks", "corpus", "v2")
 }
 
 func testManifest(t *testing.T) benchmark.Manifest {
@@ -33,16 +33,16 @@ func testManifest(t *testing.T) benchmark.Manifest {
 	}
 }
 
-func TestLoadFixedCorpusHasTwelveScenariosAndHashes(t *testing.T) {
+func TestLoadFixedCorpusHasNineScenariosAndHashes(t *testing.T) {
 	manifest, artifacts, err := Load(testCorpusRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ID != "atenea-acceptance" || len(manifest.Scenarios) != 12 {
+	if manifest.ID != "atenea-acceptance" || len(manifest.Scenarios) != 9 {
 		t.Fatalf("manifest = %+v", manifest)
 	}
-	if len(artifacts) != 11 {
-		t.Fatalf("artifact count = %d, want manifest, schema, and nine unique fixtures", len(artifacts))
+	if len(artifacts) != 8 {
+		t.Fatalf("artifact count = %d, want manifest, schema, and six unique fixtures", len(artifacts))
 	}
 	for _, artifact := range artifacts {
 		if len(artifact.SHA256) != 64 || artifact.Path == "" {
@@ -59,10 +59,10 @@ func TestRunProducesProviderFreeInitialEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.Counts.Total != 12 || evidence.Counts.Passed != 0 || evidence.Counts.Unsupported != 12 || evidence.Counts.Failed != 0 {
+	if evidence.Counts.Total != 9 || evidence.Counts.Passed != 0 || evidence.Counts.Unsupported != 9 || evidence.Counts.Failed != 0 {
 		t.Fatalf("counts = %+v", evidence.Counts)
 	}
-	if evidence.ManifestHash == "" || evidence.CorpusHash == "" || len(evidence.Results) != 12 {
+	if evidence.ManifestHash == "" || evidence.CorpusHash == "" || len(evidence.Results) != 9 {
 		t.Fatalf("evidence identity = %+v", evidence)
 	}
 	if strings.Contains(strings.ToLower(Markdown(evidence)), "provider invoked") {
@@ -157,7 +157,7 @@ func TestManifestCannotChangeCanonicalCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := strings.Replace(string(data), `"check": "go_context"`, `"check": "recovery_integration"`, 1)
+	changed := strings.Replace(string(data), `"check": "go_context"`, `"check": "typescript_context"`, 1)
 	if err := os.WriteFile(path, []byte(changed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -252,9 +252,9 @@ func TestValidateManifestRejectsWrongScenarioCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Scenarios = manifest.Scenarios[:11]
+	manifest.Scenarios = manifest.Scenarios[:8]
 	if err := ValidateManifest(manifest); err == nil {
-		t.Fatal("manifest with eleven scenarios was accepted")
+		t.Fatal("manifest with eight scenarios was accepted")
 	}
 }
 

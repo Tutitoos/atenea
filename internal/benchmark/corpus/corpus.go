@@ -19,7 +19,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,8 +32,10 @@ const (
 	ManifestName = "manifest.json"
 	// SchemaName is part of ATENEA's public orchestration contract.
 	SchemaName = "schema.json"
-	// CanonicalCorpusSHA256 is part of ATENEA's public orchestration contract.
-	CanonicalCorpusSHA256 = "bb57b8555c44fdd754bc72855c7899adda318677b48ee5696820a710efec98a5"
+	// CanonicalCorpusSHA256 pins benchmarks/corpus/v2 (S01-S09). Corpus v1 had
+	// twelve scenarios and the pin bb57b855...98a5; the code verifies only the
+	// pinned version, so v1 stays on disk as historical evidence.
+	CanonicalCorpusSHA256 = "d642cd100829353a9483dc1c1824c55798aafae633ce0c43a771f5f05cd26490"
 )
 
 // State is part of ATENEA's public orchestration contract.
@@ -94,9 +95,6 @@ var canonicalCatalog = []ScenarioSpec{
 	{ID: "S07", Title: "Dart semantic implementation coverage", Capability: "symbol.implementations", Language: "dart", Check: "dart_implementations", Fixture: "fixtures/dart/repository.dart", AllowedStates: []State{Passed, Failed, Unsupported}},
 	{ID: "S08", Title: "MCP legacy protocol declaration", Capability: "mcp.compatibility", Language: "protocol", Check: "protocol_schema", Fixture: "fixtures/protocol-2025.json", ProtocolVersion: "2025-06-18", Transport: "stdio", AllowedStates: []State{Passed, Failed, Unsupported}},
 	{ID: "S09", Title: "MCP current protocol declaration", Capability: "mcp.compatibility", Language: "protocol", Check: "protocol_schema", Fixture: "fixtures/protocol-2026.json", ProtocolVersion: "2026-07-28", Transport: "streamable-http", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S10", Title: "Plan progress rendering", Capability: "plan.progress", Language: "markdown", Check: "progress_rendering", Fixture: "fixtures/progress.md", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S11", Title: "Bounded recovery baseline", Capability: "workflow.recovery", Language: "integration", Check: "recovery_integration", Fixture: "fixtures/recovery.json", AllowedStates: []State{Passed, Failed, Unsupported}},
-	{ID: "S12", Title: "Client chat visibility", Capability: "chat.visibility", Language: "integration", Check: "chat_visibility_integration", Fixture: "fixtures/chat-visibility.json", AllowedStates: []State{Passed, Failed, Unsupported}},
 }
 
 // Catalog is part of ATENEA's public orchestration contract.
@@ -454,12 +452,6 @@ func checkScenario(snapshot Snapshot, spec ScenarioSpec) (State, string) {
 		return Unsupported, "Dart semantic implementation evidence is not supported locally"
 	case "protocol_schema":
 		return checkProtocol(data, spec)
-	case "progress_rendering":
-		return checkProgress(data)
-	case "recovery_integration":
-		return Unsupported, "provider failure injection requires an explicit integration run"
-	case "chat_visibility_integration":
-		return Unsupported, "live client chat rendering requires a host integration run"
 	default:
 		return Failed, "unknown canonical check " + spec.Check
 	}
@@ -614,25 +606,6 @@ func checkProtocol(data []byte, spec ScenarioSpec) (State, string) {
 	return Passed, "protocol version and transport match the canonical scenario"
 }
 
-var progressRE = regexp.MustCompile(`(?m)([0-9]+)\s*%\s*·\s*([0-9]+)/([0-9]+)\s+puntos\s+completados`)
-
-func checkProgress(data []byte) (State, string) {
-	text := string(data)
-	progress := progressRE.FindStringSubmatch(text)
-	if len(progress) != 4 {
-		return Failed, "progress fixture has no parseable percentage and counter"
-	}
-	percent, _ := strconv.Atoi(progress[1])
-	completed, _ := strconv.Atoi(progress[2])
-	total, _ := strconv.Atoi(progress[3])
-	checked := len(regexp.MustCompile(`(?m)^- \[x\]`).FindAllString(text, -1))
-	unchecked := len(regexp.MustCompile(`(?m)^- \[ \]`).FindAllString(text, -1))
-	if total != checked+unchecked || completed != checked || total == 0 || percent != completed*100/total {
-		return Failed, "progress percentage, checkbox count, and total disagree"
-	}
-	return Passed, "progress counter and checkbox states are internally consistent"
-}
-
 func validatedRoot(root string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", errors.New("corpus root is required")
@@ -702,6 +675,7 @@ func artifactHash(artifacts []ArtifactHash, path string) string {
 	}
 	return ""
 }
+
 func hashArtifacts(artifacts []ArtifactHash) string {
 	values := make([]string, 0, len(artifacts))
 	for _, artifact := range artifacts {
@@ -710,6 +684,7 @@ func hashArtifacts(artifacts []ArtifactHash) string {
 	sort.Strings(values)
 	return hashBytes([]byte(strings.Join(values, "\n") + "\n"))
 }
+
 func containsState(states []State, wanted State) bool {
 	for _, state := range states {
 		if state == wanted {
@@ -718,6 +693,7 @@ func containsState(states []State, wanted State) bool {
 	}
 	return false
 }
+
 func sameStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

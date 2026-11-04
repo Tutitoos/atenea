@@ -33,7 +33,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/ipc"
-	"github.com/Tutitoos/atenea/internal/knowledge"
 	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
@@ -47,10 +46,8 @@ import (
 	"github.com/Tutitoos/atenea/internal/resultcache"
 	"github.com/Tutitoos/atenea/internal/runner/local"
 	"github.com/Tutitoos/atenea/internal/selector"
-	"github.com/Tutitoos/atenea/internal/sourceidentity"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/internal/toolstats"
-	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -121,14 +118,6 @@ type Core struct {
 	processes *supervisor.Supervisor
 	agent     *orchestrator.Agent
 	events    *observability.Hub
-	// knowledgeStore is optional. When absent, existing context paths keep
-	// their behavior; when configured, callers opt into the verified/fresh
-	// context seam explicitly.
-	knowledgeStore      *knowledge.Store
-	knowledgeWorkflow   *workflow.Store
-	knowledgeProbe      func(context.Context, knowledge.Entry) (knowledge.ProbeResult, error)
-	knowledgeConfigured bool
-	knowledgeInitErr    error
 
 	started time.Time
 	// role is what this process is allowed to maintain. It is kept so the
@@ -474,58 +463,29 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			}
 		}
 	}
-	var knowledgeStore *knowledge.Store
-	var knowledgeWorkflow *workflow.Store
-	var knowledgeInitErr error
-	if cfg.Knowledge.Enabled {
-		knowledgePath := cfg.Knowledge.Path
-		if knowledgePath == "" {
-			knowledgePath = filepath.Join(platform.StateDir(), "knowledge.sqlite")
-		}
-		workflowPath := cfg.Knowledge.WorkflowPath
-		if workflowPath == "" {
-			workflowPath = filepath.Join(platform.StateDir(), "traces.db")
-		}
-		knowledgeWorkflow, knowledgeInitErr = workflow.Open(context.Background(), workflowPath)
-		if knowledgeInitErr == nil {
-			knowledgeStore, knowledgeInitErr = knowledge.Open(knowledgePath,
-				knowledge.WithEvidenceResolver(workflow.KnowledgeEvidenceResolver{Store: knowledgeWorkflow}))
-		}
-		if knowledgeInitErr != nil {
-			if knowledgeWorkflow != nil {
-				_ = knowledgeWorkflow.Close()
-				knowledgeWorkflow = nil
-			}
-			slog.Warn("knowledge store unavailable; MCP surface will fail closed", "error", knowledgeInitErr)
-		}
-	}
 	built = true
 	return &Core{
-		graphMaintenance:    graphMaintenance,
-		settings:            cfg,
-		backends:            backends,
-		readings:            readings,
-		catalog:             catalog,
-		chooser:             chooser,
-		runners:             runners,
-		checkpoints:         checkpoints,
-		measurements:        store,
-		stats:               stats,
-		notebook:            book,
-		copies:              copies,
-		recovered:           found,
-		beats:               beats,
-		processes:           procs,
-		agent:               agent,
-		events:              events,
-		sessions:            make(map[string]*Session),
-		started:             time.Now(),
-		role:                role,
-		upkeep:              upkeep,
-		knowledgeStore:      knowledgeStore,
-		knowledgeWorkflow:   knowledgeWorkflow,
-		knowledgeConfigured: cfg.Knowledge.Enabled,
-		knowledgeInitErr:    knowledgeInitErr,
+		graphMaintenance: graphMaintenance,
+		settings:         cfg,
+		backends:         backends,
+		readings:         readings,
+		catalog:          catalog,
+		chooser:          chooser,
+		runners:          runners,
+		checkpoints:      checkpoints,
+		measurements:     store,
+		stats:            stats,
+		notebook:         book,
+		copies:           copies,
+		recovered:        found,
+		beats:            beats,
+		processes:        procs,
+		agent:            agent,
+		events:           events,
+		sessions:         make(map[string]*Session),
+		started:          time.Now(),
+		role:             role,
+		upkeep:           upkeep,
 	}, nil
 }
 
@@ -1136,149 +1096,6 @@ func (c *Core) Registry() *registry.Registry { return c.catalog }
 
 // Settings exposes the settings the core was built from.
 func (c *Core) Settings() config.Config { return c.settings }
-
-// ConfigureKnowledge attaches the optional verified knowledge service. It is
-// deliberately explicit so installations without the P15 store retain their
-// existing context behavior.
-func (c *Core) ConfigureKnowledge(store *knowledge.Store) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.knowledgeStore = store
-	c.knowledgeConfigured = store != nil
-	c.mu.Unlock()
-}
-
-// ConfigureKnowledgeProbe supplies the authorized provider revalidation seam
-// used by the read-only MCP surface. A missing probe fails closed.
-func (c *Core) ConfigureKnowledgeProbe(probe func(context.Context, knowledge.Entry) (knowledge.ProbeResult, error)) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.knowledgeProbe = probe
-	c.mu.Unlock()
-}
-
-func (c *Core) knowledgeSurfaceEnabled() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.knowledgeConfigured
-}
-
-func (c *Core) prepareKnowledgeMCP(ctx context.Context, scope knowledge.Scope, permission knowledge.Permission) ([]knowledge.Entry, error) {
-	if c == nil {
-		return nil, fmt.Errorf("core: unavailable")
-	}
-	c.mu.Lock()
-	store, probe, initErr := c.knowledgeStore, c.knowledgeProbe, c.knowledgeInitErr
-	wf := c.knowledgeWorkflow
-	c.mu.Unlock()
-	if store == nil {
-		if initErr != nil {
-			return nil, fmt.Errorf("core: knowledge store unavailable: %w", initErr)
-		}
-		return nil, fmt.Errorf("core: knowledge store is not configured")
-	}
-	if probe == nil {
-		probe = func(ctx context.Context, entry knowledge.Entry) (knowledge.ProbeResult, error) {
-			return c.probeWorkflowKnowledge(ctx, wf, entry)
-		}
-	}
-	return c.PrepareKnowledge(ctx, scope, permission, probe)
-}
-
-func (c *Core) probeWorkflowKnowledge(ctx context.Context, wf *workflow.Store, entry knowledge.Entry) (knowledge.ProbeResult, error) {
-	if wf == nil {
-		return knowledge.ProbeResult{}, fmt.Errorf("workflow evidence store is unavailable")
-	}
-	pointID := ""
-	for _, source := range entry.Sources {
-		prefix := "workflow:"
-		if strings.HasPrefix(source.ID, prefix) {
-			parts := strings.Split(source.ID, ":")
-			if len(parts) >= 3 {
-				pointID = parts[len(parts)-1]
-			}
-		}
-	}
-	if pointID == "" {
-		return knowledge.ProbeResult{}, fmt.Errorf("knowledge evidence has no workflow point")
-	}
-	for _, dependency := range entry.Dependencies {
-		if dependency.Provider.Name != "atenea-workflow" && dependency.Provider.Name != "workflow" {
-			return knowledge.ProbeResult{}, fmt.Errorf("unsupported knowledge provider %q", dependency.Provider.Name)
-		}
-		if dependency.Provider.Instance == "" || dependency.Snapshot == "" || !strings.EqualFold(dependency.Freshness, "fresh") {
-			return knowledge.ProbeResult{}, fmt.Errorf("workflow dependency is not verifiable")
-		}
-		run, err := wf.Load(ctx, dependency.Provider.Instance)
-		if err != nil || run.SourceFingerprint == "" || run.SourceFingerprint != dependency.Snapshot ||
-			(dependency.Source.Digest != "" && dependency.Source.Digest != run.SourceFingerprint) {
-			return knowledge.ProbeResult{}, fmt.Errorf("workflow evidence is stale")
-		}
-		if run.Repository != entry.Scope.RepositoryID {
-			return knowledge.ProbeResult{}, fmt.Errorf("workflow evidence repository mismatch")
-		}
-		if _, err := (workflow.KnowledgeEvidenceResolver{Store: wf}).Resolve(ctx, run.ID, entry.Scope, pointID, entry.KnowledgeDigest); err != nil {
-			return knowledge.ProbeResult{}, fmt.Errorf("workflow acceptance is stale: %w", err)
-		}
-		repo, err := c.catalog.Repository(entry.Scope.RepositoryID)
-		if err != nil {
-			return knowledge.ProbeResult{}, fmt.Errorf("knowledge repository is unavailable: %w", err)
-		}
-		identity, err := sourceidentity.Discover(ctx, repo.Path)
-		if err != nil || identity.Fingerprint == "" || identity.Fingerprint != run.SourceFingerprint {
-			return knowledge.ProbeResult{}, fmt.Errorf("repository source changed since acceptance")
-		}
-	}
-	if len(entry.Sources) == 0 || len(entry.Dependencies) == 0 {
-		return knowledge.ProbeResult{}, fmt.Errorf("knowledge evidence is incomplete")
-	}
-	dependencies := slices.Clone(entry.Dependencies)
-	now := time.Now().UTC()
-	for i := range dependencies {
-		dependencies[i].Freshness = "fresh"
-		dependencies[i].CheckedAt = now
-	}
-	return knowledge.ProbeResult{Complete: true, Success: true, Sources: slices.Clone(entry.Sources), Dependencies: dependencies}, nil
-}
-
-// PrepareKnowledge is the opt-in production context path. ContextProvider
-// performs the permission check and provider revalidation before returning
-// anything, so candidates, stale rows and legacy history cannot leak in.
-func (c *Core) PrepareKnowledge(ctx context.Context, scope knowledge.Scope, permission knowledge.Permission, probe func(context.Context, knowledge.Entry) (knowledge.ProbeResult, error)) ([]knowledge.Entry, error) {
-	if c == nil {
-		return nil, nil
-	}
-	c.mu.Lock()
-	store := c.knowledgeStore
-	c.mu.Unlock()
-	if store == nil {
-		return nil, nil
-	}
-	return (knowledge.ContextProvider{Store: store, Scope: scope, Permission: permission, Probe: probe}).Prepare(ctx)
-}
-
-// PromoteKnowledge is the acceptance gate hook used after a workflow point
-// has been accepted. Evidence is resolved by the store's authoritative
-// workflow resolver; callers cannot pass receipts or booleans.
-func (c *Core) PromoteKnowledge(ctx context.Context, id string, gate knowledge.PromotionGate, permission knowledge.Permission) error {
-	if c == nil {
-		return fmt.Errorf("core: nil core")
-	}
-	c.mu.Lock()
-	store := c.knowledgeStore
-	c.mu.Unlock()
-	if store == nil {
-		return fmt.Errorf("core: knowledge store is not configured")
-	}
-	return (knowledge.AcceptanceGate{Store: store}).Promote(ctx, id, gate, permission)
-}
 
 // Select answers which implementation should serve a capability on a
 // repository, along with the trace that justifies it.
@@ -1913,7 +1730,6 @@ func (c *Core) Shutdown() error {
 		c.mu.Unlock()
 		c.stopProcesses()
 		c.closeBackends()
-		c.closeKnowledge()
 		stopErr = c.settle()
 		return stopErr
 	case <-time.After(c.settings.Core.ShutdownGrace):
@@ -1923,24 +1739,10 @@ func (c *Core) Shutdown() error {
 		// not the thing to throw away because something else overran.
 		c.stopProcesses()
 		c.closeBackends()
-		c.closeKnowledge()
 		_ = c.settle()
 		stopErr = contract.Fail(contract.FailureTimeout,
 			"in-flight work did not finish within %s", c.settings.Core.ShutdownGrace)
 		return stopErr
-	}
-}
-
-func (c *Core) closeKnowledge() {
-	c.mu.Lock()
-	store, workflowStore := c.knowledgeStore, c.knowledgeWorkflow
-	c.knowledgeStore, c.knowledgeWorkflow = nil, nil
-	c.mu.Unlock()
-	if store != nil {
-		_ = store.Close()
-	}
-	if workflowStore != nil {
-		_ = workflowStore.Close()
 	}
 }
 

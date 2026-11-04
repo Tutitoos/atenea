@@ -309,7 +309,7 @@ func TestToolsListIsTheShippedCatalogue(t *testing.T) {
 		if tool["name"] == "code.search" {
 			search = tool
 		}
-		if name, _ := tool["name"].(string); strings.HasPrefix(name, "workflow.") || name == "decision.plan" {
+		if name, _ := tool["name"].(string); strings.HasPrefix(name, "workflow.") || name == "decision.plan" || name == "knowledge.context" {
 			t.Errorf("%s was removed from Atenea but is still listed", name)
 		}
 	}
@@ -443,45 +443,6 @@ func TestWorkspaceContextMCPUsesExplicitTargetsAndKeepsRowsSeparate(t *testing.T
 	rows := body["repositories"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["id"] != entry["id"] {
 		t.Fatalf("workspace rows lost repository identity: %+v", body)
-	}
-}
-
-func TestKnowledgeContextIsOptionalAndReadOnly(t *testing.T) {
-	// The default configuration keeps the P15 surface out of the catalog.
-	disabled := buildService(t, mcpSettings(t))
-	defer serve(t, disabled)()
-	d := dial(t)
-	result(t, d.handshake("omp"), "initialize")
-	listed := result(t, d.call("tools/list", nil), "tools/list")
-	for _, raw := range listed["tools"].([]any) {
-		if raw.(map[string]any)["name"] == "knowledge.context" {
-			t.Fatal("knowledge.context advertised while knowledge is disabled")
-		}
-	}
-	d.close()
-
-	dir := t.TempDir()
-	settings := mcpSettings(t) + fmt.Sprintf("\n[knowledge]\nenabled = true\npath = %q\nworkflow_path = %q\n", filepath.Join(dir, "knowledge.sqlite"), filepath.Join(dir, "traces.db"))
-	enabled := buildService(t, settings)
-	defer serve(t, enabled)()
-	c := dial(t)
-	result(t, c.handshake("omp"), "initialize")
-	listed = result(t, c.call("tools/list", nil), "tools/list")
-	found := false
-	for _, raw := range listed["tools"].([]any) {
-		if raw.(map[string]any)["name"] == "knowledge.context" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("knowledge.context was not advertised when configured")
-	}
-	answer := c.call("tools/call", map[string]any{
-		"name":      "knowledge.context",
-		"arguments": map[string]any{"scope": map[string]any{"project_id": "p", "repository_id": "r"}},
-	})
-	if errObj, ok := answer["error"].(map[string]any); !ok || !strings.Contains(fmt.Sprint(errObj["message"]), "not authorized") {
-		t.Fatalf("cross-session knowledge scope was not rejected: %v", answer)
 	}
 }
 

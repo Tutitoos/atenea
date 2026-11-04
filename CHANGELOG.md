@@ -93,6 +93,27 @@ are left alone and nothing reads them; delete them if you want. The contract
 version is unchanged. Dated audit evidence that measured `atenea decide` is kept
 and marked as such (#218).
 
+The workflow engine is removed, with what only it fed: the `atenea workflow`
+commands (`create`, `launch`, `run`, `propose`, `approve`, `reject`, `answer`,
+`cancel`, `resume`, `redo`, `native-fork`, `list`, `status`, `export`,
+`compare`), `atenea agents scorecard`, `atenea recovery pilot` and the recovery
+pilot, the `plan-check` built-in agent and its shipped `[[agent]]` block, and
+the knowledge store with its `knowledge.context` MCP tool. **Delete the
+`[workflow]`, `[[workflow_profile]]` and `[knowledge]` tables** from your
+settings file: it is refused at load with `unknown key(s): workflow, ...`,
+`workflow_profile, ...` or `knowledge, ...`. `knowledge.sqlite` and the workflow
+tables in `traces.db` are left on disk and nothing reads them; core startup,
+history retention and the backup quiesce are unchanged. Acceptance corpus **v2**
+(`benchmarks/corpus/v2`, S01-S09, fixtures byte-identical to v1) replaces v1:
+scenarios S10-S12, their fixtures and the `recovery` and `tracking` gates are
+gone, and `CanonicalCorpusSHA256` is now
+`d642cd100829353a9483dc1c1824c55798aafae633ce0c43a771f5f05cd26490`. v1 and the
+dated reports under `benchmarks/runs/` are kept as historical evidence but the
+code no longer verifies them. The contract version is unchanged. Every source
+change here invalidates the real Codex certification: **repeat it before the
+next release.** Dated audit evidence that measured the engine is kept and marked
+as such (#219).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

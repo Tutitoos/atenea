@@ -17,7 +17,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
-	"github.com/Tutitoos/atenea/internal/knowledge"
 	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
@@ -84,7 +83,6 @@ const (
 const (
 	toolListRepositories = "catalog.repositories"
 	toolWorkspaceContext = workspacecontext.Capability
-	toolKnowledgeContext = "knowledge.context"
 )
 
 // conversation is one connection's worth of state, which is exactly one chat.
@@ -617,9 +615,6 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	})
 	tools = append(tools, v.repositoriesTool())
 	tools = append(tools, v.workspaceContextTool())
-	if v.core.knowledgeSurfaceEnabled() {
-		tools = append(tools, v.knowledgeContextTool())
-	}
 	for _, capability := range capabilities {
 		if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
 			continue
@@ -937,9 +932,6 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if params.Name == toolWorkspaceContext {
 		return v.workspaceContext(ctx, arguments)
 	}
-	if params.Name == toolKnowledgeContext {
-		return v.knowledgeContext(ctx, arguments)
-	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
 		if v.policy.Fallback == "diagnostic" {
@@ -1043,71 +1035,6 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		"structuredContent": answer,
 		"isError":           false,
 	}, nil
-}
-
-func (v *conversation) knowledgeContextTool() map[string]any {
-	return map[string]any{
-		"name":        toolKnowledgeContext,
-		"description": "Read verified, freshly revalidated knowledge for one explicit project and repository scope.",
-		"inputSchema": map[string]any{
-			"type": "object", "additionalProperties": false,
-			"properties": map[string]any{
-				"scope": map[string]any{
-					"type": "object", "additionalProperties": false,
-					"properties": map[string]any{
-						"project_id":    map[string]any{"type": "string"},
-						"repository_id": map[string]any{"type": "string"},
-					}, "required": []string{"project_id", "repository_id"},
-				},
-			},
-			"required": []string{"scope"},
-		},
-	}
-}
-
-func (v *conversation) knowledgeContext(ctx context.Context, arguments map[string]any) (any, *rpcError) {
-	encoded, err := json.Marshal(arguments)
-	if err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: invalid arguments"}
-	}
-	var params struct {
-		Scope struct {
-			ProjectID    string `json:"project_id"`
-			RepositoryID string `json:"repository_id"`
-		} `json:"scope"`
-	}
-	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&params); err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: " + err.Error()}
-	}
-	projectID, repositoryID := strings.TrimSpace(params.Scope.ProjectID), strings.TrimSpace(params.Scope.RepositoryID)
-	if projectID == "" || repositoryID == "" {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: scope.project_id and scope.repository_id are required"}
-	}
-	// The scope on the wire is an assertion, not an authority. A chat is
-	// entitled only to the repository selected when its session opened; it
-	// cannot name another project or repository to widen its knowledge view.
-	authorized := strings.TrimSpace(v.session.primaryProject)
-	if authorized == "" {
-		repositories := v.core.catalog.Repositories()
-		if len(repositories) == 1 {
-			authorized = repositories[0].ID
-		}
-	}
-	if authorized == "" || projectID != authorized || repositoryID != authorized {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: scope is not authorized for this session"}
-	}
-	if _, err := v.core.catalog.Repository(repositoryID); err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: repository is not configured"}
-	}
-	permission := knowledge.Permission{SubjectID: v.session.id, ProjectID: projectID, RepositoryID: repositoryID, Read: true, ProjectMember: true}
-	entries, err := v.core.prepareKnowledgeMCP(ctx, knowledge.Scope{ProjectID: projectID, RepositoryID: repositoryID}, permission)
-	if err != nil {
-		return nil, &rpcError{Code: codeInternal, Message: "knowledge.context: " + err.Error()}
-	}
-	body := map[string]any{"scope": map[string]string{"project_id": projectID, "repository_id": repositoryID}, "entries": entries}
-	return toolResult(body)
 }
 
 // rawCall forwards one tool to its backend and files the receipt for it.

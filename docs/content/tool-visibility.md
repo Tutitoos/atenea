@@ -8,17 +8,9 @@ or raw-tool call in the conversation's language, naming the advertised tool,
 target and purpose. Parallel calls may share a message with one line per call.
 Repeated calls still get an announcement.
 
-Workflow dispatches started from the CLI also write a deterministic activity
-notice to the workflow store before the agent process starts.
-`atenea workflow show --activity-after` takes the cursor of the last notice seen
-and prints only later ones. It prints a saved notice immediately before
-dispatch. A repeated invocation has its own notice, while replaying the same
-invocation identifier is deduplicated. Approved graph expansions use `PLAN` in
-place of `ATENEA` and are saved before the plan mutation.
-
 Over MCP, `workspace.context` sends one `notifications/message` activity line
-before it dispatches. The workflow and decision tools that once carried durable
-activity cursors (`workflow.*`, `decision.plan`) are no longer part of Atenea
+before it dispatches. The workflow engine (`atenea workflow`) and the decision and
+workflow tools that once carried durable activity cursors (`workflow.*`, `decision.plan`) are no longer part of Atenea
 (see #212).
 
 The activity line is an intent record. Provider selection and results remain in
@@ -86,7 +78,7 @@ Original structured results and schemas are unchanged. Receipts contain no copie
 of payloads, source code, health-error text or credentials; exclusions use safe
 categories such as `repository_scope`, `not_attached`, `constraints` and `health`.
 
-Workflow agents receive an invocation-scoped Unix activity channel. Atenea's MCP
+Agent processes receive an invocation-scoped Unix activity channel. Atenea's MCP
 relay and the Codex `PreToolUse` hook wait for its acknowledgement before allowing
 the tool call, so internal Atenea MCP calls and Codex Bash, ApplyPatch, MCP and
 local tools are persisted and published first. Tool arguments and results never
@@ -94,7 +86,7 @@ cross this channel. One public capability invocation remains one notice even whe
 its adapter makes several private Kivgraph MCP requests. Native tools in clients
 without a pre-tool event remain partial and must use client-visible stepped
 execution until their real activity surface is validated in the compatibility
-pilot. Local reads outside an Atenea workflow are not attributed to a provider.
+pilot. Local reads outside an Atenea dispatch are not attributed to a provider.
 Atenea owns these instructions rather than
 forwarding arbitrary upstream prose about tools absent from its catalog.
 

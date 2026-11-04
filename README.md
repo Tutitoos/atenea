@@ -29,8 +29,7 @@ documentation at its release tag. Contract 3.x configurations require the
 - Routes capabilities such as `code.search` through repository constraints,
   attached runners, provider health and measured time, tokens and memory.
 - Runs one capability with `ask`, or explores, plans, dispatches and reviews
-  a commission with `task`. Declared agents and dependency graphs are available
-  through `agent` and `workflow`.
+  a commission with `task`. Declared agents are available through `agent`.
 - Exposes configured capabilities and explicitly declared raw MCP tools through
   one MCP connection. Clients discover the actual tool surface at runtime.
 - Applies effect permissions and spending grants, records attempts and run
@@ -346,7 +345,7 @@ and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 | Path | Contents |
 | --- | --- |
 | [`cmd/`](cmd/) | CLI and benchmark entry points |
-| [`internal/`](internal/) | Core, adapters, runners, agents, workflows, storage and transports |
+| [`internal/`](internal/) | Core, adapters, runners, agents, storage and transports |
 | [`pkg/contract/`](pkg/contract/) | Versioned capability and adapter contracts |
 | [`helper/`](helper/) | Swift desktop helper |
 | [`docs/`](docs/) | Hugo documentation sources and configuration |

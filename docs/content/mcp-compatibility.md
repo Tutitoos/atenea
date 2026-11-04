@@ -18,8 +18,7 @@ requests keep JSON-RPC framing and use the same reserved metadata.
 
 The core creates a temporary application session for each modern dispatch and
 closes it before sending the response. The observed client and capabilities
-are context, never a permission grant. A workflow can continue across calls
-only through its explicit persisted identifier; transport reconnects do not
+are context, never a permission grant. Transport reconnects do not
 carry application permissions or hidden client state.
 
 Both transports preserve cancellation semantics for their era. HTTP modern
