@@ -18,7 +18,6 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"slices"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
@@ -30,7 +29,6 @@ type jsonResult struct {
 	Run     string `json:"run"`
 	Task    string `json:"task"`
 	Verdict string `json:"verdict"`
-	Matches *int   `json:"matches,omitempty"`
 	SpentMS int64  `json:"spent_ms"`
 	// ElapsedMS is the wall beside the sum. A reader with only the sum cannot
 	// tell a wave from a queue, and the sum is the bigger number of the two.
@@ -122,15 +120,6 @@ func printResultJSON(out io.Writer, result *orchestrator.Result) error {
 		ElapsedMS:  result.Elapsed.Milliseconds(),
 		ChargedUSD: measuredUSD(result.SpentUSD, result.SpentUSDKnown),
 		Steps:      make([]jsonStep, 0, len(result.Steps)),
-	}
-	// Matches are counted out of the split-up commission; see printResult for
-	// why a direct ask leaves this out rather than printing a zero nobody
-	// measured.
-	if slices.ContainsFunc(result.Phases, func(p orchestrator.Phase) bool {
-		return p.Name == orchestrator.PhaseWork
-	}) {
-		matches := result.Matches
-		js.Matches = &matches
 	}
 	for _, phase := range result.Phases {
 		js.Phases = append(js.Phases, jsonPhase{

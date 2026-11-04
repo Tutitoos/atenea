@@ -28,14 +28,14 @@ func overlapped() *orchestrator.Result {
 		Task:    "TODO",
 		Verdict: contract.VerdictOK,
 		Steps: []orchestrator.StepResult{
-			step("explore-atenea", orchestrator.PhaseExplore, 775*time.Millisecond),
-			step("explore-lanplay", orchestrator.PhaseExplore, 778*time.Millisecond),
-			step("search-atenea", orchestrator.PhaseWork, 1728*time.Millisecond),
-			step("search-lanplay", orchestrator.PhaseWork, 454*time.Millisecond),
+			step("explore-atenea", "explore", 775*time.Millisecond),
+			step("explore-lanplay", "explore", 778*time.Millisecond),
+			step("search-atenea", "work", 1728*time.Millisecond),
+			step("search-lanplay", "work", 454*time.Millisecond),
 		},
 		Phases: []orchestrator.Phase{
-			{Name: orchestrator.PhaseExplore, Steps: 2, Spent: contract.Sample{Duration: 1553 * time.Millisecond}, Elapsed: 778 * time.Millisecond},
-			{Name: orchestrator.PhaseWork, Steps: 2, Spent: contract.Sample{Duration: 2183 * time.Millisecond}, Elapsed: 1911 * time.Millisecond},
+			{Name: "explore", Steps: 2, Spent: contract.Sample{Duration: 1553 * time.Millisecond}, Elapsed: 778 * time.Millisecond},
+			{Name: "work", Steps: 2, Spent: contract.Sample{Duration: 2183 * time.Millisecond}, Elapsed: 1911 * time.Millisecond},
 		},
 		Spent:   contract.Sample{Duration: 3735 * time.Millisecond},
 		Elapsed: 2689 * time.Millisecond,
@@ -76,13 +76,13 @@ func TestEachPhaseSaysWhatItTookAndWhatItCost(t *testing.T) {
 	printResult(&out, overlapped(), false)
 	screen := out.String()
 
-	explore := lineWith(t, screen, orchestrator.PhaseExplore)
+	explore := lineWith(t, screen, "explore")
 	for _, want := range []string{"1.553s", "778ms"} {
 		if !strings.Contains(explore, want) {
 			t.Errorf("the explore line does not carry %s: %q", want, explore)
 		}
 	}
-	work := lineWith(t, screen, orchestrator.PhaseWork)
+	work := lineWith(t, screen, "work")
 	for _, want := range []string{"2.183s", "1.911s"} {
 		if !strings.Contains(work, want) {
 			t.Errorf("the work line does not carry %s: %q", want, work)

@@ -51,12 +51,7 @@ Commands:
   command NAME           Read-only chat command; use --markdown, --json or --text
   doctor                 Check desktop client/profile compatibility and MCP wiring
   select CAPABILITY      Ask the funnel who should answer a capability
-  task "TEXT"            Hand a commission to the orchestrator; --budget USD
-                         funds this one above the settings file
   ask CAPABILITY         Dispatch one capability against one repository
-  resume RUN_ID          Pick an interrupted or failed commission back up;
-                         --budget USD replaces what remains of the grant.
-                         resume --list shows every run still worth it
   catalog                List capabilities, providers and repositories in full
   dashboard ID            Check and open the dashboard declared by an MCP server
   intent [--json]        Read the client config this repo carries and say how
@@ -218,20 +213,6 @@ Flags:
   --repo ID   repository id (defaults to the only one registered)
   --prefer ID one-call implementation preference (e.g. ripgrep, codex.search, claude.search)
 `,
-	"task": `Usage: atenea task "TEXT" [flags]
-
-Hand a commission to the orchestrator in the user's own words.
-
-Flags:
-  --repo ID       repository to act on; repeat for several (default: all)
-  --allow EFFECT  effect beyond reading to grant this commission; repeat for
-                  several (default: none)
-  --budget USD    what this commission may spend (default: the settings file)
-  --confirm       show the execution summary and require an interactive TTY confirmation
-  --trace         print the plan, the funnel and every review
-  --json          print the result as json instead of prose (always
-                  complete, ignores --trace)
-`,
 	"ask": `Usage: atenea ask CAPABILITY [flags]
 
 Dispatch one capability against one repository.
@@ -247,21 +228,6 @@ Flags:
   --budget USD    what this question may spend (default: the settings file)
   --prefer ID     one-call implementation preference (e.g. ripgrep, codex.search, claude.search)
   --confirm       show the execution summary and require an interactive TTY confirmation
-  --trace         print the plan, the funnel and every review
-  --json          print the result as json instead of prose (always
-                  complete, ignores --trace)
-`,
-	"resume": `Usage: atenea resume RUN_ID [flags]
-       atenea resume --list
-
-Pick an interrupted or failed commission back up. --list shows every run
-still worth resuming instead of resuming any of them.
-
-Flags:
-  --budget USD    replace what remains of the grant instead of adding to it
-                  (default: what is left)
-  --allow EFFECT  effect to add beyond what the commission already carries;
-                  repeat for several (default: none)
   --trace         print the plan, the funnel and every review
   --json          print the result as json instead of prose (always
                   complete, ignores --trace)
@@ -636,12 +602,8 @@ func run(args []string, out io.Writer) error {
 		return cmdIntent(settingsPath, commandArgs, out)
 	case "select":
 		return cmdSelect(settingsPath, commandArgs, out)
-	case "task":
-		return cmdTask(settingsPath, commandArgs, out)
 	case "ask":
 		return cmdAsk(settingsPath, commandArgs, out)
-	case "resume":
-		return cmdResume(settingsPath, commandArgs, out)
 	case "run":
 		if err := noArguments("run", commandArgs); err != nil {
 			return err
@@ -2097,77 +2059,6 @@ func printDecision(out io.Writer, decision selector.Decision, selectErr error) {
 	}
 }
 
-// cmdTask hands a commission to the orchestrator and prints the answer at two
-// heights: the summary always, the trace only when asked for. Keeping the full
-// record and showing a short one is the same idea as the status screen.
-func cmdTask(settingsPath string, args []string, out io.Writer) error {
-	// The commission comes first and the flags after it. Go's flag package
-	// stops at the first positional argument, so accepting them in any order
-	// would mean hand-rolling the parser for no gain.
-	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		return contract.Fail(contract.FailureInvalidInput,
-			`task needs the commission first, e.g. atenea task "find every TODO" --trace`)
-	}
-	text, args := strings.TrimSpace(args[0]), args[1:]
-
-	var repositories repoList
-	var allow effectList
-	var trace bool
-	var jsonOut bool
-	var confirm bool
-	var budget float64
-	flags := flag.NewFlagSet("task", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	flags.Var(&repositories, "repo", "repository to act on; repeat for several (default: all)")
-	flags.Var(&allow, "allow", "effect beyond reading to grant this commission; repeat for several (default: none)")
-	flags.Float64Var(&budget, "budget", 0, "what this commission may spend in usd (default: the settings file)")
-	flags.BoolVar(&confirm, "confirm", false, "require an interactive TTY confirmation before execution")
-	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
-	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
-	if err := flags.Parse(args); err != nil {
-		return contract.Fail(contract.FailureInvalidInput, "%v", err)
-	}
-	if flags.NArg() != 0 {
-		return contract.Fail(contract.FailureInvalidInput,
-			"unexpected argument %q after the commission; quote it if it is one commission",
-			flags.Arg(0))
-	}
-	effects, err := allow.effects()
-	if err != nil {
-		return err
-	}
-
-	atenea, err := load(settingsPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = atenea.Shutdown() }()
-	if confirm {
-		if err := confirmTTY(out, "task "+text, budget, effects); err != nil {
-			return err
-		}
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	result, runErr := atenea.Do(ctx, orchestrator.Task{
-		Text: text, Repositories: repositories, Effects: effects, BudgetUSD: budget,
-	})
-	if result != nil {
-		if jsonOut {
-			// The write failure wins over the verdict. A caller reading this
-			// stream got nothing, so reporting the run's own outcome to it
-			// would be answering a question it never heard asked.
-			if err := printResultJSON(out, result); err != nil {
-				return err
-			}
-		} else {
-			printResult(out, result, trace)
-		}
-	}
-	return commissionError(ctx, result, runErr)
-}
-
 // commissionError turns what came back into the invocation's error.
 //
 // A run the user stopped is not a failed commission, and the difference is
@@ -2308,109 +2199,9 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) (err error) {
 	return commissionError(ctx, result, runErr)
 }
 
-// cmdResume picks an interrupted or failed commission back up, or with
-// --list shows which receipts still have work to continue instead of
-// resuming any of them.
-//
-// --list is peeled off before the flag set sees anything, the same way
-// 'metrics clear' peels its own leading word: that path takes no run id, so
-// there is no positional argument on it for flag.Parse to trip over.
-func cmdResume(settingsPath string, args []string, out io.Writer) error {
-	listing := false
-	if len(args) > 0 && args[0] == "--list" {
-		listing, args = true, args[1:]
-	}
-	if listing {
-		if len(args) != 0 {
-			return contract.Fail(contract.FailureInvalidInput,
-				"--list takes no run id; it lists every run still worth resuming")
-		}
-		return cmdResumeList(settingsPath, out)
-	}
-
-	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		return contract.Fail(contract.FailureInvalidInput,
-			"resume needs a run id, e.g. atenea resume 20260803T125305-92dc90; "+
-				"atenea resume --list shows the candidates")
-	}
-	runID, args := strings.TrimSpace(args[0]), args[1:]
-
-	var allow effectList
-	var trace bool
-	var jsonOut bool
-	var budget float64
-	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	flags.Float64Var(&budget, "budget", 0,
-		"replace what remains of the grant instead of adding to it (default: what is left)")
-	flags.Var(&allow, "allow", "effect to add beyond what the commission already carries; repeat for several (default: none)")
-	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
-	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
-	if err := flags.Parse(args); err != nil {
-		return contract.Fail(contract.FailureInvalidInput, "%v", err)
-	}
-	if flags.NArg() != 0 {
-		return contract.Fail(contract.FailureInvalidInput,
-			"unexpected argument %q after the run id", flags.Arg(0))
-	}
-	effects, err := allow.effects()
-	if err != nil {
-		return err
-	}
-
-	atenea, err := load(settingsPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = atenea.Shutdown() }()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	result, runErr := atenea.Resume(ctx, runID, orchestrator.ResumeOptions{BudgetUSD: budget, Effects: effects})
-	if result != nil {
-		if jsonOut {
-			if err := printResultJSON(out, result); err != nil {
-				return err
-			}
-		} else {
-			printResult(out, result, trace)
-		}
-	}
-	return commissionError(ctx, result, runErr)
-}
-
-// cmdResumeList shows every run still worth resuming, oldest first. It
-// dispatches nothing and costs nothing to run: Candidates only reads
-// receipts already on disk.
-func cmdResumeList(settingsPath string, out io.Writer) error {
-	atenea, err := load(settingsPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = atenea.Shutdown() }()
-	if !atenea.Checkpoints().Enabled() {
-		fmt.Fprintln(out, "checkpointing is off; there is nothing on disk to resume")
-		return nil
-	}
-	candidates, err := atenea.Checkpoints().Candidates()
-	if err != nil {
-		return err
-	}
-	if len(candidates) == 0 {
-		fmt.Fprintln(out, "nothing to resume")
-		return nil
-	}
-	for _, c := range candidates {
-		fmt.Fprintf(out, "%-28s %-8s %2d step(s) remaining  %s\n",
-			c.ID, orDash(c.Verdict), c.Remaining, oneLine(c.Task))
-	}
-	return nil
-}
-
-// printAnswer shows what came back. A commission reports how many matches it
-// found because that is all a caller can act on across several repositories;
-// one capability against one repository has an actual answer, and hiding it
-// behind a run receipt would make the verb useless.
+// printAnswer shows what came back: one capability against one repository has
+// an actual answer, and hiding it behind a run receipt would make the verb
+// useless.
 func printAnswer(out io.Writer, result *orchestrator.Result, trace bool) {
 	if len(result.Steps) != 1 {
 		return
@@ -2655,14 +2446,6 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 	fmt.Fprintf(out, "run       %s\n", result.RunID)
 	fmt.Fprintf(out, "task      %s\n", result.Task)
 	fmt.Fprintf(out, "verdict   %s\n", result.Verdict)
-	// Matches are counted out of the split-up commission. A direct ask has an
-	// answer rather than a tally, and printing a zero nobody measured would
-	// read as "found nothing" instead of "did not count".
-	if slices.ContainsFunc(result.Phases, func(p orchestrator.Phase) bool {
-		return p.Name == orchestrator.PhaseWork
-	}) {
-		fmt.Fprintf(out, "matches   %d\n", result.Matches)
-	}
 	// Two figures, because a wave makes them different: the sum is what the
 	// tools charged and the wall is what the operator waited. Printing only the
 	// sum reports a parallel run as slower than it was, and leaves the whole

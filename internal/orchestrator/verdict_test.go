@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -21,7 +20,7 @@ func TestAStoppedRunIsNotAFailedOne(t *testing.T) {
 		cancel()
 	}()
 
-	result, _ := agent.Run(ctx, orchestrator.Task{Text: "find TODO"})
+	result, _ := agent.DispatchPlan(ctx, lookThenSearch(), 0)
 
 	if result == nil {
 		t.Fatal("a stopped run came back with no report at all")
@@ -42,7 +41,7 @@ func TestAnInterruptedStepIsNotReviewed(t *testing.T) {
 		cancel()
 	}()
 
-	result, _ := agent.Run(ctx, orchestrator.Task{Text: "find TODO"})
+	result, _ := agent.DispatchPlan(ctx, lookThenSearch(), 0)
 
 	if result == nil || len(result.Steps) == 0 {
 		t.Skip("nothing was dispatched before the stop, so there is no step to check")
@@ -78,7 +77,7 @@ func TestAFaultOutranksAnInterruption(t *testing.T) {
 		cancel()
 	}()
 
-	result, _ := agent.Run(ctx, orchestrator.Task{Text: "find TODO"})
+	result, _ := agent.DispatchPlan(ctx, lookThenSearch(), 0)
 
 	if result == nil {
 		t.Fatal("no report at all")

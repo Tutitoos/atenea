@@ -16,7 +16,7 @@ import (
 func answered(notices ...string) *orchestrator.Result {
 	step := orchestrator.StepResult{
 		Step:  contract.Step{ID: "calls-current", Capability: "symbol.calls", Repository: "current"},
-		Phase: orchestrator.PhaseWork,
+		Phase: orchestrator.PhaseAsk,
 		Spent: contract.Sample{Duration: 92 * time.Millisecond},
 		Outcome: contract.Outcome{
 			Verdict: contract.VerdictOK,

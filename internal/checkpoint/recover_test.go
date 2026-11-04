@@ -95,8 +95,8 @@ func TestATornReceiptIsSetAsideAndKeptAsEvidence(t *testing.T) {
 	}
 }
 
-// Resuming a torn run is a dead end, and the reason it is a dead end is a file
-// sitting in the same directory. Measured before this held: `atenea resume`
+// Loading a torn run is a dead end, and the reason it is a dead end is a file
+// sitting in the same directory. Measured before this held: the load
 // answered "no such file or directory" for the .json, which is true and sends
 // the reader to the one path that has nothing on it.
 func TestResumingATornRunNamesTheEvidenceItLeftBehind(t *testing.T) {

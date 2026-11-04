@@ -1,17 +1,11 @@
-// Package orchestrator holds the dedicated agent that turns a commission into
-// finished work.
+// Package orchestrator holds the dedicated agent that dispatches a capability
+// call and reviews what comes back.
 //
 // It is an AGENT, deliberately not part of the core. Atenea decides and
 // delegates: the core owns the catalog and the funnel and says who should do a
-// thing, while this agent is the one that explores, splits the work, hands the
-// pieces out and reviews what comes back. Putting the splitting in the core
-// would make the core do the work instead of directing it.
-//
-// The order is fixed: explore first, split second. A microservice has a
-// predictable shape, but a large front end does not, and splitting before
-// looking produces a plan for a project that is not there. Exploring is not
-// free, so it counts as one more measured phase rather than as unbilled
-// preparation.
+// thing, while this agent is the one that hands the call out and reviews what
+// comes back. Putting the dispatch in the core would make the core do the work
+// instead of directing it.
 package orchestrator
 
 import (
@@ -19,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -98,31 +91,21 @@ type Base interface {
 	Baselines(ctx context.Context, capability, repository, subject string) (map[string]metrics.Baseline, error)
 }
 
-// Phase names, in the order they run.
+// Phase names.
 const (
-	// PhaseExplore is the look before the split. It is measured like any other
-	// phase: a task that hides what exploring cost reports a total that is
-	// quietly too low, and the selector then compares against a number that
-	// never happened.
-	// PhaseExplore is part of ATENEA's public orchestration contract.
-	PhaseExplore = "explore"
-	// PhaseWork is the split-up commission itself.
-	PhaseWork = "work"
-	// PhaseAsk is one capability, asked directly. Hoja 15 calls this the
-	// atomic base that workflows are built out of; Run is one such workflow,
-	// hard-wired. It is a phase of its own rather than a borrowed name so a
-	// receipt never claims a run explored or split when it did neither.
+	// PhaseAsk is one capability, asked directly. It is the only phase a run
+	// reports.
 	// PhaseAsk is part of ATENEA's public orchestration contract.
 	PhaseAsk = "ask"
 )
 
-// searchCapability is what a commission's mechanical fallback is planned
-// around: literal text search is how the orchestrator splits work when no
-// model-backed explorer is attached. A model holding only prose starts with
-// code.context instead (contextCapability below), because it does not know a
-// string or file yet.
-const searchCapability = "code.search"
-const contextCapability = "code.context"
+// searchCapability and contextCapability are the two text-reading capabilities
+// the card names first: literal text search, and code.context for a model that
+// holds only prose and does not know a string or file yet.
+const (
+	searchCapability  = "code.search"
+	contextCapability = "code.context"
+)
 
 // The symbol capabilities, plus the two that read the call graph itself. The
 // orchestrator does not plan a commission around any of them -- it plans
@@ -199,10 +182,6 @@ const (
 	androidUnmirrorCapability   = "android.unmirror"
 )
 
-// probeContextLines is what exploring asks for: the hit and nothing around it.
-// The look is meant to find out WHERE the commission lands, not to read it.
-const probeContextLines = 0
-
 // Config wires the agent to the pieces around it.
 type Config struct {
 	Catalog Catalog
@@ -273,7 +252,7 @@ type Agent struct {
 var card = contract.Agent{
 	ID:      "orchestrator",
 	Type:    contract.AgentOrchestrator,
-	Summary: "Explores the repositories in scope, splits the commission into a graph of steps and hands them out.",
+	Summary: "Dispatches one capability against one repository, picks who answers it, reviews the answer and writes the receipt.",
 	Capabilities: []string{
 		contextCapability,
 		searchCapability,
@@ -418,43 +397,6 @@ func (a *Agent) Runner() contract.Runner { return a.runner }
 // MaxParallel reports the configured ceiling; zero means no ceiling.
 func (a *Agent) MaxParallel() int { return a.maxParallel }
 
-// Task is a commission as it arrives from the user.
-type Task struct {
-	// Text is the commission in the user's own words. With a single capability
-	// wired there is no model in the loop to read intent out of it, so the text
-	// is also what gets searched for. That is a property of this brick, not of
-	// the design: the moment an adapter brings a model, reading the intent is
-	// its job and this field stays exactly as it is.
-	Text string
-	// Repositories narrows the commission. Empty means every repository the
-	// catalog knows, because the unit of work is the repository and the user
-	// did not exclude any.
-	Repositories []string
-	// Effects the user authorized beyond reading. Reading is free by default,
-	// so an ordinary search needs nothing here.
-	Effects []contract.Effect
-	// BudgetUSD is what this commission may spend, across every step. Zero
-	// takes the standing grant from the settings file, which is the usual
-	// case: the operator granted it once by writing the number down.
-	BudgetUSD float64
-	// Session is the chat that commissioned this, when there is one. It buys
-	// the run nothing: it is written to the receipt so a shared history stays
-	// attributable to the isolated chat that produced it.
-	Session                 string
-	SessionClient           string
-	SessionName             string
-	SessionNameBasis        string
-	SessionPrimaryProject   string
-	SessionOriginSurface    string
-	SessionOriginTransport  string
-	SessionExternalObserved bool
-	// Floor is the standing grant this commission composes from. The zero
-	// value is the settings file's, which is what a command at a terminal
-	// runs on; a chat opened by a client fills it in with the client floor
-	// so the operator's own line stays the operator's.
-	Floor Floor
-}
-
 // Result is what a finished commission looks like, at both heights: the
 // summary on top and the trace underneath for when something smells wrong.
 type Result struct {
@@ -485,7 +427,6 @@ type Result struct {
 	// SpentUSDKnown says whether SpentUSD is the whole bill or only the part
 	// somebody reported. See totalUSD.
 	SpentUSDKnown bool
-	Matches       int
 }
 
 // Phase is one measured stretch of the run.
@@ -562,191 +503,13 @@ type Review struct {
 	Disagreed bool
 }
 
-// Run carries out a commission from end to end.
-func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) {
-	if strings.TrimSpace(task.Text) == "" {
-		return nil, contract.Fail(contract.FailureInvalidInput, "task: text is required")
-	}
-	if err := validGrant("task", task.BudgetUSD); err != nil {
-		return nil, err
-	}
-	if a.runner == nil {
-		return nil, contract.Fail(contract.FailureUnavailable,
-			"no runner is attached, so nothing can be dispatched")
-	}
-	repositories, repoErr := a.resolveRepositories(task.Repositories)
-	if repoErr != nil {
-		return nil, repoErr
-	}
-	// Reading is free by default. The floor adds whatever was pre-authorized
-	// for a commission of this kind -- the settings file's standing grant, or
-	// a connected client's own line where the commission came from a chat --
-	// and the commission's own Effects adds what this one asked for on top.
-	permission := contract.Permission{
-		Task:    task.Text,
-		Effects: []contract.Effect{contract.EffectRead},
-	}.Grant(task.Floor.Or(a.standingEffects)).Grant(task.Effects)
-	// The grant is opened once, here, and spent down by every wave. It is the
-	// commission that holds it -- not the step, not the adapter -- which is
-	// what makes four steps cost one ceiling instead of four.
-	budgetUSD := cmp.Or(task.BudgetUSD, a.budget)
-	purse := newGrant(budgetUSD)
-
-	started := time.Now()
-	result = &Result{RunID: checkpoint.NewID(started), Task: task.Text}
-	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID, SessionID: task.Session})
-	ctx = checkpoint.WithRunID(ctx, result.RunID)
-	record := checkpoint.Run{
-		RequestID: checkpoint.RequestID(ctx),
-		ID:        result.RunID, Kind: checkpoint.KindTask, Session: task.Session, SessionClient: task.SessionClient,
-		SessionName: task.SessionName, SessionNameBasis: task.SessionNameBasis,
-		SessionPrimaryProject: task.SessionPrimaryProject, SessionOriginSurface: task.SessionOriginSurface,
-		SessionOriginTransport: task.SessionOriginTransport, SessionExternalObserved: task.SessionExternalObserved, Task: task.Text,
-		Started: started, Repositories: task.Repositories, Effects: task.Effects,
-		BudgetUSD: budgetUSD, ContractVersion: contract.Current.String(),
-	}
-
-	// The run closing is the second of the two moments the paper copy is
-	// written, and it has to happen whether the run finished or was cut short:
-	// a commission interrupted halfway is exactly the one worth reading back.
-	defer func() {
-		result.Spent = totalSpent(result.Steps)
-		// Summed above, walled here, and both on the report: a commission that
-		// ran its steps in waves costs more time than it takes, and the report
-		// is the only place an operator can see that it did.
-		result.Elapsed = time.Since(started)
-		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
-		result.Verdict = overallVerdict(result.Steps, ctx.Err())
-		result.Matches = countMatches(result.Steps)
-		// What the far side said for itself travels too. The summary the
-		// orchestrator writes below is what it worked out by looking; this is
-		// what the runner reported, and it is the only way something like a
-		// search cut short at a ceiling ever reaches the screen.
-		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
-		record.Closed = true
-		record.Verdict = result.Verdict.String()
-		record.Updated = time.Now()
-		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
-			err = saveErr
-		}
-		a.emit(observability.Event{Kind: "run.closed", SessionID: task.Session, RunID: result.RunID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
-	}()
-
-	// The first plan is light on purpose: look, and decide the rest afterwards.
-	plan := contract.Plan{Task: task.Text}
-	for _, repo := range repositories {
-		capability, payload, prefer := a.exploration(task.Text, repo)
-		plan.Steps = append(plan.Steps, contract.Step{
-			ID:         "explore-" + repo.ID,
-			Capability: capability,
-			Prefer:     prefer,
-			Repository: repo.ID,
-			Payload:    payload,
-			Permission: permission,
-		})
-	}
-	if err := plan.Validate(); err != nil {
-		return result, err
-	}
-	result.Plan = plan
-	record.Plan = plan
-
-	explored, err := a.dispatch(ctx, plan, PhaseExplore, result, &record, purse, nil)
-	if err != nil {
-		return result, err
-	}
-	result.Discoveries = discoveriesFrom(explored)
-
-	// Now that the shape of each repository is known, split the commission.
-	plan, err = plan.Append(a.split(permission, repositories, explored)...)
-	if err != nil {
-		return result, err
-	}
-	result.Plan = plan
-	record.Plan = plan
-
-	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, purse, nil)
-	return result, err
-}
-
-// RunPlan executes a caller-supplied multi-capability DAG.
-//
-// Run is the opinionated commission flow: explore first, then derive work
-// from what was found. Workflows and integrations that already have a
-// reviewed graph should not have to fake an exploration phase just to reach
-// the same dispatcher. This method is the narrow bridge: contract.Plan owns
-// validation and dependency ordering, while the orchestrator still owns
-// selection, permissions, review, checkpoints and metering.
-//
-// The graph is copied before execution. A caller may reuse or inspect its
-// plan after this method returns without racing the per-step budget stamps
-// that dispatch adds while the run is active.
-func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float64) (result *Result, err error) {
-	if strings.TrimSpace(plan.Task) == "" {
-		return nil, contract.Fail(contract.FailureInvalidInput, "plan: task is required")
-	}
-	if err := plan.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validGrant("plan", budgetUSD); err != nil {
-		return nil, err
-	}
-	if a.runner == nil {
-		return nil, contract.Fail(contract.FailureUnavailable,
-			"no runner is attached, so nothing can be dispatched")
-	}
-	if budgetUSD == 0 {
-		budgetUSD = a.budget
-	}
-
-	plan = plan.Clone()
-	started := time.Now()
-	result = &Result{RunID: checkpoint.NewID(started), Task: plan.Task, Plan: plan}
-	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID})
-	ctx = checkpoint.WithRunID(ctx, result.RunID)
-	record := checkpoint.Run{
-		RequestID: checkpoint.RequestID(ctx),
-		ID:        result.RunID, Kind: checkpoint.KindPlan, Task: plan.Task,
-		Started: started, BudgetUSD: budgetUSD,
-		ContractVersion: contract.Current.String(), Plan: plan,
-	}
-	seenRepos := make(map[string]struct{}, len(plan.Steps))
-	for _, step := range plan.Steps {
-		seenRepos[step.Repository] = struct{}{}
-	}
-	for repo := range seenRepos {
-		record.Repositories = append(record.Repositories, repo)
-	}
-	slices.Sort(record.Repositories)
-
-	defer func() {
-		result.Spent = totalSpent(result.Steps)
-		result.Elapsed = time.Since(started)
-		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
-		result.Verdict = overallVerdict(result.Steps, ctx.Err())
-		result.Matches = countMatches(result.Steps)
-		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
-		record.Closed = true
-		record.Verdict = result.Verdict.String()
-		record.Updated = time.Now()
-		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
-			err = saveErr
-		}
-		a.emit(observability.Event{Kind: "run.closed", RunID: result.RunID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
-	}()
-
-	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, newGrant(budgetUSD), nil)
-	return result, err
-}
-
 // Question is one capability asked of one repository, with the payload the
 // caller already knows how to build.
 //
-// This is the atomic base of hoja 15: a workflow is several of these chained,
-// and Run is one such chain with its shape written into the code. Symbol
-// resolution arrives through here because a position is something the caller
-// has and the orchestrator does not -- exploring finds text, and a text hit is
-// not a cursor.
+// This is the one door into dispatch: a workflow is several of these chained
+// by a caller. Symbol resolution arrives through here because a position is
+// something the caller has and the orchestrator does not -- a text hit is not
+// a cursor.
 type Question struct {
 	// Capability is what to ask for. It has to be on the card: a capability
 	// the agent does not declare cannot be dispatched, however ready the rest
@@ -835,7 +598,6 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 		result.Elapsed = time.Since(started)
 		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps, ctx.Err())
-		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
 		record.Closed = true
 		record.Verdict = result.Verdict.String()
@@ -870,242 +632,6 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	return result, err
 }
 
-// ResumeOptions narrows how a resumed commission continues.
-type ResumeOptions struct {
-	// BudgetUSD, when set, replaces what remains of the original grant
-	// instead of adding to it -- the same rule --budget already follows on a
-	// fresh commission.
-	BudgetUSD float64
-	// Effects adds to what the commission already carries, on top of read,
-	// the standing grant and whatever it already held -- it never replaces
-	// any of them. Unlike BudgetUSD above, an effect already granted is
-	// never worth losing by accident: --allow answers "what else may this
-	// do now", not "forget what it already could".
-	Effects []contract.Effect
-}
-
-// Resume picks an interrupted or failed commission back up.
-//
-// A step that already passed review is left alone: it is never
-// redispatched, re-measured or re-charged, because it already was when it
-// first closed. Everything else -- failed, canceled, or never reached at
-// all -- is retried exactly as if it were being asked for the first time.
-//
-// The one thing Resume cannot recover is the shape a splitting decision was
-// based on. If the process went away before exploring finished, what it
-// found only ever lived in that process's memory, and there is nothing
-// honest to split on without it. Resume redoes exploring whole in that case
-// rather than guess: exploring is one wave, one step per repository, and
-// usually free, so redoing it is cheap where guessing would be wrong. Once
-// splitting already ran, the plan on the receipt already carries every
-// step's payload, and none of it is recomputed here.
-func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (result *Result, err error) {
-	if err := validGrant("resume", opts.BudgetUSD); err != nil {
-		return nil, err
-	}
-	if a.runner == nil {
-		return nil, contract.Fail(contract.FailureUnavailable,
-			"no runner is attached, so nothing can be dispatched")
-	}
-	if !a.checkpoints.Enabled() {
-		return nil, contract.Fail(contract.FailureUnavailable,
-			"checkpointing is off, so there is nothing on file to resume")
-	}
-
-	// Locked before anything else is even read: two attempts racing the same
-	// receipt would each see the same steps missing and each redispatch
-	// them, and neither side could tell from its own view that this had
-	// happened.
-	release, err := a.checkpoints.Lock(runID)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	record, err := a.checkpoints.Load(runID)
-	if err != nil {
-		return nil, err
-	}
-	if err := a.checkResumable(record); err != nil {
-		return nil, err
-	}
-
-	// A step already on the plan keeps exactly the permission it was stamped
-	// with, plus whatever --allow adds now. The operator's standing grant is
-	// deliberately NOT re-applied: the floor a commission actually ran on is
-	// not on the receipt, and a commission opened by a connected client ran
-	// on that client's floor, not on the operator's line. Composing from
-	// a.standingEffects here handed such a run every effect the operator ever
-	// granted themselves, which is a widening the person who resumed it never
-	// asked for and could not see. Until the floor is persisted beside
-	// Effects, the only honest reconstruction is the one already on file.
-	//
-	// A resumed commission can therefore be narrower than the first attempt
-	// where the floor did the granting, and that is the safe direction: the
-	// step refuses and says which effect it lacked, where the other mistake
-	// runs it.
-	for i := range record.Plan.Steps {
-		record.Plan.Steps[i].Permission = record.Plan.Steps[i].Permission.Grant(opts.Effects)
-	}
-
-	budgetUSD := record.BudgetUSD - chargedSoFar(record.Steps)
-	if opts.BudgetUSD > 0 {
-		budgetUSD = opts.BudgetUSD
-	}
-	purse := newGrant(budgetUSD)
-
-	// This attempt's own clock, not the interrupted one's. The receipt keeps
-	// Started from the first try on purpose -- it is the same commission -- but
-	// what this process took is what the screen in front of somebody is about.
-	started := time.Now()
-	result = &Result{RunID: record.ID, Task: record.Task, Plan: record.Plan}
-	a.emit(observability.Event{Kind: "retry.started", SessionID: record.Session, RunID: record.ID, State: "retrying"})
-	// Captured before anything below can add to record.Steps, so this is
-	// exactly what passed review in an earlier process: the steps this
-	// attempt will never redispatch, and whose only surviving discoveries
-	// are on the receipt rather than in memory.
-	priorOK := record.OK()
-	// The receipt may already read closed -- a clean failure closes it
-	// exactly like success does, and a crash may not have gotten that far.
-	// Either way this attempt reopens it: if it is interrupted too, the
-	// receipt has to say so rather than keep repeating the previous
-	// attempt's word.
-	record.Closed = false
-	defer func() {
-		result.Spent = totalSpent(result.Steps)
-		result.Elapsed = time.Since(started)
-		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
-		result.Verdict = resumeVerdict(result.Steps, ctx.Err())
-		result.Matches = countMatches(result.Steps)
-		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
-		result.Discoveries = append(result.Discoveries, discoveriesFromReceipt(record.Steps, priorOK)...)
-		record.Closed = true
-		record.Verdict = result.Verdict.String()
-		record.Updated = time.Now()
-		a.emit(observability.Event{Kind: "retry.completed", SessionID: record.Session, RunID: record.ID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
-		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
-			err = saveErr
-		}
-	}()
-
-	// A single ask has one step and no split to redo: dispatch it exactly as
-	// it was dispatched the first time, and let alreadyOK decide whether
-	// there is anything left to do at all.
-	if record.Kind == checkpoint.KindAsk {
-		_, err = a.dispatch(ctx, record.Plan, PhaseAsk, result, &record, purse, record.OK())
-		return result, err
-	}
-	if record.Kind == checkpoint.KindPlan {
-		_, err = a.dispatch(ctx, record.Plan, PhaseWork, result, &record, purse, record.OK())
-		return result, err
-	}
-
-	// Splitting never ran: redo the look whole rather than trust a shape
-	// nothing left on file can justify.
-	if !hasWork(record.Plan) {
-		repositories, repoErr := a.resolveRepositories(record.Repositories)
-		if repoErr != nil {
-			return result, repoErr
-		}
-		// record.Effects never included the implicit read -- Run and Ask
-		// both start every permission from it and never store it back, so
-		// rebuilding from record.Effects alone would silently drop it here.
-		// The floor the commission ran on is the one layer the receipt does
-		// not carry, and the standing grant is not a stand-in for it: see the
-		// stamped-permission loop above for why re-applying it would widen a
-		// client's chat to the operator's own line.
-		permission := contract.Permission{
-			Task:    record.Task,
-			Effects: []contract.Effect{contract.EffectRead},
-		}.Grant(record.Effects).Grant(opts.Effects)
-
-		explorePlan := contract.Plan{Task: record.Task}
-		for _, repo := range repositories {
-			capability, payload, prefer := a.exploration(record.Task, repo)
-			explorePlan.Steps = append(explorePlan.Steps, contract.Step{
-				ID:         "explore-" + repo.ID,
-				Capability: capability,
-				Prefer:     prefer,
-				Repository: repo.ID,
-				Payload:    payload,
-				Permission: permission,
-			})
-		}
-		if err := explorePlan.Validate(); err != nil {
-			return result, err
-		}
-		result.Plan = explorePlan
-		record.Plan = explorePlan
-
-		explored, exploreErr := a.dispatch(ctx, explorePlan, PhaseExplore, result, &record, purse, nil)
-		if exploreErr != nil {
-			return result, exploreErr
-		}
-		result.Discoveries = discoveriesFrom(explored)
-
-		plan, appendErr := explorePlan.Append(a.split(permission, repositories, explored)...)
-		if appendErr != nil {
-			return result, appendErr
-		}
-		result.Plan = plan
-		record.Plan = plan
-
-		_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, purse, nil)
-		return result, err
-	}
-
-	// Splitting already ran, so the plan on file already carries every
-	// step's payload. The look is dispatched first and on its own, the same
-	// way it would be inside Run, so a step still waiting on it sees it
-	// finished rather than dangling once the second call reads the graph.
-	alreadyOK := record.OK()
-	explorePlan := contract.Plan{Task: record.Plan.Task}
-	for _, step := range record.Plan.Steps {
-		if len(step.Needs) == 0 {
-			explorePlan.Steps = append(explorePlan.Steps, step)
-		}
-	}
-	if err := explorePlan.Validate(); err != nil {
-		return result, err
-	}
-	explored, exploreErr := a.dispatch(ctx, explorePlan, PhaseExplore, result, &record, purse, onlyIn(explorePlan, alreadyOK))
-	if exploreErr != nil {
-		return result, exploreErr
-	}
-	result.Discoveries = discoveriesFrom(explored)
-
-	_, err = a.dispatch(ctx, record.Plan, PhaseWork, result, &record, purse, alreadyOK)
-	return result, err
-}
-
-// checkResumable gates a receipt before anything is touched: a contract
-// version this core no longer understands, or a repository or capability the
-// catalog no longer has, is refused whole, rather than discovered halfway
-// through dispatching with some steps already redone and others not.
-func (a *Agent) checkResumable(record checkpoint.Run) error {
-	if record.ContractVersion == "" {
-		return contract.Fail(contract.FailureInvalidInput,
-			"run %s predates resume support and cannot be resumed", record.ID)
-	}
-	peer, err := contract.ParseVersion(record.ContractVersion)
-	if err != nil {
-		return contract.Fail(contract.FailureInvalidInput, "run %s: %v", record.ID, err)
-	}
-	if !contract.Current.Supports(peer) {
-		return contract.Fail(contract.FailureInvalidInput,
-			"run %s: contract %s is not supported by this core (%s)", record.ID, peer, contract.Current)
-	}
-	for _, step := range record.Plan.Steps {
-		if _, err := a.catalog.Capability(step.Capability); err != nil {
-			return err
-		}
-		if _, err := a.catalog.Repository(step.Repository); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (a *Agent) resolveRepositories(wanted []string) ([]contract.Repository, error) {
 	if len(wanted) == 0 {
 		all := a.catalog.Repositories()
@@ -1129,54 +655,6 @@ func (a *Agent) resolveRepositories(wanted []string) ([]contract.Repository, err
 		out = append(out, repo)
 	}
 	return out, nil
-}
-
-// split turns what exploring found into the work graph: one step per
-// repository in scope, each waiting on its own look, and each narrowed to the
-// areas where the commission actually landed.
-func (a *Agent) split(permission contract.Permission, repositories []contract.Repository, explored []StepResult) []contract.Step {
-	areas := make(map[string][]string, len(explored))
-	for _, step := range explored {
-		areas[step.Step.Repository] = topLevelAreas(step.Outcome.Result)
-	}
-	steps := make([]contract.Step, 0, len(repositories))
-	for _, repo := range repositories {
-		capability, payload, prefer := a.exploration(permission.Task, repo)
-		// An empty scope means the whole repository. Narrowing to the areas the
-		// look found is the whole return on having looked.
-		if scope := areas[repo.ID]; len(scope) > 0 && capability == searchCapability {
-			a.hint(payload, "scope", scope)
-		}
-		steps = append(steps, contract.Step{
-			ID:         "search-" + repo.ID,
-			Capability: capability,
-			Prefer:     prefer,
-			Repository: repo.ID,
-			Payload:    payload,
-			Needs:      []string{"explore-" + repo.ID},
-			Permission: permission,
-		})
-	}
-	return steps
-}
-
-// hint fills an OPTIONAL field, and only when the capability declares it.
-//
-// The orchestrator is one caller among many: it knows the shape of the job it
-// is asking for, not the shape of the schema that answers it. Sending a field
-// the capability never declared is a broken request, and it would make the
-// agent depend on a nicety that a perfectly valid settings file may leave out.
-func (a *Agent) hint(payload map[string]any, field string, value any) {
-	capability, err := a.catalog.Capability(searchCapability)
-	if err != nil {
-		return
-	}
-	for _, input := range capability.Inputs {
-		if input.Name == field {
-			payload[field] = value
-			return
-		}
-	}
 }
 
 // dispatch runs whatever of the plan is still outstanding: every wave in
@@ -1505,9 +983,11 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 					}
 					return "current runtime identity"
 				}(),
-				CacheValidation: &contract.CacheValidation{Called: true, Provider: identity.Provider, Tool: identity.Tool,
+				CacheValidation: &contract.CacheValidation{
+					Called: true, Provider: identity.Provider, Tool: identity.Tool,
 					ToolVersion: identity.ToolVersion, Instance: identity.Instance, Generation: identity.Generation,
-					Snapshot: identity.Snapshot, Freshness: identity.Freshness, Duration: time.Duration(identity.DurationNS), Error: identity.Error},
+					Snapshot: identity.Snapshot, Freshness: identity.Freshness, Duration: time.Duration(identity.DurationNS), Error: identity.Error,
+				},
 			})
 			if identityErr != nil {
 				continue
@@ -1706,14 +1186,16 @@ func healthAfterSuccessfulProbe(previous contract.Health) (contract.Health, bool
 // second return carries that admission and anything else the base wants the
 // trace to know, and is empty when there is nothing to say.
 func (a *Agent) priced(ctx context.Context, capability, repository, subject string,
-	candidates []contract.Implementation) (bool, []string) {
+	candidates []contract.Implementation,
+) (bool, []string) {
 	if a.base == nil {
 		return false, nil
 	}
 	base, err := a.base.Baselines(ctx, capability, repository, subject)
 	if err != nil {
 		return false, []string{fmt.Sprintf(
-			"the measurement base could not be read (%v); ranking on the declared estimates", err)}
+			"the measurement base could not be read (%v); ranking on the declared estimates", err,
+		)}
 	}
 	return true, metrics.Apply(base, candidates, time.Now())
 }
@@ -1785,99 +1267,6 @@ func (a *Agent) judge(out StepResult, err error) (contract.Verdict, string) {
 	return contract.VerdictOK, "output matches the capability"
 }
 
-// topLevelAreas reads the probe's hits and returns the top-level directories
-// they landed in, sorted. That is the narrowing the work pass gets for free.
-func topLevelAreas(result map[string]any) []string {
-	raw, ok := result["matches"].([]any)
-	if !ok {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(raw))
-	for _, item := range raw {
-		record, isRecord := item.(map[string]any)
-		if !isRecord {
-			continue
-		}
-		where, isText := record["path"].(string)
-		if !isText {
-			continue
-		}
-		head, _, nested := strings.Cut(path.Clean(where), "/")
-		if !nested {
-			// A hit at the repository root cannot be narrowed to a directory,
-			// so narrowing at all would silently drop it.
-			return nil
-		}
-		seen[head] = struct{}{}
-	}
-	areas := make([]string, 0, len(seen))
-	for area := range seen {
-		areas = append(areas, area)
-	}
-	slices.Sort(areas)
-	return areas
-}
-
-// hasWork reports whether plan already carries the split-up commission, not
-// only the look that came before it.
-func hasWork(plan contract.Plan) bool {
-	for _, step := range plan.Steps {
-		if len(step.Needs) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// chargedSoFar sums what a receipt's steps were actually charged. Every
-// entry on file, including a failed retry, represents a dispatch that really
-// happened and really spent whatever it reports -- summing them is what
-// tells a resume how much of the original grant is left to work with.
-func chargedSoFar(steps []checkpoint.StepState) float64 {
-	var usd float64
-	for _, step := range steps {
-		usd += step.SpentUSD
-	}
-	return usd
-}
-
-// onlyIn filters ids down to the ones that name a step of plan. alreadyOK
-// carries every id a receipt closed with, but a sub-plan dispatched on its
-// own only recognizes the ids that are actually its own steps -- anything
-// else is a step LayersAfter has never heard of.
-func onlyIn(plan contract.Plan, ids []string) []string {
-	known := make(map[string]struct{}, len(plan.Steps))
-	for _, step := range plan.Steps {
-		known[step.ID] = struct{}{}
-	}
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if _, ok := known[id]; ok {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// discoveriesFrom turns what the look saw into facts worth keeping, so the
-// next commission does not pay to learn the same thing twice.
-func discoveriesFrom(explored []StepResult) []contract.Discovery {
-	out := make([]contract.Discovery, 0, len(explored))
-	for _, step := range explored {
-		if step.Review.Parent != contract.VerdictOK {
-			continue
-		}
-		areas := topLevelAreas(step.Outcome.Result)
-		note := fmt.Sprintf("%s: %d hit(s) for %q", step.Step.Repository,
-			matchCount(step.Outcome.Result), step.Step.Permission.Task)
-		if len(areas) > 0 {
-			note += ", under " + strings.Join(areas, ", ")
-		}
-		out = append(out, contract.Discovery{Level: contract.ContextRepository, Note: note})
-	}
-	return out
-}
-
 // reported collects what each far side said about its own answer.
 //
 // The orchestrator can describe what a step found, but only the runner knows
@@ -1897,48 +1286,6 @@ func reported(steps []StepResult) []contract.Discovery {
 		}
 	}
 	return out
-}
-
-// discoveriesFromReceipt recovers what steps closed in an earlier process
-// found. They are never redispatched on resume, so reported -- which only
-// looks at result.Steps -- cannot see them; this reads the same facts back
-// from the receipt instead, the one place they survived the process that
-// discovered them.
-func discoveriesFromReceipt(steps []checkpoint.StepState, ids []string) []contract.Discovery {
-	want := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		want[id] = struct{}{}
-	}
-	var out []contract.Discovery
-	seen := make(map[string]struct{})
-	for _, step := range steps {
-		if _, ok := want[step.ID]; !ok {
-			continue
-		}
-		for _, discovery := range step.Discoveries {
-			if _, dup := seen[discovery.Note]; dup {
-				continue
-			}
-			seen[discovery.Note] = struct{}{}
-			out = append(out, discovery)
-		}
-	}
-	return out
-}
-
-func matchCount(result map[string]any) int {
-	raw, _ := result["matches"].([]any)
-	return len(raw)
-}
-
-func countMatches(steps []StepResult) int {
-	total := 0
-	for _, step := range steps {
-		if step.Phase == PhaseWork {
-			total += matchCount(step.Outcome.Result)
-		}
-	}
-	return total
 }
 
 func totalSpent(steps []StepResult) contract.Sample {
@@ -2016,20 +1363,6 @@ func overallVerdict(steps []StepResult, stopped error) contract.Verdict {
 		return contract.VerdictFailed
 	}
 	return contract.VerdictOK
-}
-
-// resumeVerdict is overallVerdict adjusted for one case only Resume can
-// reach: a call that redispatched nothing at all. For Run and Ask that is a
-// bug -- a plan with no steps should never have been dispatched -- but a
-// resumed commission reaches it legitimately whenever every step was
-// already on file with review ok and dispatch had nothing left to
-// schedule. Nothing new ran and nobody stopped it is not a bug here; it is
-// the receipt already saying done.
-func resumeVerdict(steps []StepResult, stopped error) contract.Verdict {
-	if len(steps) == 0 && stopped == nil {
-		return contract.VerdictOK
-	}
-	return overallVerdict(steps, stopped)
 }
 
 // Overspend is how far a step's charge ran past the share it was granted,

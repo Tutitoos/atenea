@@ -309,32 +309,6 @@ func (s *Session) Reads(level contract.ContextLevel) bool {
 // Close ends this chat.
 func (s *Session) Close() { s.core.Close(s.id) }
 
-// Do hands a commission to the orchestrator on this chat's behalf.
-//
-// Two things happen here that do not happen in Core.Do, and they are the whole
-// of the isolation. Going in, the chat cannot authorize an effect it was not
-// granted, whatever the commission says. Coming out, it is told only what it
-// is entitled to know. In between, the run is the same run, written to the
-// same shared history: the learning is common, the reach is not.
-func (s *Session) Do(ctx context.Context, task orchestrator.Task) (*orchestrator.Result, error) {
-	if err := s.entitled(task.Effects); err != nil {
-		return nil, err
-	}
-	task.Session = s.id
-	task.SessionClient = s.client
-	s.deriveName(task.Text, first(task.Repositories))
-	s.decorateTask(&task)
-	// The floor travels with the commission rather than being looked up at
-	// dispatch, because the orchestrator has exactly one standing grant and
-	// it is the operator's. A chat that did not say which floor it runs on
-	// would silently run on that one, which is the defect this fixes.
-	task.Floor = s.floor
-	s.runs.Add(1)
-	result, err := s.core.Do(ctx, task)
-	s.told(result)
-	return result, err
-}
-
 // Ask dispatches one capability against one repository on this chat's behalf.
 //
 // It is Do's isolation applied to the shape a tools/call arrives in, through
@@ -410,27 +384,12 @@ func (s *Session) deriveName(objective, project string) {
 	s.name, s.nameBasis, s.namePriority = objective, "derived", 3
 }
 
-func (s *Session) decorateTask(task *orchestrator.Task) {
-	name, basis, project, origin, external := s.DashboardMetadata()
-	task.SessionName, task.SessionNameBasis = name, basis
-	task.SessionPrimaryProject = project
-	task.SessionOriginSurface, task.SessionOriginTransport = origin.Surface, origin.Transport
-	task.SessionExternalObserved = external
-}
-
 func (s *Session) decorateQuestion(q *orchestrator.Question) {
 	name, basis, project, origin, external := s.DashboardMetadata()
 	q.SessionName, q.SessionNameBasis = name, basis
 	q.SessionPrimaryProject = project
 	q.SessionOriginSurface, q.SessionOriginTransport = origin.Surface, origin.Transport
 	q.SessionExternalObserved = external
-}
-
-func first(values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	return values[0]
 }
 
 // entitled refuses an effect this chat was not granted.

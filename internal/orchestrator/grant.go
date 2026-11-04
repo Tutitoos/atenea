@@ -39,7 +39,7 @@ type grant struct {
 }
 
 // validGrant refuses a ceiling that is not a number of dollars, and it is the
-// one place every entry point asks -- Run, Ask, Resume, RunPlan and New.
+// one place every entry point asks -- Ask and New.
 //
 // The three refusals are one rule, not three special cases: a ceiling has to
 // be a finite amount somebody could be charged. A negative grant is a typo,
@@ -50,14 +50,12 @@ type grant struct {
 // dangerous one and the reason this function exists: it propagates into
 // contract.Permission.BudgetUSD, and every check at the edge is a comparison
 // against a ceiling nothing can exceed, so the provider's charge stops being
-// verified at all. RunPlan already refused all three; the other three doors
-// let +Inf through, which made the strictest entry point the one nobody
-// calls from a terminal.
+// verified at all. Every door refuses all three.
 //
 // The caller passes its own name, because "budget must be finite" with no
 // subject in front of it is a line an operator cannot act on: the same
-// sentence has to say whether the number came from --budget, from a resumed
-// run, or from the settings file.
+// sentence has to say whether the number came from --budget or from the
+// settings file.
 func validGrant(what string, usd float64) error {
 	if usd < 0 || math.IsNaN(usd) || math.IsInf(usd, 0) {
 		return contract.Fail(contract.FailureInvalidInput,

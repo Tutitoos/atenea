@@ -115,7 +115,7 @@ func TestStatsCapabilityRequestIsNotCountedTwice(t *testing.T) {
 // TestStatsCLIInvalidCapabilityAndCancellation checks recording before capability validation.
 func TestStatsCLIInvalidCapabilityAndCancellation(t *testing.T) {
 	atenea, base := measured(t, "")
-	if err := os.Chmod(filepath.Dir(base), 0700); err != nil {
+	if err := os.Chmod(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = atenea.Shutdown() }()
@@ -133,26 +133,26 @@ func TestStatsCLIInvalidCapabilityAndCancellation(t *testing.T) {
 	}
 }
 
-// TestStatsTaskRepositoryAttribution rejects first-repository attribution for global tasks.
-func TestStatsTaskRepositoryAttribution(t *testing.T) {
+// TestStatsAskRepositoryAttribution checks that a rejected ask is filed under the repository it named.
+func TestStatsAskRepositoryAttribution(t *testing.T) {
 	atenea, base := measured(t, "")
-	if err := os.Chmod(filepath.Dir(base), 0700); err != nil {
+	if err := os.Chmod(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// A stopped core records the rejected request without executing providers.
 	if err := atenea.Shutdown(); err != nil {
 		t.Fatal(err)
 	}
-	for _, repos := range [][]string{nil, {"api", "scripts"}, {"api"}} {
-		_, err := atenea.Do(context.Background(), orchestrator.Task{Text: "stats attribution test", Repositories: repos})
+	for _, repository := range []string{"", "api"} {
+		_, err := atenea.Ask(context.Background(), orchestrator.Question{Capability: "code.search", Repository: repository})
 		if err == nil {
-			t.Fatal("stopped core accepted task")
+			t.Fatal("stopped core accepted ask")
 		}
 	}
 	for _, tc := range []struct {
 		repo  string
 		calls int64
-	}{{"", 3}, {"api", 1}, {"scripts", 0}} {
+	}{{"", 2}, {"api", 1}, {"scripts", 0}} {
 		out, err := atenea.Stats(context.Background(), toolstats.Query{Repository: tc.repo})
 		if err != nil {
 			t.Fatal(err)

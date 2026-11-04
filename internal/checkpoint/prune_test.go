@@ -19,7 +19,7 @@ func pruneStore(t *testing.T) *checkpoint.Store {
 func save(t *testing.T, store *checkpoint.Store, id string, closed bool, updated time.Time) {
 	t.Helper()
 	if err := store.Save(checkpoint.Run{
-		ID: id, Kind: checkpoint.KindTask, Task: "find every TODO",
+		ID: id, Kind: checkpoint.KindAsk, Task: "find every TODO",
 		Started: updated, Updated: updated, Closed: closed, Verdict: "ok",
 	}); err != nil {
 		t.Fatalf("Save %s: %v", id, err)
@@ -52,9 +52,8 @@ func TestClosedReceiptsOlderThanTheCutoffAreRemoved(t *testing.T) {
 	}
 }
 
-// An open receipt is a commission somebody may still resume. Removing one by
-// age would take away the resume rather than the record of it, and Candidates
-// is built out of exactly these.
+// An open receipt may still be in flight. Removing one by age would take away
+// the record of a run that has not finished.
 func TestAnOpenReceiptSurvivesTheCutoff(t *testing.T) {
 	store := pruneStore(t)
 	now := time.Now()
@@ -66,8 +65,7 @@ func TestAnOpenReceiptSurvivesTheCutoff(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 	if removed != 0 {
-		t.Fatal("an open receipt was pruned: that is a commission somebody could " +
-			"still have resumed")
+		t.Fatal("an open receipt was pruned: the run may still be in flight")
 	}
 }
 

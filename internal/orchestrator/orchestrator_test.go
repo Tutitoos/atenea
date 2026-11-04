@@ -258,56 +258,55 @@ func TestTheCardHandedOutIsACopy(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Explore, then split
+// Dispatch helpers
 // ---------------------------------------------------------------------------
 
-func TestTheLookHappensBeforeTheSplit(t *testing.T) {
-	runner := &fakeRunner{}
-	agent, _ := build(t, runner, 0, "")
-
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(result.Phases) != 2 {
-		t.Fatalf("phases = %d, want explore then work", len(result.Phases))
-	}
-	if result.Phases[0].Name != orchestrator.PhaseExplore {
-		t.Errorf("first phase = %q, want %q", result.Phases[0].Name, orchestrator.PhaseExplore)
-	}
-	if result.Phases[1].Name != orchestrator.PhaseWork {
-		t.Errorf("second phase = %q, want %q", result.Phases[1].Name, orchestrator.PhaseWork)
-	}
-	// Every look closes before the first piece of work starts.
-	for i, step := range result.Steps {
-		if i < 2 && step.Phase != orchestrator.PhaseExplore {
-			t.Fatalf("step %d is %s, want a look first", i, step.Phase)
-		}
-		if i >= 2 && step.Phase != orchestrator.PhaseWork {
-			t.Fatalf("step %d is %s, want work after the looks", i, step.Phase)
-		}
-	}
+// askLogin asks code.search for "login" of one repository: the one question
+// most dispatch tests below are about.
+func askLogin(ctx context.Context, agent *orchestrator.Agent, repository string) (*orchestrator.Result, error) {
+	return agent.Ask(ctx, orchestrator.Question{
+		Capability: "code.search", Repository: repository,
+		Payload: map[string]any{"query": "login"},
+	})
 }
 
-// Exploring is not unbilled preparation: hiding what it cost would make every
-// task report a total that never happened.
-func TestExploringIsMeasuredLikeAnyOtherPhase(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+// everyRepository is a plan with one independent code.search per fixture
+// repository, which is the smallest plan with a wave wider than one step.
+func everyRepository() contract.Plan {
+	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
+	plan := contract.Plan{Task: "login"}
+	for _, repository := range []string{"api", "web"} {
+		plan.Steps = append(plan.Steps, contract.Step{
+			ID: "search-" + repository, Capability: "code.search", Repository: repository,
+			Payload: map[string]any{"query": "login"}, Permission: permission,
+		})
 	}
-	explore := result.Phases[0]
-	if explore.Steps != 2 {
-		t.Errorf("explore steps = %d, want one per repository", explore.Steps)
-	}
-	if explore.Spent.Duration <= 0 {
-		t.Error("the look cost time and the phase does not say so")
-	}
-	if result.Spent.Duration < explore.Spent.Duration {
-		t.Error("the total leaves the look out")
-	}
+	return plan
 }
+
+// lookThenSearch is a plan where each repository's search waits on its own
+// look, which is what blocking is about.
+func lookThenSearch() contract.Plan {
+	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
+	plan := contract.Plan{Task: "login"}
+	for _, repository := range []string{"api", "web"} {
+		plan.Steps = append(plan.Steps,
+			contract.Step{
+				ID: "explore-" + repository, Capability: "code.search", Repository: repository,
+				Payload: map[string]any{"query": "login"}, Permission: permission,
+			},
+			contract.Step{
+				ID: "search-" + repository, Capability: "code.search", Repository: repository,
+				Payload: map[string]any{"query": "login"}, Permission: permission,
+				Needs: []string{"explore-" + repository},
+			})
+	}
+	return plan
+}
+
+// ---------------------------------------------------------------------------
+// A phase cut short
+// ---------------------------------------------------------------------------
 
 // A phase that ended badly is exactly the phase somebody reads the report
 // for, and it used to be the one the report left out: the accounting was
@@ -325,7 +324,7 @@ func TestAPhaseCutShortStillReportsWhatItSpent(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
 	agent, _ := build(t, &fakeRunner{}, 1, filepath.Join(readOnly, "runs"))
 
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := askLogin(t.Context(), agent, "api")
 	if err == nil {
 		t.Skip("this user can write into a directory with mode 0500")
 	}
@@ -333,8 +332,8 @@ func TestAPhaseCutShortStillReportsWhatItSpent(t *testing.T) {
 		t.Fatalf("phases = %+v, want the look that ran before the dump failed", result.Phases)
 	}
 	explore := result.Phases[0]
-	if explore.Name != orchestrator.PhaseExplore {
-		t.Errorf("phase = %q, want %q", explore.Name, orchestrator.PhaseExplore)
+	if explore.Name != orchestrator.PhaseAsk {
+		t.Errorf("phase = %q, want %q", explore.Name, orchestrator.PhaseAsk)
 	}
 	if explore.Steps != 1 {
 		t.Errorf("phase steps = %d, want the one step that closed before the dump failed", explore.Steps)
@@ -344,123 +343,6 @@ func TestAPhaseCutShortStillReportsWhatItSpent(t *testing.T) {
 	}
 	if explore.Elapsed <= 0 {
 		t.Error("the phase took no time at all, which is not what a step closing looks like")
-	}
-}
-
-func TestOneWorkStepPerRepositoryInScope(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	want := map[string]bool{"search-api": false, "search-web": false}
-	for _, step := range result.Steps {
-		if step.Phase != orchestrator.PhaseWork {
-			continue
-		}
-		if _, expected := want[step.Step.ID]; !expected {
-			t.Fatalf("unexpected work step %s", step.Step.ID)
-		}
-		want[step.Step.ID] = true
-	}
-	for id, seen := range want {
-		if !seen {
-			t.Errorf("%s never ran", id)
-		}
-	}
-}
-
-func TestScopeNarrowsTheCommission(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{
-		Text:         "login",
-		Repositories: []string{"api"},
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	for _, step := range result.Steps {
-		if step.Step.Repository != "api" {
-			t.Fatalf("%s ran against %s, which was out of scope", step.Step.ID, step.Step.Repository)
-		}
-	}
-}
-
-// The whole return on having looked: the work pass only walks the areas where
-// the commission actually landed.
-func TestTheLookNarrowsTheWorkThatFollows(t *testing.T) {
-	runner := &fakeRunner{
-		answer: func(req contract.RunRequest) (contract.Outcome, error) {
-			return hits("internal/auth/login.go", "internal/http/route.go", "cmd/main.go"), nil
-		},
-	}
-	agent, _ := build(t, runner, 0, "")
-
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	var work contract.Step
-	for _, step := range result.Steps {
-		if step.Phase == orchestrator.PhaseWork {
-			work = step.Step
-		}
-	}
-	scope, ok := work.Payload["scope"].([]string)
-	if !ok {
-		t.Fatalf("the work step was not narrowed: %v", work.Payload)
-	}
-	if strings.Join(scope, ",") != "cmd,internal" {
-		t.Fatalf("scope = %v, want the top-level areas the look found", scope)
-	}
-	// The look itself asks for no context: it is finding out WHERE the
-	// commission lands, not reading it.
-	for _, req := range runner.requests() {
-		if lines, isSet := req.Payload["context_lines"]; isSet && lines != 0 {
-			t.Errorf("the look asked for %v context lines", lines)
-		}
-	}
-}
-
-// Narrowing must never silently drop a hit that sits at the repository root,
-// because a root file has no directory to narrow to.
-func TestAHitAtTheRootLeavesTheWorkUnnarrowed(t *testing.T) {
-	runner := &fakeRunner{
-		answer: func(contract.RunRequest) (contract.Outcome, error) {
-			return hits("internal/auth.go", "README.md"), nil
-		},
-	}
-	agent, _ := build(t, runner, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	for _, step := range result.Steps {
-		if step.Phase != orchestrator.PhaseWork {
-			continue
-		}
-		if _, narrowed := step.Step.Payload["scope"]; narrowed {
-			t.Fatalf("a root hit cannot be narrowed away: %v", step.Step.Payload)
-		}
-	}
-}
-
-func TestWhatTheLookFoundBecomesADiscovery(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(result.Discoveries) != 2 {
-		t.Fatalf("discoveries = %d, want one per repository looked at", len(result.Discoveries))
-	}
-	for _, found := range result.Discoveries {
-		if found.Level != contract.ContextRepository {
-			t.Errorf("a fact about one repository was filed under %v", found.Level)
-		}
-		if !strings.Contains(found.Note, "login") {
-			t.Errorf("the note does not say what was looked for: %q", found.Note)
-		}
 	}
 }
 
@@ -479,7 +361,7 @@ func TestWhatTheFarSideReportsSurvivesTheTrip(t *testing.T) {
 		},
 	}
 	agent, _ := build(t, runner, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := agent.DispatchPlan(t.Context(), everyRepository(), 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -497,16 +379,6 @@ func TestWhatTheFarSideReportsSurvivesTheTrip(t *testing.T) {
 	if partial != 1 {
 		t.Errorf("the same note was recorded %d times, want once", partial)
 	}
-	// It travels alongside what the orchestrator worked out, not instead.
-	summary := 0
-	for _, found := range result.Discoveries {
-		if strings.Contains(found.Note, "hit(s)") {
-			summary++
-		}
-	}
-	if summary == 0 {
-		t.Error("carrying the runner's note lost the orchestrator's own summary")
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +388,7 @@ func TestWhatTheFarSideReportsSurvivesTheTrip(t *testing.T) {
 func TestEveryStepCarriesThePermissionItInherited(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 0, "")
-	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "find every TODO"}); err != nil {
+	if _, err := askLogin(t.Context(), agent, "api"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	requests := runner.requests()
@@ -524,8 +396,8 @@ func TestEveryStepCarriesThePermissionItInherited(t *testing.T) {
 		t.Fatal("nothing was dispatched")
 	}
 	for _, req := range requests {
-		if req.Permission.Task != "find every TODO" {
-			t.Errorf("a step carried %q instead of the commission", req.Permission.Task)
+		if req.Permission.Task != "code.search in api" {
+			t.Errorf("a step carried %q instead of the question", req.Permission.Task)
 		}
 		if !req.Permission.Allows(contract.EffectRead) {
 			t.Error("reading is free by default and was not granted")
@@ -543,8 +415,9 @@ func TestEveryStepCarriesThePermissionItInherited(t *testing.T) {
 func TestAHeavierCommissionPassesItsGrantDown(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 0, "")
-	_, err := agent.Run(t.Context(), orchestrator.Task{
-		Text:    "rewrite the login form",
+	_, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search", Repository: "api",
+		Payload: map[string]any{"query": "rewrite the login form"},
 		Effects: []contract.Effect{contract.EffectWrite},
 	})
 	if err != nil {
@@ -558,8 +431,8 @@ func TestAHeavierCommissionPassesItsGrantDown(t *testing.T) {
 }
 
 // The standing grant is the settings file's own layer, added beneath
-// whatever a commission or question asks for on its own -- Run and Ask both
-// carry it down the same way they already carry the free read.
+// whatever a question asks for on its own -- it travels down the same way
+// the free read does.
 func TestStandingEffectsReachEveryDispatch(t *testing.T) {
 	runner := &fakeRunner{}
 	reg := catalog(t)
@@ -591,9 +464,6 @@ func TestStandingEffectsReachEveryDispatch(t *testing.T) {
 		t.Fatalf("orchestrator.New: %v", err)
 	}
 
-	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "find every TODO"}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
 	if _, err := agent.Ask(t.Context(), orchestrator.Question{
 		Capability: "code.search", Repository: "api", Payload: map[string]any{"query": "login"},
 	}); err != nil {
@@ -617,12 +487,12 @@ func TestStandingEffectsReachEveryDispatch(t *testing.T) {
 
 func TestEveryChildIsReviewed(t *testing.T) {
 	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := agent.DispatchPlan(t.Context(), everyRepository(), 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(result.Steps) != 4 {
-		t.Fatalf("steps = %d, want two looks and two searches", len(result.Steps))
+	if len(result.Steps) != 2 {
+		t.Fatalf("steps = %d, want one search per repository", len(result.Steps))
 	}
 	for _, step := range result.Steps {
 		if step.Review.Parent == contract.VerdictUnspecified {
@@ -648,7 +518,7 @@ func TestTheParentOverrulesAChildThatLiesAboutSucceeding(t *testing.T) {
 	}
 	agent, _ := build(t, runner, 0, "")
 
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	result, err := askLogin(t.Context(), agent, "api")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -673,7 +543,7 @@ func TestTheParentOverrulesAChildThatLiesAboutSucceeding(t *testing.T) {
 
 func TestAgreementIsNotRecordedAsADispute(t *testing.T) {
 	agent, _ := build(t, &fakeRunner{}, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := agent.DispatchPlan(t.Context(), everyRepository(), 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -709,7 +579,7 @@ func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
 	}
 	agent, reg := build(t, runner, 0, "")
 
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	result, err := askLogin(t.Context(), agent, "api")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -800,7 +670,7 @@ func TestAFailureCarriesItsRawTextOntoTheStepAndTheCatalog(t *testing.T) {
 	}
 	agent, reg := build(t, runner, 0, "")
 
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	result, err := askLogin(t.Context(), agent, "api")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -851,9 +721,7 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 		{"web", contract.VerdictFailed},
 		{"api", contract.VerdictOK},
 	} {
-		result, err := agent.Run(t.Context(), orchestrator.Task{
-			Text: "login", Repositories: []string{tc.repository},
-		})
+		result, err := askLogin(t.Context(), agent, tc.repository)
 		if err != nil {
 			t.Fatalf("%s: Run: %v", tc.repository, err)
 		}
@@ -873,7 +741,7 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 	// on what the last call found, instead of dispatching into the same wall.
 	// Without that, a recorded verdict is a note nobody reads.
 	before := len(runner.requests())
-	again, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"web"}})
+	again, err := askLogin(t.Context(), agent, "web")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -893,13 +761,13 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 func TestTheFunnelIsConsultedPerRepository(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
 	chosen := map[string]string{}
-	for _, step := range result.Steps {
-		chosen[step.Step.Repository] = step.Decision.Chosen.ID
+	for _, repository := range []string{"api", "web"} {
+		result, err := askLogin(t.Context(), agent, repository)
+		if err != nil {
+			t.Fatalf("Ask %s: %v", repository, err)
+		}
+		chosen[repository] = result.Steps[0].Decision.Chosen.ID
 	}
 	// api has a warm Fixture index and Fixture scores higher; web has none, so
 	// Fixture is dropped on constraints and ripgrep is left.
@@ -922,14 +790,14 @@ func TestWorkIsBlockedWhenTheLookItWaitedOnFailed(t *testing.T) {
 		},
 	}
 	agent, _ := build(t, runner, 0, "")
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := agent.DispatchPlan(t.Context(), lookThenSearch(), 0)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("DispatchPlan: %v", err)
 	}
 
 	looks := 0
 	for _, step := range result.Steps {
-		if step.Phase == orchestrator.PhaseExplore {
+		if strings.HasPrefix(step.Step.ID, "explore-") {
 			looks++
 			continue
 		}
@@ -958,7 +826,7 @@ func TestWorkIsBlockedWhenTheLookItWaitedOnFailed(t *testing.T) {
 func TestAnUnknownRepositoryIsRefusedBeforeAnythingRuns(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 0, "")
-	_, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"ghost"}})
+	_, err := askLogin(t.Context(), agent, "ghost")
 	if got := contract.KindOf(err); got != contract.FailureNotFound {
 		t.Fatalf("kind = %v, want not_found", got)
 	}
@@ -967,19 +835,11 @@ func TestAnUnknownRepositoryIsRefusedBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
-func TestACommissionWithNoTextIsRefused(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, "")
-	_, err := agent.Run(t.Context(), orchestrator.Task{Text: "   "})
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
-		t.Fatalf("kind = %v, want invalid_input", got)
-	}
-}
-
 // An agent with nobody behind it can plan and choose; it cannot dispatch, and
 // saying so is better than failing halfway through.
 func TestWithNoRunnerNothingIsDispatched(t *testing.T) {
 	agent, _ := build(t, nil, 0, "")
-	_, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	_, err := askLogin(t.Context(), agent, "api")
 	if got := contract.KindOf(err); got != contract.FailureUnavailable {
 		t.Fatalf("kind = %v, want unavailable", got)
 	}
@@ -992,8 +852,8 @@ func TestWithNoRunnerNothingIsDispatched(t *testing.T) {
 func TestStepsInOneWaveRunAtTheSameTime(t *testing.T) {
 	runner := &fakeRunner{delay: 30 * time.Millisecond}
 	agent, _ := build(t, runner, 0, "")
-	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
-		t.Fatalf("Run: %v", err)
+	if _, err := agent.DispatchPlan(t.Context(), everyRepository(), 0); err != nil {
+		t.Fatalf("DispatchPlan: %v", err)
 	}
 	if runner.peak.Load() < 2 {
 		t.Fatalf("peak overlap = %d, want the two repositories to run together", runner.peak.Load())
@@ -1003,8 +863,8 @@ func TestStepsInOneWaveRunAtTheSameTime(t *testing.T) {
 func TestTheCeilingLimitsHowManyRunAtOnce(t *testing.T) {
 	runner := &fakeRunner{delay: 20 * time.Millisecond}
 	agent, _ := build(t, runner, 1, "")
-	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
-		t.Fatalf("Run: %v", err)
+	if _, err := agent.DispatchPlan(t.Context(), everyRepository(), 0); err != nil {
+		t.Fatalf("DispatchPlan: %v", err)
 	}
 	if got := runner.peak.Load(); got != 1 {
 		t.Fatalf("peak overlap = %d, want the configured ceiling of 1", got)
@@ -1038,7 +898,7 @@ func TestCancellationStopsTheRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	result, err := agent.Run(ctx, orchestrator.Task{Text: "login"})
+	result, err := askLogin(ctx, agent, "api")
 	if err == nil {
 		t.Fatal("a canceled commission has to stop")
 	}
@@ -1062,7 +922,7 @@ func TestTheRunIsWrittenAsEachStepClosesAndWhenItCloses(t *testing.T) {
 	dir := t.TempDir()
 	agent, _ := build(t, &fakeRunner{}, 1, dir)
 
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := askLogin(t.Context(), agent, "api")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1104,7 +964,7 @@ func TestACutShortRunStillLeavesAPaperCopy(t *testing.T) {
 	}
 	agent, _ := build(t, runner, 0, dir)
 
-	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	result, err := askLogin(t.Context(), agent, "api")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1117,13 +977,13 @@ func TestACutShortRunStillLeavesAPaperCopy(t *testing.T) {
 		t.Errorf("recorded verdict = %q, want failed", record.Verdict)
 	}
 	if len(record.Steps) == 0 {
-		t.Error("the failed looks were not recorded")
+		t.Error("the failed step was not recorded")
 	}
 }
 
 func TestCheckpointingOffLeavesNothingBehind(t *testing.T) {
 	agent, _ := build(t, &fakeRunner{}, 0, "")
-	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
+	if _, err := askLogin(t.Context(), agent, "api"); err != nil {
 		t.Fatalf("a run with checkpointing off still has to work: %v", err)
 	}
 }
@@ -1283,600 +1143,5 @@ func TestAskRejectsAMissingRequiredFieldBeforeDispatch(t *testing.T) {
 	}
 	if got := runner.requests(); len(got) != 0 {
 		t.Errorf("runner saw %d request(s), want 0 -- dispatched before validating", len(got))
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Resume
-// ---------------------------------------------------------------------------
-
-// A crash between the look closing and the split running leaves a receipt
-// whose plan never grew past the look: hasWork reads false, and there is no
-// honest shape to split on without redoing the look that would have decided
-// it. Resume redoes it whole, ignoring that the old attempt's look already
-// passed review, and then splits and works exactly as a fresh commission
-// would.
-func TestResumeRedoesExploreWhenSplittingNeverRan(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{
-		answer: func(contract.RunRequest) (contract.Outcome, error) {
-			return hits("internal/auth/login.go"), nil
-		},
-	}
-	agent, _ := build(t, runner, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-
-	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindTask, Task: "login",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Plan: contract.Plan{Task: "login", Steps: []contract.Step{{
-			ID: "explore-api", Capability: "code.search", Repository: "api",
-			Payload: map[string]any{"query": "login"}, Permission: permission,
-		}}},
-		Steps: []checkpoint.StepState{{
-			ID: "explore-api", Capability: "code.search", Repository: "api",
-			Implementation: "ripgrep", Verdict: "ok", Review: "ok",
-		}},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	result, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if len(runner.requests()) != 2 {
-		t.Fatalf("requests = %d, want 2 -- the look is redone, not trusted from the receipt", len(runner.requests()))
-	}
-	// Regression: the checkpoint record above never sets Effects, exactly as
-	// checkpoint.Run.Effects is documented to hold only what a commission
-	// authorized BEYOND reading. Rebuilding the permission from that field
-	// alone, with nothing prepended, would silently drop the free read, and
-	// every real adapter would refuse the redone look with permission
-	// denied -- read has to be added back here the same way Run adds it.
-	if !runner.requests()[0].Permission.Allows(contract.EffectRead) {
-		t.Fatal("the redone look was not granted the read every commission gets for free")
-	}
-	if result.Verdict != contract.VerdictOK {
-		t.Fatalf("verdict = %v, want ok", result.Verdict)
-	}
-	if len(result.Plan.Steps) != 2 {
-		t.Fatalf("plan steps = %d, want 2 (redone look + work)", len(result.Plan.Steps))
-	}
-	if len(result.Steps) != 2 {
-		t.Fatalf("steps = %d, want 2 -- both the redone look and the work it enabled", len(result.Steps))
-	}
-}
-
-// A redone look is rebuilt from what the receipt says the commission held --
-// the free read, its own effects, and what --allow adds now -- and from
-// nothing else. The operator's standing grant is deliberately not one of the
-// layers: the receipt does not record which floor the commission ran on, and
-// a commission opened by a connected client ran on that client's floor. This
-// test asserts the absence as hard as the presences, because the absence is
-// the whole point: it is what stops resuming a chat's run from handing it
-// every effect the operator ever granted themselves.
-func TestResumeRebuildsTheLookWithoutWideningWhatWasGranted(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{
-		answer: func(contract.RunRequest) (contract.Outcome, error) {
-			return hits("internal/auth/login.go"), nil
-		},
-	}
-	reg := catalog(t)
-	for _, capability := range reg.Capabilities() {
-		impls, err := reg.ImplementationsFor(capability.ID)
-		if err != nil {
-			t.Fatalf("ImplementationsFor: %v", err)
-		}
-		for _, impl := range impls {
-			runner.serves = append(runner.serves, impl.ID)
-		}
-	}
-	chooser, err := selector.New(selector.Config{})
-	if err != nil {
-		t.Fatalf("selector.New: %v", err)
-	}
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-	agent, err := orchestrator.New(orchestrator.Config{
-		Catalog:         reg,
-		Chooser:         chooser,
-		Runner:          runner,
-		Checkpoints:     store,
-		StandingEffects: []contract.Effect{contract.EffectProcess},
-	})
-	if err != nil {
-		t.Fatalf("orchestrator.New: %v", err)
-	}
-
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindTask, Task: "login",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		Effects:         []contract.Effect{contract.EffectWrite},
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	if _, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{
-		Effects: []contract.Effect{contract.EffectExternal},
-	}); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	requests := runner.requests()
-	if len(requests) == 0 {
-		t.Fatal("nothing was dispatched")
-	}
-	permission := requests[0].Permission
-	for _, want := range []contract.Effect{
-		contract.EffectRead,     // free by default
-		contract.EffectWrite,    // what the original commission held
-		contract.EffectExternal, // what --allow added on this resume
-	} {
-		if !permission.Allows(want) {
-			t.Errorf("redone look permission = %v, missing %s", permission.Effects, want)
-		}
-	}
-	if permission.Allows(contract.EffectProcess) {
-		t.Errorf("redone look permission = %v: resuming re-applied the operator's "+
-			"standing grant, which the commission itself never asked for and the "+
-			"receipt never recorded", permission.Effects)
-	}
-}
-
-// Once splitting already ran, the plan on the receipt already carries every
-// step's payload. A step that already passed review is left alone; a step
-// that never closed -- failed, canceled, or the process died mid-wave -- is
-// retried.
-func TestResumeContinuesFromASplitPlanAlreadyOnFile(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{
-		answer: func(contract.RunRequest) (contract.Outcome, error) {
-			out := hits("internal/auth/login.go")
-			out.Discoveries = append(out.Discoveries, contract.Discovery{
-				Level: contract.ContextRepository, Note: "search-api: found it fresh",
-			})
-			return out, nil
-		},
-	}
-	agent, _ := build(t, runner, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-
-	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindTask, Task: "login",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Plan: contract.Plan{Task: "login", Steps: []contract.Step{
-			{ID: "explore-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Permission: permission},
-			{ID: "search-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Needs: []string{"explore-api"},
-				Permission: permission},
-		}},
-		Steps: []checkpoint.StepState{{
-			// search-api never closed -- the process died mid-work.
-			ID: "explore-api", Capability: "code.search", Repository: "api",
-			Implementation: "ripgrep", Verdict: "ok", Review: "ok",
-			Discoveries: []contract.Discovery{
-				{Level: contract.ContextRepository, Note: "explore-api: already found this before the crash"},
-			},
-		}},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	result, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if len(runner.requests()) != 1 {
-		t.Fatalf("requests = %d, want 1 -- explore-api already passed review and must not be redispatched", len(runner.requests()))
-	}
-	if result.Verdict != contract.VerdictOK {
-		t.Fatalf("verdict = %v, want ok", result.Verdict)
-	}
-	if len(result.Steps) != 1 || result.Steps[0].Step.ID != "search-api" {
-		t.Fatalf("steps = %+v, want only the redispatched search-api", result.Steps)
-	}
-	// explore-api was never redispatched, so its discovery can only have
-	// reached the result by being read back off the receipt.
-	var notes []string
-	for _, d := range result.Discoveries {
-		notes = append(notes, d.Note)
-	}
-	joined := strings.Join(notes, "\n")
-	if !strings.Contains(joined, "explore-api: already found this before the crash") {
-		t.Errorf("discoveries = %v, want explore-api's recovered from the receipt", notes)
-	}
-	if !strings.Contains(joined, "search-api: found it fresh") {
-		t.Errorf("discoveries = %v, want search-api's from this dispatch", notes)
-	}
-
-	updated, err := store.Load(runID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(updated.Steps) != 2 {
-		t.Fatalf("persisted steps = %d, want 2 -- the old entry kept, the new one added", len(updated.Steps))
-	}
-	if !updated.Closed || updated.Verdict != "ok" {
-		t.Fatalf("closed = %v verdict = %q, want closed ok", updated.Closed, updated.Verdict)
-	}
-}
-
-// A step already on a split plan is retried with exactly the permission it
-// was stamped with, plus whatever --allow adds now, and the operator's
-// standing grant is not added back on top -- the same rule as the redone
-// look, through the other branch.
-func TestARetriedStepKeepsItsStampedPermissionAndOnlyWhatAllowAdds(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{
-		answer: func(contract.RunRequest) (contract.Outcome, error) {
-			return hits("internal/auth/login.go"), nil
-		},
-	}
-	reg := catalog(t)
-	for _, capability := range reg.Capabilities() {
-		impls, err := reg.ImplementationsFor(capability.ID)
-		if err != nil {
-			t.Fatalf("ImplementationsFor: %v", err)
-		}
-		for _, impl := range impls {
-			runner.serves = append(runner.serves, impl.ID)
-		}
-	}
-	chooser, err := selector.New(selector.Config{})
-	if err != nil {
-		t.Fatalf("selector.New: %v", err)
-	}
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-	agent, err := orchestrator.New(orchestrator.Config{
-		Catalog:         reg,
-		Chooser:         chooser,
-		Runner:          runner,
-		Checkpoints:     store,
-		StandingEffects: []contract.Effect{contract.EffectProcess},
-	})
-	if err != nil {
-		t.Fatalf("orchestrator.New: %v", err)
-	}
-
-	original := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindTask, Task: "login",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Plan: contract.Plan{Task: "login", Steps: []contract.Step{
-			{ID: "explore-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Permission: original},
-			{ID: "search-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Needs: []string{"explore-api"},
-				Permission: original},
-		}},
-		Steps: []checkpoint.StepState{{
-			// search-api never closed -- the process died mid-work.
-			ID: "explore-api", Capability: "code.search", Repository: "api",
-			Implementation: "ripgrep", Verdict: "ok", Review: "ok",
-		}},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	if _, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{
-		Effects: []contract.Effect{contract.EffectWrite},
-	}); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	requests := runner.requests()
-	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 -- only search-api needed retrying", len(requests))
-	}
-	permission := requests[0].Permission
-	for _, want := range []contract.Effect{contract.EffectRead, contract.EffectWrite} {
-		if !permission.Allows(want) {
-			t.Errorf("retried step permission = %v, missing %s", permission.Effects, want)
-		}
-	}
-	if permission.Allows(contract.EffectProcess) {
-		t.Errorf("retried step permission = %v: the stamped permission was widened "+
-			"by the operator's standing grant on the way back in", permission.Effects)
-	}
-}
-
-// A run that already finished with nothing outstanding is a no-op: every
-// step is already in alreadyOK, so no wave has anything left to schedule.
-func TestResumeOnAClosedRunWithNothingLeftIsANoOp(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{}
-	agent, _ := build(t, runner, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-
-	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindTask, Task: "login",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Closed: true, Verdict: "ok",
-		Plan: contract.Plan{Task: "login", Steps: []contract.Step{
-			{ID: "explore-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Permission: permission},
-			{ID: "search-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Needs: []string{"explore-api"},
-				Permission: permission},
-		}},
-		Steps: []checkpoint.StepState{
-			{ID: "explore-api", Capability: "code.search", Repository: "api", Verdict: "ok", Review: "ok"},
-			{ID: "search-api", Capability: "code.search", Repository: "api", Verdict: "ok", Review: "ok"},
-		},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	result, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if len(runner.requests()) != 0 {
-		t.Fatalf("requests = %d, want 0 -- nothing was left to do", len(runner.requests()))
-	}
-	if len(result.Steps) != 0 {
-		t.Fatalf("steps = %d, want 0 -- every step was already on file", len(result.Steps))
-	}
-	if result.Verdict != contract.VerdictOK {
-		t.Fatalf("verdict = %v, want ok", result.Verdict)
-	}
-}
-
-// Nothing is redispatched here -- every step is already OK -- so this is the
-// purest form of the gap: if discoveries did not survive on the receipt,
-// there would be nothing anywhere left to report them from.
-func TestResumeRecoversDiscoveriesFromStepsClosedInAnEarlierProcess(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{}
-	agent, _ := build(t, runner, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-
-	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindTask, Task: "login",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Closed: true, Verdict: "ok",
-		Plan: contract.Plan{Task: "login", Steps: []contract.Step{
-			{ID: "explore-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Permission: permission},
-			{ID: "search-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "login"}, Needs: []string{"explore-api"},
-				Permission: permission},
-		}},
-		Steps: []checkpoint.StepState{
-			{ID: "explore-api", Capability: "code.search", Repository: "api", Verdict: "ok", Review: "ok",
-				Discoveries: []contract.Discovery{
-					{Level: contract.ContextRepository, Note: "explore-api: 4 hit(s)"},
-				}},
-			{ID: "search-api", Capability: "code.search", Repository: "api", Verdict: "ok", Review: "ok",
-				Discoveries: []contract.Discovery{
-					{Level: contract.ContextRepository, Note: "search-api: answered for free"},
-				}},
-		},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	result, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if len(runner.requests()) != 0 {
-		t.Fatalf("requests = %d, want 0 -- nothing was left to do", len(runner.requests()))
-	}
-	if len(result.Discoveries) != 2 {
-		t.Fatalf("discoveries = %d, want both steps' -- nothing ran, so both can only have come off the receipt: %+v",
-			len(result.Discoveries), result.Discoveries)
-	}
-	var notes []string
-	for _, d := range result.Discoveries {
-		notes = append(notes, d.Note)
-	}
-	joined := strings.Join(notes, "\n")
-	if !strings.Contains(joined, "explore-api: 4 hit(s)") || !strings.Contains(joined, "search-api: answered for free") {
-		t.Errorf("discoveries = %v, want both steps' recovered from the receipt", notes)
-	}
-}
-
-// A peer ahead of this core is refused, because the core cannot honor a
-// field it has never heard of -- the same rule Version.Supports already
-// applies to a live connection applies here to a receipt written by a peer
-// version that has since moved on.
-func TestResumeRefusesAStaleContractVersion(t *testing.T) {
-	dir := t.TempDir()
-	agent, _ := build(t, &fakeRunner{}, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-	permission := contract.Permission{Task: "x", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindAsk, Task: "x",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: "1.0.0", Started: time.Now(),
-		Plan: contract.Plan{Task: "x", Steps: []contract.Step{{
-			ID: "ask-api", Capability: "code.search", Repository: "api",
-			Payload: map[string]any{"query": "x"}, Permission: permission,
-		}}},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	_, err = agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
-		t.Fatalf("kind = %v, want invalid_input", got)
-	}
-}
-
-// A repository the catalog no longer has is refused whole, before any step
-// is touched -- discovering it halfway through would leave some steps
-// retried and others not, for a receipt that was never resumable at all.
-func TestResumeRefusesARepositoryNoLongerInTheCatalog(t *testing.T) {
-	dir := t.TempDir()
-	agent, _ := build(t, &fakeRunner{}, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-	permission := contract.Permission{Task: "x", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindAsk, Task: "x",
-		Repositories: []string{"ghost"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Plan: contract.Plan{Task: "x", Steps: []contract.Step{{
-			ID: "ask-ghost", Capability: "code.search", Repository: "ghost",
-			Payload: map[string]any{"query": "x"}, Permission: permission,
-		}}},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	_, err = agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if got := contract.KindOf(err); got != contract.FailureNotFound {
-		t.Fatalf("kind = %v, want not_found", got)
-	}
-}
-
-// BudgetUSD replaces what remains of the grant instead of adding to it, the
-// same rule a fresh commission's --budget already follows. The share a
-// single-step wave is handed is the whole grant, so it reads the override
-// straight off the request the runner receives.
-func TestResumeReplacesTheRemainingBudgetRatherThanAddingToIt(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{}
-	agent, _ := build(t, runner, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-	permission := contract.Permission{Task: "x", Effects: []contract.Effect{contract.EffectRead}}
-	save := func(id string) {
-		t.Helper()
-		if err := store.Save(checkpoint.Run{
-			ID: id, Kind: checkpoint.KindAsk, Task: "x",
-			Repositories: []string{"api"}, BudgetUSD: 3,
-			ContractVersion: contract.Current.String(), Started: time.Now(),
-			Plan: contract.Plan{Task: "x", Steps: []contract.Step{{
-				ID: "ask-api", Capability: "code.search", Repository: "api",
-				Payload: map[string]any{"query": "x"}, Permission: permission,
-			}}},
-		}); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-	}
-
-	plainID := checkpoint.NewID(time.Now())
-	save(plainID)
-	if _, err := agent.Resume(t.Context(), plainID, orchestrator.ResumeOptions{}); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-
-	overrideID := checkpoint.NewID(time.Now())
-	save(overrideID)
-	if _, err := agent.Resume(t.Context(), overrideID, orchestrator.ResumeOptions{BudgetUSD: 50}); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-
-	reqs := runner.requests()
-	if len(reqs) != 2 {
-		t.Fatalf("requests = %d, want 2", len(reqs))
-	}
-	if got := reqs[0].Permission.BudgetUSD; got != 3 {
-		t.Errorf("plain resume share = %v, want the remaining grant (3)", got)
-	}
-	if got := reqs[1].Permission.BudgetUSD; got != 50 {
-		t.Errorf("overridden resume share = %v, want the override (50), not 3+50", got)
-	}
-}
-
-// A single ask is one step and no split to redo: it dispatches exactly as it
-// did the first time.
-func TestResumeOfASingleAskRedispatchesWhatIsLeft(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{}
-	agent, _ := build(t, runner, 0, dir)
-	store, err := checkpoint.New(dir)
-	if err != nil {
-		t.Fatalf("checkpoint.New: %v", err)
-	}
-	permission := contract.Permission{Task: "code.search in api", Effects: []contract.Effect{contract.EffectRead}}
-	runID := checkpoint.NewID(time.Now())
-	if err := store.Save(checkpoint.Run{
-		ID: runID, Kind: checkpoint.KindAsk, Task: "code.search in api",
-		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: contract.Current.String(), Started: time.Now(),
-		Plan: contract.Plan{Task: "code.search in api", Steps: []contract.Step{{
-			ID: "ask-api", Capability: "code.search", Repository: "api",
-			Payload: map[string]any{"query": "x"}, Permission: permission,
-		}}},
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	result, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if result.Verdict != contract.VerdictOK {
-		t.Fatalf("verdict = %v, want ok", result.Verdict)
-	}
-	if len(result.Phases) != 1 || result.Phases[0].Name != orchestrator.PhaseAsk {
-		t.Fatalf("phases = %+v, want one named %q", result.Phases, orchestrator.PhaseAsk)
-	}
-	if len(runner.requests()) != 1 {
-		t.Fatalf("requests = %d, want 1", len(runner.requests()))
-	}
-}
-
-// Checkpointing off means there is no disk to read a receipt back from, so
-// Resume is refused before it ever tries.
-func TestResumeIsRefusedWhenCheckpointingIsOff(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, "")
-	_, err := agent.Resume(t.Context(), "20260802T120000-abc123", orchestrator.ResumeOptions{})
-	if got := contract.KindOf(err); got != contract.FailureUnavailable {
-		t.Fatalf("kind = %v, want unavailable", got)
-	}
-}
-
-func TestResumeOfAnUnknownRunIsRefused(t *testing.T) {
-	agent, _ := build(t, &fakeRunner{}, 0, t.TempDir())
-	_, err := agent.Resume(t.Context(), checkpoint.NewID(time.Now()), orchestrator.ResumeOptions{})
-	if got := contract.KindOf(err); got != contract.FailureNotFound {
-		t.Fatalf("kind = %v, want not_found", got)
 	}
 }

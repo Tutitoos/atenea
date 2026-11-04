@@ -6,7 +6,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-func BenchmarkRunPlanConcurrentMediumDAG(b *testing.B) {
+func BenchmarkDispatchConcurrentMediumDAG(b *testing.B) {
 	runner := &fakeRunner{}
 	agent, _ := build(b, runner, 4, b.TempDir())
 	permission := contract.Permission{Task: "load benchmark", Effects: []contract.Effect{contract.EffectRead}}
@@ -31,9 +31,9 @@ func BenchmarkRunPlanConcurrentMediumDAG(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		result, err := agent.RunPlan(b.Context(), plan, 0)
+		result, err := agent.DispatchPlan(b.Context(), plan, 0)
 		if err != nil || result.Verdict != contract.VerdictOK {
-			b.Fatalf("RunPlan: result=%v err=%v", result, err)
+			b.Fatalf("DispatchPlan: result=%v err=%v", result, err)
 		}
 	}
 }

@@ -35,7 +35,7 @@ func TestTheChargeIsTotalledOntoTheReceipt(t *testing.T) {
 	const perStep = 0.11
 	agent, _ := build(t, &fakeRunner{answer: charging(perStep)}, 0, t.TempDir())
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -57,11 +57,11 @@ func TestTheChargeIsTotalledOntoTheReceipt(t *testing.T) {
 // measurements that agree on every axis the selector can see.
 func TestTheChargeNeverEntersTheBaseline(t *testing.T) {
 	free, freeRows := metered(t, &fakeRunner{})
-	if _, err := free.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := free.DispatchPlan(context.Background(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("free run: %v", err)
 	}
 	billed, billedRows := metered(t, &fakeRunner{answer: charging(4.99)})
-	if _, err := billed.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := billed.DispatchPlan(context.Background(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("billed run: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestThePriceIsFiledOnThePaperCopy(t *testing.T) {
 	dir := t.TempDir()
 	agent, _ := build(t, &fakeRunner{answer: charging(0.07)}, 0, dir)
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestFreeWorkIsFiledWithoutAPrice(t *testing.T) {
 	dir := t.TempDir()
 	agent, _ := build(t, &fakeRunner{}, 0, dir)
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestARefusalDoesNotMarkTheProviderDown(t *testing.T) {
 	}
 	agent, reg := build(t, runner, 0, t.TempDir())
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestACommissionCannotSpendItsGrantMoreThanOnce(t *testing.T) {
 	runner := &fakeRunner{answer: spendsItsCeiling()}
 	agent := budgeted(t, runner, grant)
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestEveryDispatchedStepCarriesAShareOfTheGrant(t *testing.T) {
 	runner := &fakeRunner{answer: spendsItsCeiling()}
 	agent := budgeted(t, runner, grant)
 
-	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+	if _, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestTheNextWaveDividesWhatTheLastOneLeft(t *testing.T) {
 	}}
 	agent := budgeted(t, runner, grant)
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -365,9 +365,7 @@ func TestACommissionCarriesItsOwnGrant(t *testing.T) {
 	runner := &fakeRunner{answer: spendsItsCeiling()}
 	agent := budgeted(t, runner, 0.25)
 
-	if _, err := agent.Run(context.Background(), orchestrator.Task{
-		Text: "find TODO", BudgetUSD: 2,
-	}); err != nil {
+	if _, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -390,7 +388,7 @@ func TestACommissionCarriesItsOwnGrant(t *testing.T) {
 func TestAnEmptyGrantStillLetsFreeWorkThrough(t *testing.T) {
 	agent := budgeted(t, &fakeRunner{}, 0)
 
-	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	result, err := agent.DispatchPlan(context.Background(), lookThenSearch(), 0)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -413,13 +411,7 @@ func TestANonsenseGrantIsRefusedRatherThanClamped(t *testing.T) {
 		"nan":      math.NaN(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := agent.Run(context.Background(), orchestrator.Task{
-				Text: "find TODO", BudgetUSD: usd,
-			})
-			if got := contract.KindOf(err); got != contract.FailureInvalidInput {
-				t.Errorf("a budget of %v was filed as %v", usd, got)
-			}
-			_, err = agent.Ask(context.Background(), orchestrator.Question{
+			_, err := agent.Ask(context.Background(), orchestrator.Question{
 				Capability: "code.search", Repository: "api",
 				Payload: map[string]any{"query": "TODO"}, BudgetUSD: usd,
 			})
@@ -433,11 +425,9 @@ func TestANonsenseGrantIsRefusedRatherThanClamped(t *testing.T) {
 // An infinite ceiling is not a generous ceiling, it is the absence of one.
 // It travels into contract.Permission.BudgetUSD, and every check the edge
 // makes on a provider's charge is a comparison against it -- so nothing can
-// ever exceed it and the charge stops being verified at all. RunPlan already
-// refused it; Run, Ask and Resume did not, which made the door nobody types
-// at the only one that held the line. New matters most of the three: the
-// standing grant is inherited by every commission that names no figure of
-// its own.
+// ever exceed it and the charge stops being verified at all. Every door that
+// takes a figure refuses it, and New matters most of them: the standing grant
+// is inherited by every question that names no figure of its own.
 func TestAnInfiniteCeilingIsRefusedAtEveryDoor(t *testing.T) {
 	for name, usd := range map[string]float64{
 		"positive": math.Inf(1),
@@ -447,28 +437,19 @@ func TestAnInfiniteCeilingIsRefusedAtEveryDoor(t *testing.T) {
 			runner := &fakeRunner{}
 			agent := budgeted(t, runner, 0.25)
 
-			if _, err := agent.Run(context.Background(), orchestrator.Task{
-				Text: "find TODO", BudgetUSD: usd,
-			}); contract.KindOf(err) != contract.FailureInvalidInput {
-				t.Errorf("Run took a budget of %v: %v", usd, err)
-			}
 			if _, err := agent.Ask(context.Background(), orchestrator.Question{
 				Capability: "code.search", Repository: "api",
 				Payload: map[string]any{"query": "TODO"}, BudgetUSD: usd,
 			}); contract.KindOf(err) != contract.FailureInvalidInput {
 				t.Errorf("Ask took a budget of %v: %v", usd, err)
 			}
-			if _, err := agent.Resume(context.Background(), "20260101T000000-000000",
-				orchestrator.ResumeOptions{BudgetUSD: usd}); contract.KindOf(err) != contract.FailureInvalidInput {
-				t.Errorf("Resume took a budget of %v: %v", usd, err)
-			}
 			permission := contract.Permission{Task: "find TODO", Effects: []contract.Effect{contract.EffectRead}}
 			plan := contract.Plan{Task: "find TODO", Steps: []contract.Step{{
 				ID: "search-api", Capability: "code.search", Repository: "api",
 				Payload: map[string]any{"query": "TODO"}, Permission: permission,
 			}}}
-			if _, err := agent.RunPlan(context.Background(), plan, usd); contract.KindOf(err) != contract.FailureInvalidInput {
-				t.Errorf("RunPlan took a budget of %v: %v", usd, err)
+			if _, err := agent.DispatchPlan(context.Background(), plan, usd); contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Errorf("DispatchPlan took a budget of %v: %v", usd, err)
 			}
 			// The refusal has to land before dispatch, not on the way out.
 			// A +Inf ceiling also happens to break the JSON receipt at the
