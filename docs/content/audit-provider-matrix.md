@@ -52,6 +52,8 @@ Declared interfaces audited in September 2026. Tests validate Atenea routing and
 
 claude-mem was measured at the time of this audit; it is no longer a supported or declared backend (see #207). Its rows below are dated evidence.
 
+context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209). diagram was measured at the time of this audit; it is no longer a supported or declared backend (see #209). Their rows below are dated evidence.
+
 | Server | Tool | Validation |
 |---|---|---|
 | context7 | resolve-library-id | Declared; external operation not executed |

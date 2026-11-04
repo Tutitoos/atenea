@@ -2120,6 +2120,8 @@ wrap opencode  4 checked: 3 declared, 0 refused, 1 held
   Declared means it answered an MCP handshake, not that its tools work.
 ```
 
+chrome-devtools was measured at the time of this audit; it is no longer a supported or declared backend (see #209). context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209). The capture above is dated evidence.
+
 `atenea wrap --via-headroom opencode` composes the same Atenea overlay with
 Headroom's provider and transport configuration. The two JSON payloads are
 deep-merged by key; malformed payloads or incompatible key collisions stop the
@@ -2481,7 +2483,7 @@ asked for
   funnel     fixture (local)
              -> provider fixture: code.search, symbol.definition, symbol.references
                 via fixture.definition, fixture.references, fixture.search
-  vouched    context7 (local)
+  vouched    semgrep (local)
              declared by Atenea and handed to clients by `atenea wrap`
   unmatched  dart (local, off in the project's settings)
              nothing registered here provides it

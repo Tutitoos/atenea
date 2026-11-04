@@ -117,6 +117,8 @@ as an example, never as a list to copy. The failure it demonstrates is not
 history: it applies to every proxied server, and it gets worse as the count
 goes up, because they all share the one name that broke.
 
+context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209). chrome-devtools was measured at the time of this audit; it is no longer a supported or declared backend (see #209).
+
 Every one of them is bound to `127.0.0.1` — IPv4, and only IPv4. Nothing is
 listening on `::1`.
 
