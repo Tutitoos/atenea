@@ -32,8 +32,8 @@ BIN = os.path.join(HOME, ".local", "bin")
 # The agreed state, as measured on 2026-08-09/10. atenea is the core; headroom is
 # the context auditor.
 CORE = {"atenea", "headroom"}
-BACKENDS = {"context7", "semgrep"} | {"serena"}  # retired Serena must never reappear
-OMP_SUPPRESSED = {"chrome-devtools", "context7", "semgrep", "serena"}
+BACKENDS = {"semgrep"} | {"serena"}  # retired Serena must never reappear
+OMP_SUPPRESSED = {"semgrep", "serena"}
 KENA_WS = os.path.join(HOME, "kena-workspace")
 
 fails = []
