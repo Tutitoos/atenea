@@ -571,7 +571,7 @@ func TestFloorMeasurePricesTheFirstToolCallAndDerivesTheRateFromBoth(t *testing.
 // This command spends by definition: it prices a turn by paying for one. It
 // printed "about to spend real money" and then spent it in the same breath,
 // with no --confirm, no prompt and no way to see the estimate without
-// authorizing the bill -- while `task`, `ask`, `decide --run` and `agent`, all
+// authorizing the bill -- while `task`, `ask` and `agent`, all
 // of which spend less predictably, have offered --confirm all along.
 //
 // The fake CLI here answers a full cold reading, so a --dry-run that leaked

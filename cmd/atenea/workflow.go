@@ -856,10 +856,10 @@ func traceLike(step workflow.StepRow) trace.Row {
 
 // stringList collects a repeatable flag.
 //
-// The flag's own name travels with the list because one type serves three
-// flags in three commands -- --redo here, --replaces in propose, --file in
-// decide -- and a refusal hard-coded to --redo sent the reader of `atenea
-// decide --file ""` looking for a flag their command line never carried.
+// The flag's own name travels with the list because one type serves two
+// flags in two commands -- --redo here and --replaces in propose -- and a
+// refusal hard-coded to --redo sent the reader of `atenea propose --replaces ""`
+// looking for a flag their command line never carried.
 type stringList struct {
 	flag   string
 	values []string

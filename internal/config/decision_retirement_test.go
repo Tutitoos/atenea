@@ -7,7 +7,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 )
 
-func TestRemovedDecisionClassifierSettingsAreRefused(t *testing.T) {
+func TestRemovedDecisionSettingsAreRefused(t *testing.T) {
 	for _, setting := range []string{
 		`mode = "observe"`,
 		`laya_endpoint = "http://127.0.0.1:8766/v1/systemone"`,
@@ -15,6 +15,9 @@ func TestRemovedDecisionClassifierSettingsAreRefused(t *testing.T) {
 		`laya_api_key_env = "PRIVATE_CLASSIFIER_TOKEN"`,
 		`timeout = "10s"`,
 		`minimum_confidence = 0.8`,
+		`capture_dir = ""`,
+		`capture_dir = "/private/atenea-cases"`,
+		`# the table itself, with no key`,
 	} {
 		t.Run(strings.SplitN(setting, " =", 2)[0], func(t *testing.T) {
 			_, err := config.Load(write(t, minimal+"\n[decision]\n"+setting+"\n"))
