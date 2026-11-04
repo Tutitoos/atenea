@@ -115,9 +115,7 @@ type Report struct {
 var productGates = []Gate{
 	{ID: "context", Title: "Repository, workspace and language context", ScenarioIDs: []string{"S01", "S02", "S03", "S04", "S05", "S06", "S07"}, Packages: []string{"./internal/adapter/kivgraph", "./internal/workspacecontext", "./internal/dartcoverage"}},
 	{ID: "mcp", Title: "Legacy and modern MCP contracts", ScenarioIDs: []string{"S08", "S09"}, Packages: []string{"./internal/mcpcompat", "./internal/mcphttp", "./internal/mcpstdio", "./internal/mcpprobe", "./internal/passthrough"}},
-	{ID: "recovery", Title: "Bounded recovery and persistent workflows", ScenarioIDs: []string{"S11"}, Packages: []string{"./internal/recoverypilot", "./internal/workflow"}},
 	{ID: "quality", Title: "Outcome-backed provider quality", ScenarioIDs: []string{"S01", "S02", "S05", "S06"}, Packages: []string{"./internal/selector", "./internal/orchestrator"}},
-	{ID: "tracking", Title: "Checklist, telemetry and activity notifications", ScenarioIDs: []string{"S10", "S12"}, Packages: []string{"./internal/workflow", "./cmd/atenea"}},
 }
 
 // GateInput is part of ATENEA's public orchestration contract.
@@ -156,9 +154,6 @@ var scenarioProbes = map[string]probeSpec{
 	"S07": {Package: "./internal/dartcoverage", Tests: []string{"TestDartImplementationPreflightDoesNotDispatch"}},
 	"S08": {Package: "./internal/mcpcompat", Tests: []string{"TestParseAcceptsOnlyExactSupportedVersions"}},
 	"S09": {Package: "./internal/mcpcompat", Tests: []string{"TestParseAcceptsOnlyExactSupportedVersions"}},
-	"S10": {Package: "./internal/workflow", Tests: []string{"TestPlanProgressUsesTwentySegmentsAndTruncatedPercent"}},
-	"S11": {Package: "./internal/recoverypilot", Tests: []string{"TestRunFixtureKivgraphScenarioUsesProductionIndexBoundary"}},
-	"S12": {Package: "./internal/workflow", Tests: []string{"TestWorkflowPublishesDurableActivityBeforeAgentProcess"}},
 }
 
 // Run is part of ATENEA's public orchestration contract.
@@ -169,7 +164,7 @@ func Run(ctx context.Context, root string, run RunFunc) (Report, error) {
 // RunWith is part of ATENEA's public orchestration contract.
 func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Report, error) {
 	started := time.Now().UTC()
-	corpusRoot := filepath.Join(root, "benchmarks", "corpus", "v1")
+	corpusRoot := filepath.Join(root, "benchmarks", "corpus", "v2")
 	snapshot, err := corpus.LoadSnapshot(corpusRoot)
 	if err != nil {
 		return Report{}, err
@@ -194,7 +189,7 @@ func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Re
 	if probe == nil {
 		probe = runScenarioProbe
 	}
-	report := Report{SchemaVersion: 2, StartedAt: started, Commit: strings.TrimSpace(commit), SourceDirty: dirty, SourceDigest: digest, SourceFiles: files, CorpusHash: snapshot.Hash, Summary: map[string]int{}, Limits: []string{"Provider-real evidence remains pending unless a gate says real_provider.", "Live client rendering remains pending unless a gate says real_client.", "Unknown metrics stay unknown and are never converted to zero.", "No improvement percentage is claimed."}}
+	report := Report{SchemaVersion: 2, StartedAt: started, Commit: strings.TrimSpace(commit), SourceDirty: dirty, SourceDigest: digest, SourceFiles: files, CorpusHash: snapshot.Hash, Summary: map[string]int{}, Limits: []string{"Provider-real evidence remains pending unless a gate says real_provider.", "Unknown metrics stay unknown and are never converted to zero.", "No improvement percentage is claimed."}}
 	productBefore, productAfter := -1, -1
 	probed := make(map[string]ScenarioEvidence, len(snapshot.Manifest.Scenarios))
 	for _, scenario := range snapshot.Manifest.Scenarios {
@@ -211,12 +206,6 @@ func RunWith(ctx context.Context, root string, run RunFunc, probe ProbeFunc) (Re
 		item := ScenarioEvidence{ID: scenario.ID, Fixture: scenario.Fixture, FixtureSHA256: sha, Preflight: pre.Preflight, Passed: probeErr == nil && pre.Preflight != corpus.Failed, MeasurementState: Measured, EvidenceScope: Local, Evidence: clip(output, 500)}
 		if probeErr != nil {
 			item.Evidence = clipTail(output+"\n"+probeErr.Error(), 500)
-		}
-		if scenario.ID == "S12" {
-			item.MeasurementState, item.EvidenceScope = Unknown, Pending
-			if probeErr == nil {
-				item.Evidence = "local activity-notification path passed; real client rendering pending"
-			}
 		}
 		probed[scenario.ID] = item
 	}
@@ -420,7 +409,6 @@ func compareCorpusAccess(snapshot corpus.Snapshot, sourceDigest string, productB
 		{ID: "human_interventions", Unit: "count", Before: &zero, After: &zero, MeasurementState: Measured, EvidenceScope: Local, Comparable: true, NonRegression: boolp(true), Evidence: "provider-free harness required no interaction"},
 		{ID: "tokens", Unit: "tokens", MeasurementState: Unknown, EvidenceScope: Pending, Evidence: "no model invoked"},
 		{ID: "provider_cost", Unit: "currency", MeasurementState: Unknown, EvidenceScope: Pending, Evidence: "no provider receipt"},
-		{ID: "real_client_tracking_overhead", Unit: "ms", MeasurementState: Unknown, EvidenceScope: Pending, Evidence: "requires authorized live-client validation"},
 	}
 	result.Passed = callOK && latencyOK
 	return result

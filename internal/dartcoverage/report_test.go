@@ -136,7 +136,7 @@ func TestRunRevalidatesS03S07WithoutChangingCorpus(t *testing.T) {
 	}
 	root := filepath.Dir(file)
 	fixtureRoot := filepath.Join(root, "testdata")
-	corpusRoot := filepath.Join(root, "..", "..", "benchmarks", "corpus", "v1")
+	corpusRoot := filepath.Join(root, "..", "..", "benchmarks", "corpus", "v2")
 	before, err := corpus.LoadSnapshot(corpusRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestDartImplementationPreflightDoesNotDispatch(t *testing.T) {
 	}
 	report, err := Run(Options{
 		FixtureRoot:  filepath.Join(filepath.Dir(file), "testdata"),
-		CorpusRoot:   filepath.Join(filepath.Dir(file), "..", "..", "benchmarks", "corpus", "v1"),
+		CorpusRoot:   filepath.Join(filepath.Dir(file), "..", "..", "benchmarks", "corpus", "v2"),
 		CorpusSHA256: corpus.CanonicalCorpusSHA256,
 	})
 	if err != nil {

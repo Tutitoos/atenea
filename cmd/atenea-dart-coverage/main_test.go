@@ -21,7 +21,7 @@ func TestGenerateWritesStableReportWithoutAbsolutePaths(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "report.json")
 	if err := generate(runOptions{
 		FixtureRoot: filepath.Join(repository, "internal", "dartcoverage", "testdata"),
-		CorpusRoot:  filepath.Join(repository, "benchmarks", "corpus", "v1"),
+		CorpusRoot:  filepath.Join(repository, "benchmarks", "corpus", "v2"),
 		CorpusHash:  corpus.CanonicalCorpusSHA256,
 		Date:        "2026-09-06",
 		Output:      output,

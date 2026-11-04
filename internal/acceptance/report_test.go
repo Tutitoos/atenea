@@ -107,7 +107,7 @@ func TestProductReportKeepsCorpusFixedAndSeparatesLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.CorpusHash == "" || report.SourceDigest == "" || calls != len(productGates) || probes != 12 || len(seen) != 12 || len(report.Limits) != 4 {
+	if report.CorpusHash == "" || report.SourceDigest == "" || calls != len(productGates) || probes != 9 || len(seen) != 9 || len(report.Limits) != 3 {
 		t.Fatalf("report = %+v calls=%d", report, calls)
 	}
 	if !report.Comparison.Passed || len(report.Comparison.Metrics) < 6 || report.Summary["passed"] != len(productGates)+1 {

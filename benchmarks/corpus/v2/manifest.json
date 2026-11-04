@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "id": "atenea-acceptance",
+  "version": "2.0.0",
+  "description": "Fixed provider-free acceptance corpus for context, semantic evidence and compatibility. Version 2 drops the three scenarios (S10-S12) that only the removed workflow engine fed.",
+  "scenarios": [
+    {
+      "id": "S01",
+      "title": "Go repository context",
+      "capability": "code.context",
+      "language": "go",
+      "check": "go_context",
+      "fixture": "fixtures/go/repository.go",
+      "description": "The Go fixture contains a repository contract and a concrete implementation."
+    },
+    {
+      "id": "S02",
+      "title": "TypeScript repository context",
+      "capability": "code.context",
+      "language": "typescript",
+      "check": "typescript_context",
+      "fixture": "fixtures/typescript/repository.ts",
+      "description": "The TypeScript fixture contains a repository contract and a concrete implementation."
+    },
+    {
+      "id": "S03",
+      "title": "Dart repository context",
+      "capability": "code.context",
+      "language": "dart",
+      "check": "dart_context",
+      "fixture": "fixtures/dart/repository.dart",
+      "description": "The Dart fixture contains a repository contract and a concrete implementation."
+    },
+    {
+      "id": "S04",
+      "title": "Workspace context scope",
+      "capability": "workspace.context",
+      "language": "workspace",
+      "check": "workspace_context",
+      "fixture": "fixtures/workspace.json",
+      "description": "The workspace fixture names two repositories and keeps their file identities explicit."
+    },
+    {
+      "id": "S05",
+      "title": "Go implementation relation",
+      "capability": "symbol.implementations",
+      "language": "go",
+      "check": "go_implementations",
+      "fixture": "fixtures/go/repository.go",
+      "description": "The Go fixture exposes a concrete type and its implementation method."
+    },
+    {
+      "id": "S06",
+      "title": "TypeScript implementation relation",
+      "capability": "symbol.implementations",
+      "language": "typescript",
+      "check": "typescript_implementations",
+      "fixture": "fixtures/typescript/repository.ts",
+      "description": "The TypeScript fixture exposes an implements relation and its method."
+    },
+    {
+      "id": "S07",
+      "title": "Dart semantic implementation coverage",
+      "capability": "symbol.implementations",
+      "language": "dart",
+      "check": "dart_implementations",
+      "fixture": "fixtures/dart/repository.dart",
+      "description": "Dart semantic implementation evidence is measured separately and is not claimed by this local baseline."
+    },
+    {
+      "id": "S08",
+      "title": "MCP legacy protocol declaration",
+      "capability": "mcp.compatibility",
+      "language": "protocol",
+      "check": "protocol_schema",
+      "fixture": "fixtures/protocol-2025.json",
+      "description": "The legacy MCP target is represented in the fixed compatibility corpus."
+    },
+    {
+      "id": "S09",
+      "title": "MCP current protocol declaration",
+      "capability": "mcp.compatibility",
+      "language": "protocol",
+      "check": "protocol_schema",
+      "fixture": "fixtures/protocol-2026.json",
+      "description": "The current MCP target is represented in the fixed compatibility corpus."
+    }
+  ]
+}

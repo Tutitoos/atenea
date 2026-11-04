@@ -26,7 +26,7 @@ func main() {
 	repository := repositoryRoot()
 	flags := flag.NewFlagSet("atenea-dart-coverage", flag.ExitOnError)
 	fixtureRoot := flags.String("fixture-root", filepath.Join(repository, "internal", "dartcoverage", "testdata"), "independent Dart fixture root")
-	corpusRoot := flags.String("corpus-root", filepath.Join(repository, "benchmarks", "corpus", "v1"), "fixed P01 acceptance corpus root")
+	corpusRoot := flags.String("corpus-root", filepath.Join(repository, "benchmarks", "corpus", "v2"), "fixed P01 acceptance corpus root")
 	corpusHash := flags.String("corpus-sha256", corpus.CanonicalCorpusSHA256, "fixed corpus SHA-256")
 	date := flags.String("date", "2026-09-06", "observation date (YYYY-MM-DD)")
 	output := flags.String("output", filepath.Join(repository, "benchmarks", "runs", "dart-coverage-2026-09-06", "report.json"), "JSON report path")
