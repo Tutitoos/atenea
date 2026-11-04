@@ -158,7 +158,7 @@ var scenarioProbes = map[string]probeSpec{
 	"S09": {Package: "./internal/mcpcompat", Tests: []string{"TestParseAcceptsOnlyExactSupportedVersions"}},
 	"S10": {Package: "./internal/workflow", Tests: []string{"TestPlanProgressUsesTwentySegmentsAndTruncatedPercent"}},
 	"S11": {Package: "./internal/recoverypilot", Tests: []string{"TestRunFixtureKivgraphScenarioUsesProductionIndexBoundary"}},
-	"S12": {Package: "./internal/core", Tests: []string{"TestWorkflowLaunchSendsActivityBeforeItsResponse"}},
+	"S12": {Package: "./internal/workflow", Tests: []string{"TestWorkflowPublishesDurableActivityBeforeAgentProcess"}},
 }
 
 // Run is part of ATENEA's public orchestration contract.

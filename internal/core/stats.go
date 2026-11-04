@@ -32,7 +32,7 @@ func statsCatalog(cfg config.Config) []toolstats.Tool {
 	for _, c := range cfg.Capabilities {
 		out = append(out, toolstats.Tool{Level: "request", Name: c.ID, Provider: "atenea", State: "declared"})
 	}
-	for _, name := range []string{toolListRepositories, commandTool, toolWorkflowCreate, toolWorkflowLaunch, "orchestrator.task"} {
+	for _, name := range []string{toolListRepositories, commandTool, "orchestrator.task"} {
 		out = append(out, toolstats.Tool{Level: "request", Name: name, Provider: "atenea", State: "declared"})
 	}
 	for _, i := range cfg.Implementations {
@@ -224,17 +224,6 @@ func statsRepository(params toolsCallParams) string {
 	}
 	repo, _ := args[repositoryArg].(string)
 	return repo
-}
-
-type statsErrorKey struct{}
-
-// setStatsError passes a structured workflow failure to the request recorder.
-func setStatsError(ctx context.Context, err error) {
-	if err != nil {
-		if target, ok := ctx.Value(statsErrorKey{}).(*error); ok {
-			*target = err
-		}
-	}
 }
 
 // StatsErrorsFromDisk reads bounded diagnostics without constructing a Core.

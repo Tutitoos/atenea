@@ -42,52 +42,6 @@ func TestPrintCodexSyncReportPropagatesEveryWriteFailure(t *testing.T) {
 	}
 }
 
-func TestCodexPlanModeCLIUsesGlobalAndProjectSkillDirectories(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-fixture"))
-	var output bytes.Buffer
-	if err := run([]string{"codex", "plan-mode", "sync", "--global"}, &output); err != nil {
-		t.Fatal(err)
-	}
-	global := filepath.Join(home, "codex-fixture", "skills", "atenea-plan-mode", "SKILL.md")
-	if _, err := os.Stat(global); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "Codex Plan mode:") {
-		t.Fatalf("sync output = %s", output.String())
-	}
-	project := t.TempDir()
-	output.Reset()
-	if err := run([]string{"codex", "plan-mode", "sync", "--project", project}, &output); err != nil {
-		t.Fatal(err)
-	}
-	projectSkill := filepath.Join(project, ".agents", "skills", "atenea-plan-mode", "SKILL.md")
-	if _, err := os.Stat(projectSkill); err != nil {
-		t.Fatal(err)
-	}
-	output.Reset()
-	if err := run([]string{"codex", "plan-mode", "check", "--project", project, "--json"}, &output); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), `"matches":true`) {
-		t.Fatalf("check output = %s", output.String())
-	}
-}
-
-func TestCodexPlanModeCheckDefaultsToGlobalAndDoesNotMutate(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-fixture"))
-	err := run([]string{"codex", "plan-mode", "check"}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "out of date") {
-		t.Fatalf("check error = %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(home, "codex-fixture", "skills")); !os.IsNotExist(statErr) {
-		t.Fatalf("check mutated the skills directory: %v", statErr)
-	}
-}
-
 func TestCodexAgentsCLIUsesFixtureHomesAndProjectDirectories(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
