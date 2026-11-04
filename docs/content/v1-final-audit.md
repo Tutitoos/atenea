@@ -8,6 +8,8 @@ weight: 6
 
 # Auditoría final 1.0.0
 
+El flujo de encargos (`atenea task` y `atenea resume`) se midió en el momento de esta auditoría; ya no forma parte de Atenea (véase #212).
+
 Fecha de corte: 2026-08-22. Esta página distingue el estado del repositorio,
 la configuración efectiva del equipo y las funciones que solo aparecen en la
 documentación. Los porcentajes son una estimación de cierre por área, no una

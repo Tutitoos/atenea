@@ -136,6 +136,29 @@ certification: **the real Codex re-certification is REQUIRED before the next
 release.** Dated audit evidence that measured the agents is kept and marked as
 such (#220).
 
+The orchestrator's commission flow is removed: `atenea task` and `atenea resume`
+(including `resume --list`), `Core.Do`, `Session.Do`, `Core.Resume`,
+`orchestrator.Run`, `RunPlan`, `Resume`, the exploration and splitting of a
+commission, and `checkpoint.Candidates`. `atenea ask` and every MCP capability
+call are unchanged: they dispatch the same single step through the same funnel,
+review and receipt, and a run receipt still records `kind: "ask"`. Receipts of
+the removed `task` and `plan` kinds already in `runs/*.json` stay readable (they
+are plain strings on a receipt that still decodes), and nothing deletes or
+rewrites them. The `explore` and `work` phase names and the `Result.Matches`
+field are gone with the flow that produced them. No settings key was exclusive
+to the commission flow, so the `[orchestrator]` table and its keys
+(`max_parallel`, `budget_usd`, `effects`, `checkpoints` and the rest) are
+unchanged; an ask dispatches one step, so `max_parallel` is in practice the
+ceiling on the repositories one `workspace.context` call asks at once. The
+load benchmark that drove `RunPlan` is now
+`BenchmarkDispatchConcurrentMediumDAG` (`dispatch-concurrent-medium-dag` in
+`atenea-benchmark`, `scripts/load-check.sh`), running a hand-built plan through
+the retained dispatcher from test code. The contract version and `pkg/contract`
+types are unchanged. Every source change here invalidates the real Codex
+certification: **the real Codex re-certification is REQUIRED before the next
+release.** Dated audit evidence that measured the commission flow is kept and
+marked as such (#221).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

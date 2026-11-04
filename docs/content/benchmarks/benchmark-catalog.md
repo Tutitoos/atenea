@@ -16,6 +16,8 @@ dashboard: catalog
 
 Los resultados detallados se conservan en benchmarks/runs/latest/.
 
+La fila `run-plan-concurrent-medium-dag` se midió cuando existía `RunPlan` (el flujo de encargos `atenea task` y `atenea resume` ya no forma parte de Atenea, véase #212); el mismo trabajo lo ejecuta ahora `dispatch-concurrent-medium-dag` y la fila antigua es evidencia fechada.
+
 ## Procedencia de estas medidas
 
 Observación fechada: estas cinco filas proceden del perfil `quick` ejecutado el

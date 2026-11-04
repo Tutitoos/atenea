@@ -16,8 +16,8 @@ weight: 3
    |   (what can be asked)      (who answers it)  |
    |             ^                    ^           |
    |             |                    |           |
-   |        Orchestrator (agent): explores,       |
-   |        splits, dispatches, reviews           |
+   |        Orchestrator (agent): dispatches      |
+   |        one call, reviews the answer          |
    +----------------------------------------------+
        |       |       |       |       |       |
     adapter adapter adapter adapter adapter adapter <- dumb translators
@@ -259,62 +259,42 @@ so. Changing the user's choice in silence would betray what they asked for.
 ## The orchestrator
 
 The registry and the selector answer *who should do this*. Somebody still has
-to turn one sentence from the user into finished work, and that somebody is an
-**agent**, deliberately not part of the core. The core owns the catalog and the
-funnel and says who should act; the orchestrator is the one that acts.
+to hand the call to that implementation and judge what comes back, and that
+somebody is an **agent**, deliberately not part of the core. The core owns the
+catalog and the funnel and says who should act; the orchestrator is the one
+that dispatches.
 
-The **orchestrator** is the one agent contract. It decides and splits, and it
-works only through capabilities: every step it hands out is a capability
-dispatched through the funnel, not a process Atenea spawns for it.
+The **orchestrator** is the one agent contract, and it works only through
+capabilities: every step it hands out is a capability dispatched through the
+funnel, not a process Atenea spawns for it.
 
 ### One capability, directly
 
-A commission is several capabilities chained; the single capability is the atom
-those chains are made of. `atenea ask` dispatches exactly one, against exactly
-one repository, through the same funnel and the same review as any step of a
-commission — a second, quieter dispatch path would be a second set of rules to
+`atenea ask` and every MCP capability call dispatch exactly one capability,
+against exactly one repository, through the funnel and the review below. There
+is one dispatch path; a second, quieter one would be a second set of rules to
 keep in step with the first.
 
-A commission with no repository means all of them, because the user excluded
-none. An `ask` cannot borrow that: a position belongs to one unit of work, and
+A call names its repository: a position belongs to one unit of work, and
 running it against the rest would answer about files that merely share a path.
+This is how a caller that already *has* a cursor hands it over.
 
-This is how a caller that already *has* a cursor hands it over. Exploring finds
-text, and a text hit is not a cursor.
-
-### Look before you split
-
-```text
-   commission
-       |
-       v
-   [explore]   one light look per repository in scope
-       |          finds WHERE the commission lands
-       v
-   [split]     one step per repository, narrowed to those areas
-       |
-       v
-   [work]      dispatched in waves, reviewed as each child finishes
-```
-
-Splitting before looking would mean guessing the shape of a repository nobody
-has read. The look is a real step with a real cost: it is measured and shows up
-in the phase totals, because a task whose total leaves the look out reports a
-number that never happened.
-
-What the look learns becomes a **discovery**, filed at the level it belongs to.
-A fact about one repository is not a fact about the workspace.
+Atenea does not plan multi-step work. `atenea task` explored every repository,
+split the commission and dispatched the pieces, and `atenea resume` continued
+an interrupted one; both were removed (see #212 and the changelog). A caller
+that needs several steps chains calls itself.
 
 ### Waves, not a queue
 
-The plan is a graph, not a list. Steps with no dependency between them form one
-wave and run at the same time, capped by a configurable ceiling so a laptop
-stays responsive. Sorting inside a wave is stable, which is what makes two runs
-of the same plan comparable.
+The dispatcher still executes a plan as a graph: steps with no dependency
+between them form one wave and run at the same time, capped by a configurable
+ceiling so a laptop stays responsive, and sorting inside a wave is stable. The
+only plan the product builds is the one step of an ask, so waves wider than one
+are exercised by tests rather than by a command.
 
 An edge means **after**. A step whose prerequisite did not pass review is
 **blocked**: never dispatched, but still on the record with the reason. Only
-that branch stops — work in another repository is none of its business.
+that branch stops.
 
 ### A reviewer at every level
 
@@ -328,7 +308,7 @@ is already there.
 
 ### The permission travels attached
 
-A commission carries what the user allowed, and every step inherits it. Nothing
+A call carries what the user allowed, and every step inherits it. Nothing
 grants itself anything heavier on the way down. Reading is free by default;
 writing and reaching outside the machine are not.
 
@@ -396,7 +376,7 @@ which hangs before failing has still eaten the wait. That much is true, and the
 conclusion drawn from it was still wrong: the same average lets an
 implementation that refuses *instantly* — not logged in, no index, no server —
 record a stream of very fast, very cheap calls. It then becomes the cheapest
-thing on the board, the funnel hands it everything, and every commission fails.
+thing on the board, the funnel hands it everything, and every call fails.
 Health does not save it either, because nothing probed it. Failing cheaply paid
 better than working.
 
@@ -478,7 +458,7 @@ is only honest because of two moments that do not wait for the beat: a phase
 closing, and the process going down. Between them a crash can lose at most one
 phase's worth of numbers.
 
-A one-shot command never ticks at all. `atenea task` lives for a second, so the
+A one-shot command never ticks at all. `atenea ask` lives for a second, so the
 shutdown path is the only reason it measures anything.
 
 ### The ladder
@@ -702,7 +682,7 @@ A dump interrupted mid-write is swept: it is a record of a run that never
 happened that way, and leaving it would let a half-written file pass for a
 finished one. A receipt that will not parse is renamed rather than deleted,
 because those bytes are the only evidence of what was lost. Good receipts are
-not touched — including the receipt of a commission the cut interrupted, which
+not touched — including the receipt of a run the cut interrupted, which
 is exactly the one worth reading back.
 
 The service does this, and nothing else does. A sweep cannot tell an abandoned
@@ -921,7 +901,7 @@ allowed to trigger it. `Permission` is what travels with a request and is
 checked at dispatch, and it is built in layers: the read every commission
 gets for free, then whatever `[orchestrator] effects` in the settings file
 grants standing to every commission and question, then whatever the caller
-asked for on that one call, then whatever `--allow` adds on a resume. Each
+asked for on that one call, then whatever `--allow` adds. Each
 layer only ever adds — `Permission.Grant` keeps every effect once no matter
 how many layers named it, and nothing later in the chain can take an earlier
 grant away.
@@ -987,9 +967,8 @@ and the tests that cover them open a chat against a settings file that grants
 one, because a test whose operator granted nothing cannot tell a ceiling from
 a floor.
 
-The floor travels on the commission, not on the core. `Session.Ask` and
-`Session.Do` stamp it; `Core.Ask` and `Core.Do`, the console's doors, do not,
-and dispatch falls back to the standing grant when a request carries none.
+The floor travels on the call, not on the core. `Session.Ask` stamps it;
+`Core.Ask`, the console's door, does not, and dispatch falls back to the standing grant when a request carries none.
 That is why the type is a value rather than a list: an operator writing
 `client_effects = []` means "read and nothing else", and a nil slice already
 means "nobody said". Collapsing the two would hand the whole standing floor to
@@ -1017,14 +996,14 @@ be one it can afford.
 #### One difference from an effect: money is consumed
 
 An effect copied down to every child stays true. A ceiling copied down to every
-child is spent once per child, so a commission dispatching four steps would
+child is spent once per child, so a plan dispatching four steps would
 spend it four times over. That is why the grant is **split, not copied**.
 
-`budget_usd` under `[orchestrator]` is what one commission may spend across
+`budget_usd` under `[orchestrator]` is what one call may spend across
 every step. A wave asks for as many shares as it has steps and gets what is
 left divided evenly among them, so the shares of a wave add up to exactly what
 the commission had left: even if every step spends its share to the last cent
-the wave cannot draw more. Waves are sequential, so the next one divides
+the wave cannot draw more. (An ask has one step, so the split only matters to a plan with more.) Waves are sequential, so the next one divides
 whatever the last did not touch. Nothing is reserved and nothing is refunded,
 because nothing was taken away in advance.
 
