@@ -8,9 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 
-	"github.com/Tutitoos/atenea/internal/activity"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -66,11 +64,6 @@ func relayMCPClient(dst io.Writer, src io.Reader, direction, profile string) err
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
-		if tool, ok := mcpToolCall(line); ok {
-			if err := activity.PublishFromEnvironment(tool); err != nil {
-				return fmt.Errorf("publishing %s activity: %w", tool, err)
-			}
-		}
 		if profile != "" {
 			if transformed, ok := injectMCPProfile(line, profile); ok {
 				line = transformed
@@ -84,20 +77,6 @@ func relayMCPClient(dst io.Writer, src io.Reader, direction, profile string) err
 		return fmt.Errorf("reading %s: %w", direction, err)
 	}
 	return nil
-}
-
-func mcpToolCall(line []byte) (string, bool) {
-	var message struct {
-		Method string `json:"method"`
-		Params struct {
-			Name string `json:"name"`
-		} `json:"params"`
-	}
-	if json.Unmarshal(line, &message) != nil || message.Method != "tools/call" {
-		return "", false
-	}
-	name := strings.TrimSpace(message.Params.Name)
-	return name, name != ""
 }
 
 func injectMCPProfile(line []byte, profile string) ([]byte, bool) {
