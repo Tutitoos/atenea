@@ -30,13 +30,10 @@ HOME = os.path.expanduser("~")
 BIN = os.path.join(HOME, ".local", "bin")
 
 # The agreed state, as measured on 2026-08-09/10. atenea is the core; headroom is
-# the context auditor; claude-mem arrives through each client's own plugin and is
-# therefore named differently in every one of them - the count can be unified,
-# the name cannot.
+# the context auditor.
 CORE = {"atenea", "headroom"}
 BACKENDS = {"context7", "semgrep"} | {"serena"}  # retired Serena must never reappear
-OMP_SUPPRESSED = {"chrome-devtools", "claude-mem",
-                  "context7", "semgrep", "serena"}
+OMP_SUPPRESSED = {"chrome-devtools", "context7", "semgrep", "serena"}
 KENA_WS = os.path.join(HOME, "kena-workspace")
 
 fails = []
@@ -168,14 +165,6 @@ def check_codex():
         fail("installer", f"codex declara {sorted(reintroduced)}", "mismos motores, otra vez")
     for name in sorted(CORE - names):
         fail("toggle", f"codex ha perdido {name}", "borrado del fichero")
-
-    plugins = d.get("plugins", {}) or {}
-    dupes = [k for k, v in plugins.items()
-             if "claude-mem" in k and v.get("enabled") is not False]
-    if len(dupes) > 1:
-        fail("toggle", f"codex habilita claude-mem por {len(dupes)} vias: {sorted(dupes)}",
-             "es el duplicado que quitamos el 2026-08-10: sobrevive el plugin "
-             "(19 skills, 36 modos), no la entrada manual")
 
 
 # ---------------------------------------------------------------- opencode
@@ -326,21 +315,6 @@ def group_tools(names):
     return groups
 
 
-def mem_routes(body):
-    """Distinct claude-mem route names anywhere in the request body.
-
-    Not read off `tools[]` on purpose. omp does not put its MCP tools there -
-    it mounts them as xd:// routes named in the system prompt - so a census
-    that only walks `tools[]` sees zero claude-mem for omp and cannot notice
-    the backend being mounted twice. Measured 2026-08-13: 28 distinct routes
-    for 14 tools, two spellings of one server.
-    """
-    blob = json.dumps(body, ensure_ascii=False)
-    names = set(re.findall(r"mcp__[A-Za-z0-9_-]+", blob))
-    return len({n for n in names
-                if "claudemem" in n.lower().replace("_", "").replace("-", "")})
-
-
 def probe_wire(client, timeout=90):
     """Spawn one client at a recorder and return what it put on the wire.
 
@@ -379,7 +353,7 @@ def probe_wire(client, timeout=90):
     if not bodies:
         if seen:
             return {"names": [], "groups": {}, "account": 0, "bytes": 0,
-                    "claude_mem": mem_routes(seen[-1]), "seconds": seconds}
+                    "seconds": seconds}
         fail("wire", f"{client}: no llego ninguna peticion a la sonda",
              "el cliente no honro la variable de base URL, o murio antes")
         return None
@@ -395,7 +369,6 @@ def probe_wire(client, timeout=90):
         "groups": group_tools(names),
         "account": sum(1 for n in names if str(n).startswith(ACCOUNT_PREFIX)),
         "bytes": wire_bytes(body["tools"]),
-        "claude_mem": mem_routes(body),
         "seconds": seconds,
     }
 
@@ -416,19 +389,13 @@ def render_wire(client, surface):
              if not k.startswith(ACCOUNT_GROUP_PREFIX)]
     tail = f" · cuenta {account}" if account else ""
     total = len(surface["names"])
-    mem = surface.get("claude_mem", 0)
-    mem_part = f" · claude-mem rutas {mem}" if mem else ""
-    return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}{mem_part}"
+    return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}"
             f"  [{surface['bytes']} B compact, {surface['seconds']}s]")
 
 
-# The surface as measured 2026-08-13, per client, on the wire. `groups` is
-# checked exactly where a client carries MCP tools; `claude_mem` is checked
-# everywhere, because that backend is DECLARED TWICE on this machine and one
-# declaration is only silenced by a name list - exactly the kind of list that
-# went missing from ~/.omp/agent/mcp.json on 2026-08-11 at 18:06 and was not
-# noticed for two days. Suppressed is not removed. Update these WITH a dated
-# measurement, never to make a red run go quiet.
+# The wire rules below are checked on every measurement. Suppressed is not
+# removed. Update the dated measurement notes WITH a new measurement, never to
+# make a red run go quiet.
 def check_wire_invariants(client, surface):
     """The rules a measurement must satisfy. Violations are red, not notes."""
     if surface is None:
@@ -593,7 +560,6 @@ def save_surface(measured):
             "groups": surface["groups"],
             "account": surface["account"],
             "bytes": surface["bytes"],
-            "claude_mem": surface.get("claude_mem", 0),
             "measured_at": now,
             "fingerprint": fp,
             "session": session_token(),

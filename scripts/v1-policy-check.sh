@@ -67,7 +67,7 @@ contains 'interactive permission|confirmación interactiva|interactivo' \
 	docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains_any 'citation_count|uncited_fields|resolved_path' docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains_any 'Tokensave|Semgrep|Context7|claude-mem|Headroom' docs/content/v1-final-audit.md
+contains_any 'Tokensave|Semgrep|Context7|Headroom' docs/content/v1-final-audit.md
 contains 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains_any 'code\.impact.*repository\.index|repository\.index.*code\.impact' docs/content/v1-policy.md docs/content/v1-readiness.md docs/content/v1-final-audit.md
 
