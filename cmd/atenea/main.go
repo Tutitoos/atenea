@@ -2370,12 +2370,6 @@ func coerce(field contract.Field, raw string) (any, error) {
 	}
 }
 
-// repoList collects a repeated --repo flag.
-type repoList []string
-
-func (r *repoList) String() string     { return strings.Join(*r, ",") }
-func (r *repoList) Set(v string) error { *r = append(*r, v); return nil }
-
 // effectList collects a repeated --allow flag naming effects beyond reading,
 // which is always free and never needs to be named.
 type effectList []string
