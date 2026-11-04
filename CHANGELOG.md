@@ -65,6 +65,22 @@ own `dashboard` URL are unchanged. The contract version is unchanged. Dated
 audit evidence that measured the embedded dashboard is kept and marked as such
 (#211).
 
+The `workflow.create`, `workflow.launch`, `workflow.status`, `workflow.cancel`,
+`workflow.resume` and `workflow.answer` MCP tools and the `decision.plan` MCP tool
+are removed, together with the `atenea-plan-mode` Codex skill and `atenea codex
+plan-mode sync|check` (the Plan-mode entry under Added above never shipped in a
+release). `tools/list` no longer advertises them; `atenea.command`, every
+capability and the raw tools are unchanged, and `atenea codex agents sync|check`
+and the native profiles stay. The `workflow` and `decide` commands still work;
+they go in later steps of #212. A copy of the skill installed earlier is left on
+disk and does nothing; delete it. `[decision].capture_dir` is still accepted but
+nothing writes captures. The Codex certification and the client-compat pilot
+challenge now use `catalog.repositories` instead of `workflow.status`, and any
+source change invalidates the real Codex certification: **repeat it before the
+next release.** Acceptance scenario S12 keeps its pinned corpus and now runs
+`workflow.TestWorkflowPublishesDurableActivityBeforeAgentProcess`. Dated audit
+evidence that measured these tools is kept and marked as such (#217).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

@@ -8,27 +8,24 @@ or raw-tool call in the conversation's language, naming the advertised tool,
 target and purpose. Parallel calls may share a message with one line per call.
 Repeated calls still get an announcement.
 
-Workflow dispatches also write a deterministic activity notice to the workflow
-store before the agent process starts. `workflow.status` returns `activity` and
-an `activity_cursor`; pass that cursor back as `activity_after` after reconnecting
-to receive only later notices. `activity_has_more` says another page exists. The
-CLI accepts the same cursor as `workflow show --activity-after`. It prints a
-saved notice immediately before dispatch. A repeated invocation has its own
-notice, while replaying the same
+Workflow dispatches started from the CLI also write a deterministic activity
+notice to the workflow store before the agent process starts.
+`atenea workflow show --activity-after` takes the cursor of the last notice seen
+and prints only later ones. It prints a saved notice immediately before
+dispatch. A repeated invocation has its own notice, while replaying the same
 invocation identifier is deduplicated. Approved graph expansions use `PLAN` in
 place of `ATENEA` and are saved before the plan mutation.
 
-Live MCP notifications carry each durable `invocation_id`, cursor and Markdown
-line. Delivery is acknowledged after publication. If the process dies between
-publication and that acknowledgement, replay retains the same identity so the
-client can discard an already displayed notice rather than print it twice.
+Over MCP, `workspace.context` sends one `notifications/message` activity line
+before it dispatches. The workflow and decision tools that once carried durable
+activity cursors (`workflow.*`, `decision.plan`) are no longer part of Atenea
+(see #212).
 
 The activity line is an intent record. Provider selection and results remain in
 the later usage receipt. MCP initialization instructs the client to place direct
-tool preambles in the main chat before calling. MCP responses can recover durable
-workflow activity, but the protocol cannot force a third-party client to render
-intermediate text; those clients remain partially compatible until their real UI
-is validated.
+tool preambles in the main chat before calling, but the protocol cannot force a
+third-party client to render intermediate text; those clients remain partially
+compatible until their real UI is validated.
 
 `_atenea_prefer` accepts either an exact implementation (`kivgraph.overview`)
 or a provider (`kivgraph`). Exact IDs take precedence over provider names.

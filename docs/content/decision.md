@@ -8,21 +8,16 @@ title: Decision router
 commission into a durable coordination plan. It is deliberately a dry run
 unless `--run` is supplied. `task` remains the compatibility entry point.
 
-The same dry-run compiler is exposed to Codex chats as the MCP tool
-`decision.plan`. It accepts one explicit repository and returns the complete
-plan with `dry_run = true` and `execution_authorized = false`; it neither
-persists nor launches the workflow. The managed `atenea-plan-mode` Codex skill
-uses this surface automatically only while the active collaboration mode is
-Plan.
+The MCP tool `decision.plan` and the Codex Plan-mode skill that called it were
+removed (see #212); the router is reachable only through `atenea decide`.
 
 ## Bounded decision explanation
 
 `atenea decide` prints an `explanation v1` summary before its full text plan.
-`atenea decide --json` and MCP `decision.plan` return the same `explanation`
+`atenea decide --json` returns the same `explanation`
 object beside the existing complete plan. This is a projection of the already
 computed plan; it performs no model call, provider probe, storage write, or
-workflow execution. The MCP boundary remains `dry_run = true` and
-`execution_authorized = false`.
+workflow execution.
 
 The object uses closed codes for intent, source (`rules`, `context`),
 classifier mode and result, resolution and abstention reason, context use,
@@ -56,27 +51,12 @@ content and requires normal privacy handling. The explanation reports
 planning evidence and declared effects, not executed effects, real provider
 availability, or authorization to run a workflow.
 
-For a private evaluation pilot, the operator may create a directory owned by
-the ATENEA user with mode `0700` and set `[decision].capture_dir` to its absolute
-path in the global settings file. Restart the central ATENEA service after
-changing this setting; MCP clients relay their requests to that service.
-`ATENEA_DECISION_CAPTURE_DIR` is an alternative for the service process when
-`capture_dir` is empty. Only validated
-`decision.plan` calls are recorded; the feature is off when both settings are
-empty. `candidates.private.jsonl`, `capture.lock`, and
-the deduplication key `capture.key` are created with mode `0600`. Records
-include the MCP source, UTC capture time,
-repository, automatically redacted objective, inferred intent, and build
-revision when available. Exact duplicates are collapsed. Storage errors leave
-the returned plan unchanged and are logged without request text.
-
-These records are **unreviewed candidates**, not verified user requests or a
-representative sample. Automatic redaction catches common emails, URLs, paths,
-IPs, and secret assignments but cannot guarantee removal of names or every
-secret. Keep the directory outside Git, restrict access, perform a human
-privacy and legitimacy review before using any case, then freeze sampling and
-labels separately. This capture does not change selected rules, permissions,
-or workflow execution.
+Only the MCP `decision.plan` tool ever wrote private evaluation captures. It was
+removed (see #212), so nothing records candidates any more. `[decision].capture_dir`
+is still accepted so existing settings files keep loading, and
+`ATENEA_DECISION_CAPTURE_DIR` is ignored. A `candidates.private.jsonl` written
+earlier remains an unreviewed, automatically redacted record: keep it outside Git
+and review it by hand before using any case.
 
 ## Intent and workflow planning
 
@@ -159,8 +139,7 @@ atenea decide "hazlo" --budget 5 \
   }' --json
 ```
 
-The same object is accepted as the optional `context` argument to
-`decision.plan`. `version` is required. A supplied accepted plan also needs its
+`version` is required. A supplied accepted plan also needs its
 repository, revision, active objective and `accepted_plan_current: true`; a file
 scope needs a repository. Set `accepted_plan_current` only after the caller
 checks the canonical plan record and confirms the supplied revision is current.
@@ -184,8 +163,7 @@ freshness checks. Keep the context compact and free of secrets. A CLI `--run`
 stores the effective objective, constraints
 and file scope in its normal durable workflow record; dry runs do not persist
 that workflow.
-Context never adds effect grants or authorizes a run. MCP `decision.plan`
-remains `dry_run = true` and `execution_authorized = false`; CLI execution still
+Context never adds effect grants or authorizes a run; CLI execution still
 uses its normal permission and confirmation checks. `scope_files` narrows the
 plan's file list, but is not a filesystem write sandbox.
 
@@ -246,16 +224,6 @@ The command returns an `id` and a SHA-256 `revision`. Supply both on the next re
 atenea decide "hazlo" --repo api --accepted-plan validation --accepted-revision REVISION --json
 ```
 
-MCP `decision.plan` accepts the same reference:
-
-```json
-{
-  "objective": "hazlo",
-  "repository": "api",
-  "accepted_plan": {"id": "validation", "revision": "REVISION"}
-}
-```
-
 `accepted_plan` and caller-supplied `context` are mutually exclusive. The reference
 requires an explicit declared repository. Missing receipts, changed revisions,
 repository mismatches and changed source identity produce `needs_context` without
@@ -278,7 +246,7 @@ acceptance for historical evaluation cases.
 Acceptance stores semantic context only. It does not copy `--allow` grants, authorize
 execution, increase the budget or start a workflow. A request still needs its usual
 effect grants, run flag and confirmation. File focus narrows planning; it is not a
-filesystem sandbox. The legacy `--decision-context` / MCP `context` route remains
+filesystem sandbox. The legacy `--decision-context` route remains
 caller-attested and does not acquire local verification from a boolean assertion.
 
 Spanish questions about how to proceed select planning; explicit status-verification

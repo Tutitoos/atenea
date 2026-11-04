@@ -32,7 +32,9 @@ prompts and tool arguments are not part of the matrix.
 The pilot harness is opt-in and accepts explicit fixture clients through an
 injection interface. It gives each fixture disposable HOME, CODEX_HOME and XDG
 roots, explicit argv and environment overlays, and correlates handshake,
-transport, protocol version, run_id and workflow.status events. It validates
+transport, protocol version, run_id and catalog.repositories events (the
+read-only tool that stands in for the challenge; the `workflow.status` tool
+that earlier pilots used no longer exists). It validates
 activity, notices, checklist titles and evidence, the deterministic twenty
 segment progress bar, cursor continuity, permissions, requested/observed
 versions, invocation IDs and duplicate effects across reconnect. Presentation
