@@ -29,7 +29,7 @@ documentation at its release tag. Contract 3.x configurations require the
 - Routes capabilities such as `code.search` through repository constraints,
   attached runners, provider health and measured time, tokens and memory.
 - Runs one capability with `ask`, or explores, plans, dispatches and reviews
-  a commission with `task`. Declared agents are available through `agent`.
+  a commission with `task`.
 - Exposes configured capabilities and explicitly declared raw MCP tools through
   one MCP connection. Clients discover the actual tool surface at runtime.
 - Applies effect permissions and spending grants, records attempts and run
@@ -162,7 +162,7 @@ The source includes these adapters and the local stand-in:
 | `desktop` | macOS application inspection, screenshots and interaction | Local Swift helper and macOS permissions |
 | `local` | Filesystem `code.search` | No external client; intended for local development and smoke tests |
 
-OpenCode is a supported client and optional model backend for agents; it is not
+OpenCode is a supported client; it is not
 a native capability adapter. Generic MCP servers can also be declared for
 supervision and raw tool exposure through `[[mcp_server]]` settings.
 
@@ -284,7 +284,6 @@ atenea stats --today
 atenea stats --week --provider kivgraph
 atenea stats --today --used --watch
 atenea metrics
-atenea traces --open
 atenea incidents
 atenea backup list
 ```
@@ -299,7 +298,7 @@ Calendar periods, filters and historical limits are in the
 server publishes in its own `dashboard` setting; see the
 [settings reference](docs/content/settings.md).
 
-Measurements are stored in DuckDB; run receipts, agent traces and incidents
+Measurements are stored in DuckDB; run receipts and incidents
 provide separate execution evidence. State normally lives under
 `$XDG_STATE_HOME/atenea` or `~/.local/state/atenea`. See
 [operations](docs/content/operations.md) for recovery and backups, and
@@ -345,7 +344,7 @@ and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 | Path | Contents |
 | --- | --- |
 | [`cmd/`](cmd/) | CLI and benchmark entry points |
-| [`internal/`](internal/) | Core, adapters, runners, agents, storage and transports |
+| [`internal/`](internal/) | Core, adapters, runners, storage and transports |
 | [`pkg/contract/`](pkg/contract/) | Versioned capability and adapter contracts |
 | [`helper/`](helper/) | Swift desktop helper |
 | [`docs/`](docs/) | Hugo documentation sources and configuration |

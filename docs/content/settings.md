@@ -462,114 +462,6 @@ accepted: a second copy pointed at the same root would index the same files
 twice into the same database. The whole graph belongs to the root, not to a
 repository, which is why one process is the honest number.
 
-## The model client
-
-```toml
-[model]
-backend = "claude"  # protocol: claude, codex or opencode; omitted keeps claude
-binary = "claude"    # the CLI that answers a turn; a bare name is looked up on PATH
-timeout = "180s"     # per turn; long enough for repository explore and plan turns
-explore = ""         # model, or "auto", for repository exploration
-plan = ""            # model, or "auto", for the high-reasoning plan role
-explore_fallbacks = [] # explicit Claude fallbacks, in declaration order
-plan_fallbacks = []    # ignored by Claude: plan is pinned to claude-opus-5
-research = ""           # Codex research model; defaults to gpt-5.6-sol for backend=codex
-implement = ""          # Codex implementation model; defaults to gpt-5.6-luna
-review = ""             # Codex review model; defaults to gpt-5.6-sol
-audit = ""              # Codex audit model; defaults to gpt-6-astra
-research_reasoning_effort = ""  # Codex default: medium
-plan_reasoning_effort = ""      # Codex default: medium
-implement_reasoning_effort = "" # Codex default: xhigh
-review_reasoning_effort = ""    # Codex default: medium
-audit_reasoning_effort = ""     # Codex default: medium
-codex_native = false              # visible Codex turns use App Server; exec requires explicit invisible/CI
-codex_native = false              # visible Codex turns require the durable App Server; exec is explicit invisible/CI only
-```
-
-This is the seam the two model-backed built-in agents, `explore` and `plan`,
-call a model of their own through. It is not a capability provider: nothing
-in the catalog dispatches to it, and `[orchestrator]`'s adapters are a
-different kind of far side entirely — theirs answer a search, this one
-thinks.
-
-`explore` and `plan` name the model for each role, and both ship empty. They
-also accept `auto`: Claude exploration considers `claude-sonnet-5` and
-`claude-haiku-4-5`, while Claude planning is pinned to `claude-opus-5`.
-With OpenCode, plan auto uses `anthropic/claude-opus-5` first and permits the
-observed high-reasoning fallbacks `openai/gpt-5.6-sol` and
-`openai/gpt-5.6-luna`. A
-fresh install spending real money the first time either agent is dispatched
-would be exactly the surprise `orchestrator.claudecode` ships off the runner
-list to avoid, so a role with no model configured is refused at dispatch
-rather than defaulted to whichever model looks cheapest today — there is no
-cost data yet to choose one by, and a knob nobody can tune correctly is
-worse than a fixed default that is visible in this file and changed by hand
-once it is wrong. Fill in a model name or an alias your CLI resolves on its
-own (`sonnet`, `opus`, a full name, or `auto`) to turn either agent on.
-
-Both roles read from the same `backend`, `binary` and `timeout`: one protocol,
-one CLI and one ceiling, whichever role is asking. `timeout` matches
-`orchestrator.claudecode.timeout` for the same reason it is set there — it
-is the same client, on the same machine, so the same measured ceiling
-applies.
-
-Fallback lists are opt-in and are passed to the selected backend as its
-provider-side
-fallback chain. In `auto` mode, the safe candidates are explicit in the
-router; OpenCode requires declared candidates because Atenea cannot invent
-provider/model identifiers. Atenea never silently downgrades the `plan` role:
-Claude planning remains pinned to Opus 5. The adaptive ranker only compares
-names already in the candidate set, requires three successful
-samples, and requires a 15% median-cost saving. The decision trace records the
-primary, the declared fallbacks and whether history changed the choice. Raw MCP tools remain
-explicit-only because they have no semantic capability contract to rank.
-Timeout/unavailable retries are budget-gated: reported dollars are preferred,
-and unpriced token usage is bounded conservatively without being presented as
-a provider invoice.
-
-When `backend = "codex"`, set `codex_native = true` for interactive or
-visibility-required agent turns. Atenea then negotiates `initialize`, sends
-`initialized`, creates one durable thread, and reuses only the returned thread
-for follow-ups while collecting typed completion and usage events. The native
-transport carries the requested model, effort, and sandbox separately from
-observed runtime values. `codex_native = false` leaves visible turns refused;
-the one-shot `codex exec` path is available only when the request explicitly
-declares invisible or CI execution.
-
-The default backend is Claude Code. To opt into the isolated OpenCode event
-protocol, set `backend = "opencode"` and use a provider/model identifier such
-as `anthropic/claude-sonnet-5`. OpenCode receives an explicit `--format json`
-run, never `--auto`; Atenea requires a completed `step_finish` event and fails
-closed when OpenCode exits before producing one. Tool-enabled turns stop after
-four intermediate tool steps and resume the persisted session with a final,
-tool-free answer request. OpenCode has no equivalent of Claude Code's
-`--json-schema` or `--max-budget-usd`: structured answers are requested in the
-prompt, and the reported cost is observational. The Claude cache floor probes
-do not apply to OpenCode.
-
-The real-provider smoke test is deliberately opt-in because it can consume a
-provider allowance. From a clean checkout, set the exact provider/model and
-run:
-
-```sh
-ATENEA_OPENCODE_SMOKE=1 \
-ATENEA_OPENCODE_MODEL=provider/model-id \
-bash scripts/opencode-smoke.sh
-```
-
-The smoke uses `--format json`, no Atenea MCP tools and no `--auto`; it checks a
-real completed event stream and the structured answer against the requested
-schema. It intentionally does not use `--pure`, which the current authenticated
-OpenCode server rejects. Ordinary unit, race and CI suites use fake CLIs and
-never incur provider cost.
-
-`orchestrator.claudecode.source` and `terminal_binary` keep Claude Code as a
-headless runner while Claude.app remains an MCP client. Do not configure the
-GUI binary from `/Applications/Claude.app` as a provider executable. Codex
-`source = "auto"` tries the terminal CLI first and then the CLI bundled in
-ChatGPT.app; these are two executable surfaces of one provider, not two
-selector candidates. The legacy `binary` key remains an explicit override.
-
 ## The measurement base
 
 ```toml
@@ -1168,182 +1060,29 @@ what is declared here. When a provider genuinely has nothing to detect,
 the provider's own indexing tool must build one instead. Atenea only records
 the resulting provider state and does not build indexes itself.
 
-## Agents
+## Removed: the `[model]`, `[[agent]]` and `[local_agents]` tables
 
-```toml
-[[agent]]
-name = "filereader"       # what `atenea agent <name>` resolves
-kind = "specialized"      # specialized executes one objective; orchestrator splits work
-summary = "Reads one file and reports its size, its line count and its contents"
-command = "$atenea"       # the one placeholder: this binary
-args = ["agent-exec", "filereader"]
-context = ["repository"]  # the levels the assignment may carry
-effects = ["read"]        # the ceiling on what it may cause
-max_duration = "30s"      # wall clock for one run
-max_tokens = 1            # what one run may spend
-pool = "agent"            # which parallel lane this type belongs to: agent or review
+The built-in agents (`atenea agent`, `atenea agents`, `agent-exec`, the `floor`
+measurements and `atenea traces`) went away in #212, and with them the settings
+that only they read:
 
-  [[agent.result]]
-  name = "path"
-  type = "string"         # string, string_list, int, bool, record, record_list
-  required = true
-  summary = "The file that was read, as it was asked for"
-```
+| removed | what it was |
+| --- | --- |
+| `[model]` | the seam the model-backed agents called a model through |
+| `[[agent]]`, `[[agent.result]]` | the eleven declared agent types |
+| `[local_agents]` | the ceiling on agent types a repository declared |
+| `[[agent]]` in `.atenea/config.toml` | agent types declared by a repository |
 
-An agent is not a provider. A provider answers a capability and the funnel
-picks between several of them on cost, health and what the repository is; an
-agent is asked for by name, runs once as its own process, and answers in the
-shape declared here. Nothing ranks agents and nothing falls back between them:
-`atenea agent filereader` runs that one or fails saying it is not declared.
+A settings file that still has any of them is refused at load, like any unknown
+key (for example `unknown key(s): agent, agent.name`). Delete them from the
+global file and from any repository `.atenea/config.toml`; nothing else in the
+file changes. The `[orchestrator]` table and the capability catalog are
+untouched, so `atenea ask` and the MCP tools work as before.
 
-The wire is two JSON objects and it is the whole interface. Atenea writes the
-assignment to the agent's stdin -- ids, task, the declared context levels, the
-limits, the effects, and the result schema built from `[[agent.result]]` -- and
-reads one report from stdout: `result`, `verdict`, and for anything that is not
-a plain `ok`, a `reason` of `{kind, text}`. Stderr is diagnostics and is kept
-only on a failure. **Exit status is not the channel.** An agent that exits zero
-without writing a report has not answered, and is recorded as having died
-rather than as having succeeded -- the distinction the whole thing exists for,
-because those two are the same number to anything counting exit codes.
-
-`command = "$atenea"` means this binary. It is the only placeholder and it
-exists because the shipped agent is Atenea run with a different first argument;
-a hard-coded path there survives exactly until the next reinstall. Any other
-`command` is used literally, so an agent of your own -- a script, a model
-harness -- differs only in what it does between reading stdin and writing
-stdout.
-
-Six agents ship declared. `filereader` reads one file and `reviewer` audits an
-answer against the files it named -- neither spends a token, and their
-`max_tokens = 1` is the honest ceiling of an agent that never calls a model.
-`semantic-reviewer` calls the configured `explore` model to assess whether a
-conclusion follows from its evidence. It returns a structured semantic
-verdict and is explicit about confidence (0-100) and scope. `explore`, `reader`,
-`plan` and `semantic-reviewer` call a model through `[model]` above, and they
-are off until you name a model for each role.
-
-`explore` and `reader` are one agent declared twice, and the only difference
-is the tools their turn is handed: `explore` gets Atenea's own capabilities,
-`reader` gets Read and Glob alone. That is not a detail. Measured 2026-08-15,
-cold, on one repository against one model: starting an `explore` turn costs
-$0.27 and 26,603 tokens of prefix before the model has read a line, and the
-identical probe with no tools at all costs $0.06 and 4,991 -- 81% of the floor
-is the definitions of tools most steps never call. Give a step that already
-knows which files it is about to `reader`, and pay `explore` only when
-something has to be searched for.
-
-`context` is a permission, not a delivery. Only the levels named here are ever
-sent, and a level nobody asked for is absent from the payload rather than
-present and empty, so an agent cannot read a blank field as an answer about
-the world. `effects` is a ceiling a child may only narrow. Both limits are
-required: an unset ceiling is not "no ceiling", it is a ceiling nobody decided,
-and `max_duration` is what turns a hung agent into a `timeout` verdict instead
-of a process nobody is waiting on.
-
-The `history` level serves past runs of the same agent type, and each of those
-rows now carries what that run **discovered**: the short facts a report marked
-as worth outliving its task. Only rows whose own verdict was `ok` contribute,
-because a fact found by a run that then fell short was never checked, and the
-same note found twice is served once. This is why `explore` declares
-`history`: those facts were paid for, and a commission that rediscovers them
-pays for them again.
-
-The `workspace` level names the repositories this machine knows, and carries
-**what each agent type has actually cost here**. This is why `plan` declares
-it: a planner dividing a grant with no idea what exploring costs divides it
-evenly, and every step it writes stops at a ceiling it could not have known
-was too low. Measured 2026-08-14: a plan allocated `$0.10` to a step whose type
-had never once finished under `$1.26`.
-
-The figures were read back from recorded workflow steps (the engine that wrote them is gone, #212) — `median`, the range, and
-`n`, which travels with every median because three samples and thirty are
-different claims. Three exclusions are deliberate and are printed rather than
-hidden:
-
-- **A run that spent its whole grant is excluded and counted.** It is a lower
-  bound — "at least this much" — and averaging those in is exactly how a
-  measured table becomes the under-estimate it was built to replace.
-- **A run nobody could price is excluded and counted.** A turn killed at its
-  timeout is not a cheap turn.
-- **A type with no rows is reported as `never measured`, in those words.** Not
-  a zero, not a dash, not an omitted line: "nobody has priced this" and "this
-  is cheap" are different facts, and only one of them is safe to plan against.
-
-Two limits ship with it. The figures cover **workflow steps only** — a single
-`atenea agent` run is priced nowhere, because `agent_trace` has no spend
-column — and the table says so on every render. And the scope is the
-repository the run was recorded against, falling back to **machine-wide** when
-that repository has no rows yet, which it says in those words rather than
-presenting another tree's numbers as this one's.
-
-None of it is enforced. A share below the measured median compiles and runs:
-a machine with history refusing plans that a fresh install accepts is a worse
-failure than an under-allocated grant, and the grant is the operator's call.
-
-`[[agent.result]]` compiles to a strict JSON schema -- `additionalProperties`
-is false -- so an answer carrying a field nobody declared is refused at the
-boundary rather than believed. A refused answer is `incomplete`, not `failed`:
-the run got somewhere and stopped short, which is a different fact from a run
-that reached a judgement and the judgement was no.
-
-Every run is written to the trace database at `~/.local/state/atenea/traces.db`
-before the spawn and closed after the report validates. `atenea traces` reads
-it. A row left open is a run nobody saw finish; the next Atenea closes it as
-`incomplete` with reason `unavailable`, but only after checking that the
-process that opened it is really gone -- another Atenea may be mid-run right
-now, and closing a live run would be the sweep inventing the very thing it
-exists to record honestly.
-
-### Review
-
-```
-atenea agent filereader --review reviewer sample.txt
-```
-
-A reviewer is an agent like any other -- same wire, same declaration, same
-trace row. What makes it a reviewer is being named in `--review`: it is handed
-the answer another agent gave, the task that produced it, and the same files,
-and it answers `ok`, `failed` or `incomplete` about that answer.
-
-A refusal relaunches the work **once**, and the relaunch is handed the rejected
-answer and the sentence that rejected it, because an agent told only "try
-again" reruns the same mistake. A second refusal ends it: the caller gets an
-error carrying the reviewer's own reason kind, and no third attempt is made.
-
-Every attempt is its own trace row, and the rows say which is which. The
-relaunch carries `retry_of` naming the attempt it redoes and `attempt = 2`; a
-review carries `reviews` naming the run it audits. `atenea traces` prints both
-columns, so "passed" and "passed on the second try" never read the same.
-
-Two things are deliberately not reviewed. A run that **died** -- no report, a
-timeout, a crash -- is not handed to a reviewer, because there is no answer to
-judge and re-running a crashed process is a retry policy, not an audit. And a
-reviewer that dies itself does not accept: the answer is returned unjudged with
-the reviewer's death as the error, never quietly passed off as reviewed.
-
-`reviewer` proves deterministic facts such as file contents, line counts and
-citation locations. It does not infer that a prose conclusion follows from
-those facts. Use `--review semantic-reviewer` when that second question is
-needed. `supported` is an explicit model judgement, `unsupported` is rejected,
-and `indeterminate` remains incomplete rather than being promoted to approval.
-
-`pool` is which parallel lane a type belongs to, `agent` or `review`, and it
-defaults to `agent`. Reviews are separated because one lane holding both would
-starve auditing exactly when the machine is busiest -- every slot full of
-agents, the reviewer queued behind them, answers piling up unjudged. The
-scheduler that honoured it was the workflow engine, which is gone; `atenea agent` runs one
-agent at a time and has no cap to compete for, so the lane does nothing today.
-
-`reads_subject` says a type is handed another step's whole answer. It is a
-separate word from `pool` because reviewing and reading a subject are two
-different facts that only looked like one while reviewers were the only
-consumers: the shipped `plan` agent reads the exploration `explore` produced,
-and it is ordinary work, not an audit. Declaring it as a lane would have put a
-planner in the pool sized for auditing, competing with the reviews. A
-`review`-pool type has it whether or not it says so -- a review with nothing
-to review is refused anyway -- so it is only ever written on an agent-lane
-type. Hand a subject to a type that declares neither and the graph is refused
-before anything spawns.
+`traces.db` and `floors.json` stay in the state directory untouched; nothing
+reads or writes them any more and nothing deletes them. They can be removed by
+hand. The retention pass now keeps its mark in `retention.mark` beside the run
+receipts, and the backup settles only the measurement base before it copies.
 
 ## Removed: the `[workflow]`, `[[workflow_profile]]` and `[knowledge]` tables
 
@@ -1353,7 +1092,8 @@ the recovery pilot and the knowledge store with `[knowledge]` and
 the three tables is refused at load, like any unknown key (for example
 `unknown key(s): workflow, workflow.max_parallel_agent`). Delete the tables.
 `knowledge.sqlite` and the workflow tables inside `traces.db` stay on disk
-untouched; nothing reads them any more.
+untouched; nothing reads them any more. The same holds for `traces.db` as a
+whole and for `floors.json` (see the section above).
 
 
 ## MCP servers
@@ -1819,7 +1559,7 @@ launch, `[[implementation]]` decides what runs behind a capability, and a
 shortened `[security] sensitive` disarms the skip that keeps secrets out of a
 search.
 
-So the overlay accepts four things and refuses the rest **by name**, with the
+So the overlay accepts three things and refuses the rest **by name**, with the
 reason:
 
 | allowed | what it says |
@@ -1827,7 +1567,6 @@ reason:
 | `[[repository]]` — `languages`, `scale`, `vcs`, `indexed_by` | what this repository is |
 | `[[selector.rule]]` | which implementation to prefer, for this repository only |
 | `[security] sensitive` | further files to treat as delicate |
-| `[[agent]]` — with `runs` | a type of its own, reusing a spawn this machine already declared |
 
 `sensitive` is **unioned** with the global list, never replaced: a repository
 may tighten the guard and may not loosen it, so an empty local list adds
@@ -1843,66 +1582,11 @@ is not, which is the same refusal the global file already makes.
 directory the file was found in; letting the file name another one is the only
 way this layer could reach outside its own tree.
 
-#### `[[agent]]`, and why it is not a hole
-
-A repository may declare an agent type, and it must name `runs`: the type it
-borrows the spawn from. What it may not name is the spawn itself. `command`,
-`args` and `env` are refused by name, for the reason each refusal gives —
-the command is what this machine launches, the arguments are the other half of
-it, and a `PATH` set in `env` redirects even a command the machine did choose:
-
-```
-atenea: invalid_input: local settings /tmp/repo/.atenea/config.toml:
-  agent.command: the command is the binary this machine spawns; a repository
-  choosing it is a cloned file deciding what runs here
-```
-
-So the shape a repository can declare is a narrower use of something already
-on this machine: a different objective, a smaller share, a tighter result
-schema. Anything it declares is held to two ceilings at once — the type it
-runs, and `[local_agents]` below — and the tighter of the two wins. Saying
-nothing inherits that same tighter figure, because saying nothing must not be
-a way to hold more than saying something.
-
-#### `[local_agents]`
-
-The global file's ceiling on everything the section above allows. It belongs to
-the machine's owner and a repository cannot touch it:
-
-```toml
-[local_agents]
-effects = ["read"]              # the most a locally declared type may cause
-context = ["repository"]        # the most it may be served
-# max_tokens = 20000            # unset: the ceiling is the type being run
-# max_duration = "5m"           # the same, for wall clock
-```
-
-The two shipped keys are also the defaults, and they are what every type this
-project ships already holds, so the floor is useful rather than a gesture.
-Deleting the whole block does **not** lift the ceiling: it restores those
-values, which is also what a settings file written before the feature existed
-gets. An absent ceiling that read as no ceiling would be the same mistake as an
-unmeasured cost that reads as free.
-
-`effects = []` turns the feature off entirely: a type that may cause nothing is
-refused, so no repository-declared type loads at all. `context` matters more
-than it looks — `workspace` is the catalog of every repository on this machine
-and `history` is what other runs of the same type were told, so `repository` is
-the only level that cannot carry one project's file into another's prompt.
-
-The two limits are commented out on purpose. A local type is already bounded by
-the limits of the type it runs, which it may lower and never raise, so state a
-number here only to hold a cloned repository below what a generous shipped type
-would otherwise allow it.
-
-A repository cannot set this block. `[local_agents]` is refused in an overlay
-by name — *"it is the ceiling on what a repository's own types may do, so a
-repository setting it would be granting itself the permissions it is being held
-to."*
-
 Everything else — `contract`, `[core]`, `[orchestrator]`, `[metrics]`,
-`[backup]`, `[local_agents]`, `[[capability]]`, `[[implementation]]`,
-`[[mcp_server]]` — is refused naming the block and why:
+`[backup]`, `[[capability]]`, `[[implementation]]`, `[[mcp_server]]` — is
+refused naming the block and why. The keys that left the schema with the
+built-in agents (`[[agent]]`, `[local_agents]`, `[model]`) are refused like any
+other key this binary does not know:
 
 ```
 atenea: invalid_input: local settings /tmp/repo/.atenea/config.toml:

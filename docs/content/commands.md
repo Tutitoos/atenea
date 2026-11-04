@@ -20,12 +20,10 @@ client as `/mcp__atenea__<command>` or in its prompt/command picker.
 /atenea help
 /atenea status
 /atenea metrics --capability code.search
-/atenea traces --open --limit 20
 /atenea catalog
 /atenea doctor --client claude --profile claude
 /atenea detect --repository current
 /atenea incidents
-/atenea floor
 /atenea config
 /atenea intent --repository current
 ```
@@ -46,12 +44,10 @@ fields can request JSON:
 | `help` | Show available read-only commands |
 | `status` | Show service health, providers, repositories and client permissions |
 | `metrics` | Show measured capability/provider rows and filters |
-| `traces` | Show execution traces; supports id, type, verdict, open, since and limit |
 | `catalog` | Show registered capabilities and repositories |
 | `doctor` | Show compatibility telemetry for a client/profile |
 | `detect` | Probe declared providers and indexes |
 | `incidents` | Read the crash notebook without marking incidents read |
-| `floor` | Show measured turn-start costs |
 | `config` | Show a redacted effective settings summary |
 | `intent` | Show safe client declarations for one registered repository |
 

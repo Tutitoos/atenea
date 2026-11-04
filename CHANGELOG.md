@@ -114,6 +114,28 @@ change here invalidates the real Codex certification: **repeat it before the
 next release.** Dated audit evidence that measured the engine is kept and marked
 as such (#219).
 
+The built-in agents are removed, with what only they fed: `atenea agent`,
+`atenea agents`, `agent-exec`, `atenea floor` and `atenea traces` (and the
+`traces` and `floor` entries of `atenea.command` and its prompts), the agent
+packages under `internal/agent` (`readscope` stays), `internal/floor`,
+`internal/trace`, `internal/allowance`, the `internal/activity` channel, the
+`codex-hook` command and the Codex model runtime and native hook, and
+`scripts/opencode-smoke.sh` and `opencode-matrix.sh` with the OpenCode live
+job of `v1-readiness`. **Delete `[model]`, every `[[agent]]` block and
+`[local_agents]`** from your settings file, and `[[agent]]` and `[local_agents]`
+from any repository `.atenea/config.toml`: each is refused at load as an
+unknown key (for example `unknown key(s): agent, ...`). `atenea ask`, the MCP
+capability tools, `atenea codex agents sync|check` and the four native Codex
+profiles are unchanged. `traces.db` and `floors.json` are left on disk, dormant,
+and nothing reads or deletes them. Run-receipt retention now keeps its mark in
+`retention.mark` beside the receipts (it was tied to deleting trace rows, so it
+would have stopped pruning receipts once no agent wrote traces), and the backup
+settles only the metrics store. The contract version and `pkg/contract` types
+are unchanged. Every source change here invalidates the real Codex
+certification: **the real Codex re-certification is REQUIRED before the next
+release.** Dated audit evidence that measured the agents is kept and marked as
+such (#220).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

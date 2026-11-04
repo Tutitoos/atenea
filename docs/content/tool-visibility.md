@@ -78,16 +78,9 @@ Original structured results and schemas are unchanged. Receipts contain no copie
 of payloads, source code, health-error text or credentials; exclusions use safe
 categories such as `repository_scope`, `not_attached`, `constraints` and `health`.
 
-Agent processes receive an invocation-scoped Unix activity channel. Atenea's MCP
-relay and the Codex `PreToolUse` hook wait for its acknowledgement before allowing
-the tool call, so internal Atenea MCP calls and Codex Bash, ApplyPatch, MCP and
-local tools are persisted and published first. Tool arguments and results never
-cross this channel. One public capability invocation remains one notice even when
-its adapter makes several private Kivgraph MCP requests. Native tools in clients
-without a pre-tool event remain partial and must use client-visible stepped
-execution until their real activity surface is validated in the compatibility
-pilot. Local reads outside an Atenea dispatch are not attributed to a provider.
-Atenea owns these instructions rather than
+One public capability invocation remains one notice even when its adapter makes
+several private Kivgraph MCP requests. Local reads outside an Atenea dispatch
+are not attributed to a provider. Atenea owns these instructions rather than
 forwarding arbitrary upstream prose about tools absent from its catalog.
 
 Restart the Atenea service after installing a new binary, then reconnect the

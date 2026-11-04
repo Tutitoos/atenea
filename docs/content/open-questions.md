@@ -5,6 +5,8 @@ weight: 7
 
 # Open questions
 
+The built-in agents, floor and traces (`atenea agent`, `atenea floor`, `atenea traces`) were measured at the time of these entries; they are no longer part of Atenea (see #212). The retention mark and the backup settling described below now live with the run receipts and the metrics store, and `traces.db` is no longer read.
+
 Not gaps against the design — the design never asked for these. Noticed
 using Atenea day to day, not yet decided, written down as they came up so the
 next session starts from this instead of memory. An entry leaves this list

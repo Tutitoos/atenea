@@ -6,6 +6,8 @@ The embedded dashboard was measured at the time of this audit; it is no longer p
 
 El motor de workflows (`atenea workflow`, el piloto de recuperación y el almacén de conocimiento) se midió en el momento de esta auditoría; ya no forma parte de Atenea (véase #212). Este cierre se midió contra el corpus v1 (12 escenarios, digest `bb57b855…98a5`), que queda como evidencia histórica; el corpus vigente es `benchmarks/corpus/v2` (S01–S09, véase `benchmarks/corpus/README.md`).
 
+Los agentes integrados, el floor y las trazas (`atenea agent`, `atenea floor`, `atenea traces`) se midieron en el momento de esta auditoría; ya no forman parte de Atenea (véase #212).
+
 Esta entrega se preparó en un worktree aislado, sobre la rama `feat/atenea-intelligent-orchestration`. La rama parte del commit `9ab1c03e9dca5e2167f582d9f860aae14e23424d`. El checkout principal permaneció limpio en `main` y en el mismo commit durante la implementación.
 
 Se instalaron localmente las dependencias del dashboard con autorización para ejecutar sus pruebas y build. En el momento de cerrar la aceptación local aún no se había realizado commit ni push. No se instaló ATENEA ni se realizó merge, despliegue o migración.
