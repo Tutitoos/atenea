@@ -46,16 +46,6 @@ func (t AgentType) String() string {
 	return "unknown"
 }
 
-// ParseAgentType reads an agent type name.
-func ParseAgentType(s string) (AgentType, error) {
-	for value, name := range agentTypeNames {
-		if name != "" && name == strings.ToLower(strings.TrimSpace(s)) {
-			return value, nil
-		}
-	}
-	return AgentUnspecified, Fail(FailureInvalidInput, "unknown agent type %q", s)
-}
-
 // ContextLevel is one of the four heights context is stored at.
 //
 // An agent never gets everything. It works with the levels it needs and no
@@ -97,16 +87,6 @@ func (l ContextLevel) String() string {
 		return name
 	}
 	return "unknown"
-}
-
-// ParseContextLevel reads a context level name.
-func ParseContextLevel(s string) (ContextLevel, error) {
-	for value, name := range contextLevelNames {
-		if name != "" && name == strings.ToLower(strings.TrimSpace(s)) {
-			return value, nil
-		}
-	}
-	return ContextUnspecified, Fail(FailureInvalidInput, "unknown context level %q", s)
 }
 
 // Agent is the card every agent carries: what it is, what it may ask for and
@@ -232,17 +212,6 @@ func (v Verdict) String() string {
 		return name
 	}
 	return "unknown"
-}
-
-// ParseVerdict reads a verdict name, the same way a receipt's Review field
-// was written by String().
-func ParseVerdict(s string) (Verdict, error) {
-	for value, name := range verdictNames {
-		if name == strings.ToLower(strings.TrimSpace(s)) {
-			return value, nil
-		}
-	}
-	return VerdictUnspecified, Fail(FailureInvalidInput, "unknown verdict %q", s)
 }
 
 // Discovery is something an agent learned on the way that outlives the task.

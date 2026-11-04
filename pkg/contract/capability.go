@@ -87,46 +87,6 @@ func (e Effect) String() string {
 	return fmt.Sprintf("effect(%d)", uint8(e))
 }
 
-// Operation is a closed, one-shot sensitive action. It is deliberately
-// separate from EffectWrite: editing a file is not permission to publish a
-// branch, install software, deploy it, or run a migration.
-type Operation string
-
-const (
-	// OperationCommit is part of ATENEA's public orchestration contract.
-	OperationCommit Operation = "commit"
-	// OperationPush is part of ATENEA's public orchestration contract.
-	OperationPush Operation = "push"
-	// OperationInstall is part of ATENEA's public orchestration contract.
-	OperationInstall Operation = "install"
-	// OperationDeploy is part of ATENEA's public orchestration contract.
-	OperationDeploy Operation = "deploy"
-	// OperationMigrate is part of ATENEA's public orchestration contract.
-	OperationMigrate Operation = "migrate"
-	// OperationMerge is part of ATENEA's public orchestration contract.
-	OperationMerge Operation = "merge"
-)
-
-var operationNames = map[Operation]struct{}{
-	OperationCommit: {}, OperationPush: {}, OperationInstall: {},
-	OperationDeploy: {}, OperationMigrate: {}, OperationMerge: {},
-}
-
-// ParseOperation validates the explicit operation spelling.
-func ParseOperation(s string) (Operation, error) {
-	op := Operation(strings.TrimSpace(strings.ToLower(s)))
-	if _, ok := operationNames[op]; !ok {
-		return "", Fail(FailureInvalidInput,
-			"unknown operation %q: want commit, push, install, deploy, migrate or merge", s)
-	}
-	return op, nil
-}
-
-func (o Operation) String() string { return string(o) }
-
-// Known reports whether this operation belongs to the closed set.
-func (o Operation) Known() bool { _, ok := operationNames[o]; return ok }
-
 // ParseEffect reads an effect name.
 func ParseEffect(s string) (Effect, error) {
 	if e, ok := effectByName[s]; ok {
