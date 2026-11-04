@@ -86,8 +86,8 @@ func (f fakeConnection) Transcript(context.Context) (Transcript, error) {
 	}
 	if f.snapshot.StatusInvocationID == "status-2" {
 		base = append(base,
-			TranscriptEvent{Kind: "request", ID: "s-2", Method: "workflow.status", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-2", ActivityAfter: 1},
-			TranscriptEvent{Kind: "response", ID: "s-2-response", Method: "workflow.status", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-2", ActivityCursor: 2},
+			TranscriptEvent{Kind: "request", ID: "s-2", Method: "catalog.repositories", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-2", ActivityAfter: 1},
+			TranscriptEvent{Kind: "response", ID: "s-2-response", Method: "catalog.repositories", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-2", ActivityCursor: 2},
 		)
 		return Transcript{SessionID: "session-second", Reconnect: true, Provenance: Provenance{Level: EvidenceFixture, Source: EvidenceFixture, Recorder: "fixture-recorder"}, Events: base}, nil
 	}
@@ -97,8 +97,8 @@ func (f fakeConnection) Transcript(context.Context) (Transcript, error) {
 		TranscriptEvent{Kind: "response", ID: "call-1-response", Method: "tools/call", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "inv-1"},
 		TranscriptEvent{Kind: "activity", ID: "a-1", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "inv-1"},
 		TranscriptEvent{Kind: "render", ID: "r-1", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "inv-1", Source: "fixture", Text: "Checklist [x] Progreso " + expectedBar(50)},
-		TranscriptEvent{Kind: "request", ID: "s-1", Method: "workflow.status", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-1", ActivityAfter: 0},
-		TranscriptEvent{Kind: "response", ID: "s-1-response", Method: "workflow.status", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-1", ActivityCursor: 1},
+		TranscriptEvent{Kind: "request", ID: "s-1", Method: "catalog.repositories", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-1", ActivityAfter: 0},
+		TranscriptEvent{Kind: "response", ID: "s-1-response", Method: "catalog.repositories", RunID: f.runID, WorkflowID: f.snapshot.WorkflowID, InvocationID: "status-1", ActivityCursor: 1},
 	)
 	return Transcript{SessionID: "session-first", Provenance: Provenance{Level: EvidenceFixture, Source: EvidenceFixture, Recorder: "fixture-recorder"}, Events: base}, nil
 }
@@ -334,10 +334,10 @@ func TestTranscriptRejectsStatusResponseBeforeRequest(t *testing.T) {
 	}
 	request, response := -1, -1
 	for i, event := range transcript.Events {
-		if event.Method == "workflow.status" && event.Kind == "request" {
+		if event.Method == "catalog.repositories" && event.Kind == "request" {
 			request = i
 		}
-		if event.Method == "workflow.status" && event.Kind == "response" {
+		if event.Method == "catalog.repositories" && event.Kind == "response" {
 			response = i
 		}
 	}
@@ -346,7 +346,7 @@ func TestTranscriptRejectsStatusResponseBeforeRequest(t *testing.T) {
 	}
 	transcript.Events[request], transcript.Events[response] = transcript.Events[response], transcript.Events[request]
 	if err := validateTranscript(transcript, injection, snapshot, transcript.Provenance); err == nil {
-		t.Fatal("accepted workflow.status response before request")
+		t.Fatal("accepted catalog.repositories response before request")
 	}
 }
 

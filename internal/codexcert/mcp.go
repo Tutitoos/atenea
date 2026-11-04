@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// ServeMCP exposes one read-only deterministic workflow.status challenge. It
+// ServeMCP exposes one read-only deterministic catalog.repositories challenge. It
 // is launched only inside the disposable Codex CLI certification sandbox.
 func ServeMCP(in io.Reader, out io.Writer, challenge Challenge, cursorPath string) error {
 	scanner := bufio.NewScanner(in)
@@ -38,7 +38,7 @@ func ServeMCP(in io.Reader, out io.Writer, challenge Challenge, cursorPath strin
 			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "atenea-codex-certification", "version": "1"}}
 		case "tools/list":
 			result = map[string]any{"tools": []any{map[string]any{
-				"name": "workflow.status", "description": "Read the deterministic ATENEA certification workflow status.",
+				"name": "catalog.repositories", "description": "Read the deterministic ATENEA certification status.",
 				"inputSchema": map[string]any{"type": "object", "required": []string{"nonce", "run_id", "workflow_id", "invocation_id", "after_cursor"}, "properties": map[string]any{
 					"nonce": map[string]any{"type": "string"}, "run_id": map[string]any{"type": "string"}, "workflow_id": map[string]any{"type": "string"}, "invocation_id": map[string]any{"type": "string"}, "after_cursor": map[string]any{"type": "integer"},
 				}},
@@ -46,7 +46,7 @@ func ServeMCP(in io.Reader, out io.Writer, challenge Challenge, cursorPath strin
 		case "tools/call":
 			args := request.Params.Arguments
 			cursor, cursorOK := args["after_cursor"].(float64)
-			if request.Params.Name != "workflow.status" || len(args) != 5 || !cursorOK || (cursor != 0 && cursor != 1) || args["nonce"] != challenge.Nonce || args["run_id"] != challenge.RunID || args["workflow_id"] != challenge.WorkflowID || args["invocation_id"] != challenge.InvocationID {
+			if request.Params.Name != "catalog.repositories" || len(args) != 5 || !cursorOK || (cursor != 0 && cursor != 1) || args["nonce"] != challenge.Nonce || args["run_id"] != challenge.RunID || args["workflow_id"] != challenge.WorkflowID || args["invocation_id"] != challenge.InvocationID {
 				result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "uncorrelated certification challenge"}}, "isError": true}
 			} else if cursor == 1 {
 				if err := consumeReconnectCursor(cursorPath, challenge); err != nil {

@@ -896,7 +896,7 @@ func doctorCompatibility(client string, profile config.DesktopProfile, resolved 
 		EvidenceLevel: clientcompat.EvidenceManual, Source: clientcompat.EvidenceManual,
 		Declared:     clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "detect", Detail: "client not inspected"}),
 		Connected:    clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "mcp", Detail: "not tested"}),
-		Tested:       clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "workflow.status", Detail: "not tested"}),
+		Tested:       clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "catalog.repositories", Detail: "not tested"}),
 		Presentation: clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "chat", Detail: "not tested"}),
 		Reconnect:    clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "reconnect", Detail: "not tested"}),
 		ServerProbe:  clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "server-probe", Detail: "not probed"}),

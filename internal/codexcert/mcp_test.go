@@ -9,7 +9,7 @@ import (
 
 func callCertificationMCP(t *testing.T, challenge Challenge, cursorPath string, cursor int) map[string]any {
 	t.Helper()
-	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "workflow.status", "arguments": map[string]any{"nonce": challenge.Nonce, "run_id": challenge.RunID, "workflow_id": challenge.WorkflowID, "invocation_id": challenge.InvocationID, "after_cursor": cursor}}}
+	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "catalog.repositories", "arguments": map[string]any{"nonce": challenge.Nonce, "run_id": challenge.RunID, "workflow_id": challenge.WorkflowID, "invocation_id": challenge.InvocationID, "after_cursor": cursor}}}
 	data, _ := json.Marshal(request)
 	var out bytes.Buffer
 	if err := ServeMCP(bytes.NewReader(append(data, '\n')), &out, challenge, cursorPath); err != nil {

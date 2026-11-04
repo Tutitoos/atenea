@@ -50,7 +50,7 @@ type WorkflowSnapshot struct {
 	Total      int
 	Progress   int
 	Bar        string
-	// ActivityCursor is the cursor returned by workflow.status. ActivityAfter
+	// ActivityCursor is the cursor returned by catalog.repositories. ActivityAfter
 	// exists for source compatibility with early pilot fixtures; requests use
 	// TranscriptEvent.ActivityAfter and never this response field.
 	ActivityCursor     int64
@@ -89,7 +89,7 @@ type NoticeRecord struct {
 }
 
 // Transcript is an auditable protocol/client record. The harness requires a
-// handshake, correlated workflow.status, activity and externally observed
+// handshake, correlated catalog.repositories, activity and externally observed
 // rendering event before it upgrades a corresponding claim.
 type Transcript struct {
 	SessionID  string
@@ -142,7 +142,7 @@ type TranscriptEvent struct {
 	Requested       string
 	Observed        string
 	InvocationID    string
-	// ActivityAfter is the cursor sent by a workflow.status request. It is
+	// ActivityAfter is the cursor sent by a catalog.repositories request. It is
 	// deliberately separate from ActivityCursor, which is the cursor returned
 	// by its response.
 	ActivityAfter  int64
@@ -439,8 +439,8 @@ func RunPilot(ctx context.Context, options PilotOptions) (PilotReport, error) {
 		first, err := connection.WorkflowStatus(ctx, workflowID)
 		if err != nil {
 			_ = connection.Close()
-			entry.Connected = EvidenceCheck(Unknown, Evidence{ID: "protocol", Detail: "workflow.status could not be correlated"})
-			entry.Tested = EvidenceCheck(Fail, Evidence{ID: "workflow.status", Detail: err.Error()})
+			entry.Connected = EvidenceCheck(Unknown, Evidence{ID: "protocol", Detail: "catalog.repositories could not be correlated"})
+			entry.Tested = EvidenceCheck(Fail, Evidence{ID: "catalog.repositories", Detail: err.Error()})
 			entry.Presentation = unknownCheck("not tested")
 			entry.Reconnect = unknownCheck("not tested")
 			report.Matrix = replaceEntry(report.Matrix, entry)
@@ -448,8 +448,8 @@ func RunPilot(ctx context.Context, options PilotOptions) (PilotReport, error) {
 		}
 		if err := validateSnapshotForRun(first, workflowID, runID); err != nil {
 			_ = connection.Close()
-			entry.Connected = EvidenceCheck(Unknown, Evidence{ID: "protocol", Detail: "workflow.status failed contract validation"})
-			entry.Tested = EvidenceCheck(Fail, Evidence{ID: "workflow.status", Detail: err.Error()})
+			entry.Connected = EvidenceCheck(Unknown, Evidence{ID: "protocol", Detail: "catalog.repositories failed contract validation"})
+			entry.Tested = EvidenceCheck(Fail, Evidence{ID: "catalog.repositories", Detail: err.Error()})
 			entry.Presentation = unknownCheck("not tested")
 			entry.Reconnect = unknownCheck("not tested")
 			report.Matrix = replaceEntry(report.Matrix, entry)
@@ -479,7 +479,7 @@ func RunPilot(ctx context.Context, options PilotOptions) (PilotReport, error) {
 		}
 		entry.Connected = EvidenceCheck(Pass, Evidence{ID: "handshake", Detail: "correlated client handshake"})
 		entry.Requested, entry.Observed = transcriptVersions(transcript, first)
-		entry.Tested = EvidenceCheck(Pass, Evidence{ID: "workflow.status", Detail: fmt.Sprintf("cursor %s; checklist %d/%d; progress %d%%", first.Cursor, first.Accepted, first.Total, first.Progress)})
+		entry.Tested = EvidenceCheck(Pass, Evidence{ID: "catalog.repositories", Detail: fmt.Sprintf("cursor %s; checklist %d/%d; progress %d%%", first.Cursor, first.Accepted, first.Total, first.Progress)})
 		entry.Presentation = observePresentation(ctx, options.Observers[spec.Client], provenance, runID, workflowID, transcriptInvocation(transcript))
 		if err := connection.Close(); err != nil {
 			entry.Reconnect = EvidenceCheck(Fail, Evidence{ID: "close", Detail: err.Error()})
@@ -507,7 +507,7 @@ func RunPilot(ctx context.Context, options PilotOptions) (PilotReport, error) {
 		}
 		_ = reconnected.Close()
 		if err != nil {
-			entry.Reconnect = EvidenceCheck(Fail, Evidence{ID: "workflow.status", Detail: err.Error()})
+			entry.Reconnect = EvidenceCheck(Fail, Evidence{ID: "catalog.repositories", Detail: err.Error()})
 		} else if err := compareSnapshots(first, second, workflowID, runID); err != nil {
 			entry.Reconnect = EvidenceCheck(Fail, Evidence{ID: "continuity", Detail: err.Error()})
 		} else if err := compareTranscriptReplay(transcript, reconnectTranscript); err != nil {
@@ -561,7 +561,7 @@ func compareTranscriptReplay(first, second Transcript) error {
 func transcriptActivityCursors(transcript Transcript) (requestAfter, responseCursor int64, ok bool) {
 	requestSeen, responseSeen := false, false
 	for _, event := range transcript.Events {
-		if event.Method != "workflow.status" {
+		if event.Method != "catalog.repositories" {
 			continue
 		}
 		if event.Kind == "request" {
@@ -612,37 +612,37 @@ var timeNow = func() time.Time { return time.Now().UTC() }
 
 func validateSnapshotForRun(snapshot WorkflowSnapshot, workflowID, runID string) error {
 	if snapshot.WorkflowID != workflowID || strings.TrimSpace(snapshot.Cursor) == "" {
-		return errors.New("workflow.status did not return the requested workflow and cursor")
+		return errors.New("catalog.repositories did not return the requested workflow and cursor")
 	}
 	if runID != "" && snapshot.RunID != runID {
-		return errors.New("workflow.status did not preserve the correlated run")
+		return errors.New("catalog.repositories did not preserve the correlated run")
 	}
 	if strings.TrimSpace(snapshot.Profile) == "" || strings.TrimSpace(snapshot.Requested) == "" || strings.TrimSpace(snapshot.Observed) == "" || strings.TrimSpace(snapshot.StatusInvocationID) == "" {
-		return errors.New("workflow.status omitted profile or protocol versions")
+		return errors.New("catalog.repositories omitted profile or protocol versions")
 	}
 	if _, err := mcpcompat.Parse(snapshot.Requested); err != nil {
-		return fmt.Errorf("workflow.status requested version: %w", err)
+		return fmt.Errorf("catalog.repositories requested version: %w", err)
 	}
 	if _, err := mcpcompat.Parse(snapshot.Observed); err != nil {
-		return fmt.Errorf("workflow.status observed version: %w", err)
+		return fmt.Errorf("catalog.repositories observed version: %w", err)
 	}
 	if len(snapshot.Permissions) == 0 {
-		return errors.New("workflow.status omitted application permissions")
+		return errors.New("catalog.repositories omitted application permissions")
 	}
 	if snapshot.Total <= 0 || snapshot.Accepted < 0 || snapshot.Accepted > snapshot.Total || snapshot.Progress != snapshot.Accepted*100/snapshot.Total {
-		return errors.New("workflow.status returned inconsistent checklist progress")
+		return errors.New("catalog.repositories returned inconsistent checklist progress")
 	}
 	if snapshot.Bar != expectedBar(snapshot.Progress) {
-		return errors.New("workflow.status returned an inconsistent progress bar")
+		return errors.New("catalog.repositories returned an inconsistent progress bar")
 	}
 	if len(snapshot.Checklist) != snapshot.Total {
-		return errors.New("workflow.status returned an incomplete checklist")
+		return errors.New("catalog.repositories returned an incomplete checklist")
 	}
 	seen := make(map[string]bool, len(snapshot.Checklist))
 	accepted := 0
 	for _, item := range snapshot.Checklist {
 		if strings.TrimSpace(item.ID) == "" || seen[item.ID] || strings.TrimSpace(item.Title) == "" || strings.TrimSpace(item.Evidence) == "" {
-			return errors.New("workflow.status returned an incomplete checklist item")
+			return errors.New("catalog.repositories returned an incomplete checklist item")
 		}
 		seen[item.ID] = true
 		if item.Accepted {
@@ -650,7 +650,7 @@ func validateSnapshotForRun(snapshot WorkflowSnapshot, workflowID, runID string)
 		}
 	}
 	if accepted != snapshot.Accepted {
-		return errors.New("workflow.status checklist count disagrees with accepted count")
+		return errors.New("catalog.repositories checklist count disagrees with accepted count")
 	}
 	if err := validateActivity(snapshot); err != nil {
 		return err
@@ -660,36 +660,36 @@ func validateSnapshotForRun(snapshot WorkflowSnapshot, workflowID, runID string)
 
 func validateActivity(snapshot WorkflowSnapshot) error {
 	if len(snapshot.Activity) == 0 || len(snapshot.Notices) == 0 {
-		return errors.New("workflow.status omitted activity or notice evidence")
+		return errors.New("catalog.repositories omitted activity or notice evidence")
 	}
 	activitySeen := map[string]bool{}
 	for _, record := range snapshot.Activity {
 		if strings.TrimSpace(record.InvocationID) == "" || activitySeen[record.InvocationID] {
-			return errors.New("workflow.status returned duplicate activity invocation ids")
+			return errors.New("catalog.repositories returned duplicate activity invocation ids")
 		}
 		activitySeen[record.InvocationID] = true
 	}
 	noticeSeen := map[string]bool{}
 	for _, notice := range snapshot.Notices {
 		if strings.TrimSpace(notice.InvocationID) == "" || noticeSeen[notice.InvocationID] || strings.TrimSpace(notice.Markdown) == "" {
-			return errors.New("workflow.status returned duplicate or incomplete notices")
+			return errors.New("catalog.repositories returned duplicate or incomplete notices")
 		}
 		noticeSeen[notice.InvocationID] = true
 	}
 	seen := map[string]bool{}
 	if len(snapshot.Effects) > 0 && len(snapshot.Effects) != len(snapshot.EffectIDs) {
-		return errors.New("workflow.status effect records lack one effect id each")
+		return errors.New("catalog.repositories effect records lack one effect id each")
 	}
 	for _, effect := range snapshot.Effects {
 		if strings.TrimSpace(effect) == "" || seen[effect] {
-			return errors.New("workflow.status returned duplicate effects")
+			return errors.New("catalog.repositories returned duplicate effects")
 		}
 		seen[effect] = true
 	}
 	seen = map[string]bool{}
 	for _, effectID := range snapshot.EffectIDs {
 		if strings.TrimSpace(effectID) == "" || seen[effectID] {
-			return errors.New("workflow.status returned duplicate effect ids")
+			return errors.New("catalog.repositories returned duplicate effect ids")
 		}
 		seen[effectID] = true
 	}
@@ -806,9 +806,9 @@ func validateTranscript(transcript Transcript, injection Injection, snapshot Wor
 				handshake = true
 			}
 		case "request", "response":
-			if event.Method == "workflow.status" {
+			if event.Method == "catalog.repositories" {
 				if len(event.Effects) != 0 || len(event.EffectIDs) != 0 {
-					return errors.New("workflow.status transcript contains effects")
+					return errors.New("catalog.repositories transcript contains effects")
 				}
 				if event.Kind == "request" && event.ID != "" && event.InvocationID == snapshot.StatusInvocationID && event.RunID == injection.RunID && event.WorkflowID == injection.WorkflowID {
 					status = true
@@ -862,13 +862,13 @@ func validateTranscript(transcript Transcript, injection Injection, snapshot Wor
 		return errors.New("transcript lacks a transport session id")
 	}
 	if !handshake || !status || !statusResponse || statusRequestAt < 0 || statusResponseAt < 0 {
-		return errors.New("transcript lacks correlated handshake or workflow.status")
+		return errors.New("transcript lacks correlated handshake or catalog.repositories")
 	}
 	if statusResponseAt <= statusRequestAt {
-		return errors.New("workflow.status response precedes its request")
+		return errors.New("catalog.repositories response precedes its request")
 	}
 	if statusResponseCursor < statusRequestAfter || statusResponseCursor != snapshotActivityCursor(snapshot) {
-		return errors.New("workflow.status response cursor is before the request cursor or snapshot")
+		return errors.New("catalog.repositories response cursor is before the request cursor or snapshot")
 	}
 	if transcript.Reconnect {
 		if noticeCount != 0 || toolRequestCount != 0 || activity || notices || requestAt >= 0 || responseAt >= 0 || activityAt >= 0 || renderAt >= 0 {
@@ -948,23 +948,23 @@ func compareSnapshots(first, second WorkflowSnapshot, workflowID string, runID .
 		return err
 	}
 	if expectedRunID != "" && first.RunID != expectedRunID {
-		return errors.New("workflow.status initial snapshot lost the correlated run")
+		return errors.New("catalog.repositories initial snapshot lost the correlated run")
 	}
 	order := cursorCompare(second.Cursor, first.Cursor)
 	if order == 2 {
-		return errors.New("workflow.status cursors are not comparable after reconnect")
+		return errors.New("catalog.repositories cursors are not comparable after reconnect")
 	}
 	if order < 0 {
-		return errors.New("workflow.status cursor regressed after reconnect")
+		return errors.New("catalog.repositories cursor regressed after reconnect")
 	}
 	if snapshotActivityCursor(second) < snapshotActivityCursor(first) {
 		return errors.New("activity_after regressed after reconnect")
 	}
 	if first.RunID != second.RunID || first.Profile != second.Profile || !slices.Equal(first.Permissions, second.Permissions) || first.Requested != second.Requested || first.Observed != second.Observed || first.StatusInvocationID == second.StatusInvocationID {
-		return errors.New("workflow.status changed run profile permissions or protocol after reconnect")
+		return errors.New("catalog.repositories changed run profile permissions or protocol after reconnect")
 	}
 	if first.Accepted != second.Accepted || first.Total != second.Total || first.Progress != second.Progress || first.Bar != second.Bar || checklistDigest(first.Checklist) != checklistDigest(second.Checklist) || activityDigest(first.Activity, first.Notices, first.Effects, first.EffectIDs) != activityDigest(second.Activity, second.Notices, second.Effects, second.EffectIDs) {
-		return errors.New("workflow.status changed checklist or progress after reconnect")
+		return errors.New("catalog.repositories changed checklist or progress after reconnect")
 	}
 	return nil
 }

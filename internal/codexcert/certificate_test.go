@@ -193,9 +193,9 @@ func TestSigningKeyAndEmbeddedIDFailClosed(t *testing.T) {
 func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T) {
 	nonce, run, workflow, invocation, proof := "nonce", "run", "workflow", "invocation", "proof"
 	lines := []string{
-		`{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"**ATENEA · workflow.status** — consulto invocation para verificar actividad y progreso."}}`,
-		`{"type":"item.started","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","arguments":{"nonce":"nonce","run_id":"run","workflow_id":"workflow","invocation_id":"invocation","after_cursor":0}}}`,
-		"{\"type\":\"item.completed\",\"item\":{\"id\":\"tool-1\",\"type\":\"mcp_tool_call\",\"server\":\"atenea\",\"tool\":\"workflow.status\",\"status\":\"completed\",\"result\":\"proof activity=completed nonce run workflow invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}}",
+		`{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"**ATENEA · catalog.repositories** — consulto invocation para verificar actividad y progreso."}}`,
+		`{"type":"item.started","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"catalog.repositories","arguments":{"nonce":"nonce","run_id":"run","workflow_id":"workflow","invocation_id":"invocation","after_cursor":0}}}`,
+		"{\"type\":\"item.completed\",\"item\":{\"id\":\"tool-1\",\"type\":\"mcp_tool_call\",\"server\":\"atenea\",\"tool\":\"catalog.repositories\",\"status\":\"completed\",\"result\":\"proof activity=completed nonce run workflow invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}}",
 		"{\"type\":\"item.completed\",\"item\":{\"id\":\"message-2\",\"type\":\"agent_message\",\"text\":\"nonce proof invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}}",
 		`{"type":"turn.completed"}`,
 	}
@@ -207,12 +207,12 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 		t.Fatalf("completed MCP result was not accepted as deterministic rendering: %v", err)
 	}
 	incompletePayload := append([]string{}, lines...)
-	incompletePayload[2] = `{"type":"item.completed","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","status":"completed","result":"proof activity=completed nonce run workflow invocation"}}`
+	incompletePayload[2] = `{"type":"item.completed","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"catalog.repositories","status":"completed","result":"proof activity=completed nonce run workflow invocation"}}`
 	if err := VerifyCLIJSONL([]byte(strings.Join(incompletePayload, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
 		t.Fatal("agent message rescued an incomplete MCP presentation payload")
 	}
 	erroredPayload := append([]string{}, lines...)
-	erroredPayload[2] = "{\"type\":\"item.completed\",\"item\":{\"id\":\"tool-1\",\"type\":\"mcp_tool_call\",\"server\":\"atenea\",\"tool\":\"workflow.status\",\"status\":\"completed\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"proof activity=completed nonce run workflow invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}],\"isError\":true}}}"
+	erroredPayload[2] = "{\"type\":\"item.completed\",\"item\":{\"id\":\"tool-1\",\"type\":\"mcp_tool_call\",\"server\":\"atenea\",\"tool\":\"catalog.repositories\",\"status\":\"completed\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"proof activity=completed nonce run workflow invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}],\"isError\":true}}}"
 	if err := VerifyCLIJSONL([]byte(strings.Join(erroredPayload, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
 		t.Fatal("errored MCP result was accepted as certification evidence")
 	}
@@ -224,13 +224,13 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 	if err := VerifyCLIJSONL([]byte(strings.Join(extraNotice, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
 		t.Fatal("additional ATENEA notice accepted")
 	}
-	fakeText := `{"type":"item.completed","item":{"id":"message","type":"agent_message","text":"**ATENEA · workflow.status** — consulto invocation para verificar actividad y progreso. proof activity=completed - [x] **P30.** Certificación Codex **Progreso:** ` + "`" + `████████████████████` + "`" + ` 100 % · 1/1 puntos completados"}}`
+	fakeText := `{"type":"item.completed","item":{"id":"message","type":"agent_message","text":"**ATENEA · catalog.repositories** — consulto invocation para verificar actividad y progreso. proof activity=completed - [x] **P30.** Certificación Codex **Progreso:** ` + "`" + `████████████████████` + "`" + ` 100 % · 1/1 puntos completados"}}`
 	if err := VerifyCLIJSONL([]byte(fakeText), nonce, run, workflow, invocation, proof, 1); err == nil {
 		t.Fatal("agent text impersonated typed MCP events")
 	}
 	reconnect := []string{
-		`{"type":"item.completed","item":{"id":"message-r1","type":"agent_message","text":"**ATENEA · workflow.status** — reanudo invocation desde cursor 1 sin repetir actividad."}}`,
-		`{"type":"item.started","item":{"id":"tool-r","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","arguments":{"nonce":"nonce","run_id":"run","workflow_id":"workflow","invocation_id":"invocation","after_cursor":1}}}`,
+		`{"type":"item.completed","item":{"id":"message-r1","type":"agent_message","text":"**ATENEA · catalog.repositories** — reanudo invocation desde cursor 1 sin repetir actividad."}}`,
+		`{"type":"item.started","item":{"id":"tool-r","type":"mcp_tool_call","server":"atenea","tool":"catalog.repositories","arguments":{"nonce":"nonce","run_id":"run","workflow_id":"workflow","invocation_id":"invocation","after_cursor":1}}}`,
 		`{"type":"item.completed","item":{"id":"tool-r","type":"mcp_tool_call","status":"completed","result":"proof cursor=1 activity=[] notices=[]"}}`,
 		`{"type":"item.completed","item":{"id":"message-r2","type":"agent_message","text":"proof cursor=1"}}`,
 		`{"type":"turn.completed"}`,
