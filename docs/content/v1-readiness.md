@@ -14,6 +14,8 @@ The decision stack (`atenea decide`) was measured at the time of this audit; it 
 
 The workflow engine (`atenea workflow`, recovery pilot and the knowledge store) was measured at the time of this audit; it is no longer part of Atenea (see #212).
 
+The built-in agents, floor and traces (`atenea agent`, `atenea floor`, `atenea traces`) were measured at the time of this audit; they are no longer part of Atenea (see #212). The OpenCode model backend, the citation gate and the semantic review they carried went with them, so the rows and deferred items that described them were removed.
+
 This page is the acceptance record for the published releases. The evidence below the
 "Latest 1.0.5 verification" heading was measured against that release and stays
 filed under it; what was checked for 1.1.0 has a section of its own at the end.
@@ -27,18 +29,13 @@ a new contract or an external provider decision. The normative policy is in
 | Area | Evidence | Status |
 | --- | --- | --- |
 | Core, registry, selector and orchestrator | `pkg/contract/`, `internal/registry/`, `internal/selector/`, `internal/orchestrator/` | Implemented and covered |
-| Persistent history | `internal/agent/agent.go`, `internal/trace/`, `internal/metrics/` | Lazy history loading is wired; tests cover prior-run discoveries |
 | Permission effects | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | Explicit grants and `--allow` are enforced |
 | Budget boundary and plan execution | `internal/core/commission.go`, `internal/orchestrator/orchestrator.go`, `pkg/contract/workflow.go` | Reported over-budget results are rejected centrally; reviewed multi-capability DAGs run through `RunPlan` and resume from `KindPlan` checkpoints |
 | Measurements and wandering | `internal/metrics/summary.go`, `internal/metrics/compact.go`, migrations `0006` and `0007` | `out_of_scope` is persisted, rolled up and reported |
-| Completeness reporting | `internal/agent/model/model.go`, `internal/agent/planner/` | Missing or partial coverage is represented and tested |
 | Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
 | MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/`, `internal/core/mcp.go` | Shared and per-chat lifecycle, raw allow-list and effects are validated |
 | Continuous MCP health | `internal/core/backendstate.go`, `internal/core/startup.go`, `internal/config/default.toml` | Service probes declared servers every 15 minutes by default and persists the last handshake result; `0s` disables it |
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/`, `tokensave/` | Native adapters compile and are tested; Tokensave is active on the audit machine |
-| OpenCode model backend | `internal/agent/opencode/`, `internal/agent/model/`, `scripts/opencode-smoke.sh`, `scripts/opencode-matrix.sh` | Opt-in adapter, local structured-schema and observed-budget enforcement, protocol fixtures, safe real-provider smoke and free-provider/MCP matrix |
-| Citation traceability gate | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/agent/review_integration_test.go`, `internal/config/default.toml` | Every prose field requires evidence; paths, lines, fragments, abbreviated paths, directory renames and multiple sources are audited and retained in the report, including through the real Runner |
-| Semantic review | `internal/agent/semanticreviewer/`, `cmd/atenea/agent.go`, `internal/config/default.toml` | Opt-in model-backed judgement of whether conclusions follow from evidence; returns supported/unsupported/indeterminate with confidence, claims, gaps and scope; deterministic citation review remains mandatory |
 | Installation and operations | `scripts/install.sh`, `scripts/release-smoke.sh`, `docs/content/operations.md` | Install, update, rollback, uninstall and release smoke are verified |
 | Release gate | `.github/workflows/ci.yml`, `release.yml`, `postrelease.yml`, `v1-readiness.yml` | Linux/macOS amd64/arm64 validation is automated; CI enforces 80.0% globally and records one canonical history artifact |
 | v1.0 policy gate | `scripts/v1-policy-check.sh`, `docs/content/v1-policy.md` | The declared guarantees and deferred contracts have stable anchors |
@@ -352,25 +349,12 @@ decisions or later contracts:
   be asked on, so such a prompt would hang the run or wait for nobody; the
   security model stays explicit grant/refusal through policy and `--allow`.
   The *explicit* confirmation is not deferred and already ships: `--confirm` on
-  `task`, `ask`, `decide --run` and `agent` prints the budget and the effects
-  about to be granted and refuses outright without a TTY, `agent` demands it
-  for any type declaring write or external effects, and `backup discard` takes
-  no other word for an answer;
-- exact OpenCode parity with Claude Code: the opt-in provider adapter is
-  hardened, maps common provider errors and checks reported cost against the
-  requested budget, but OpenCode still lacks a native schema flag, a provider
-  hard cost cap and a permanently reliable terminal event guarantee;
-- exact provider-side hard per-turn token enforcement: Atenea now carries
-  `limits.max_tokens` into model turns, stops contained streams as soon as an
-  observed over-limit event arrives and rejects the result locally, but
-  supported external providers still do not expose one uniform mid-turn hard
-  cap, so provider work already in flight can overshoot;
-- default semantic verification of narrative claims: the opt-in
-  `semantic-reviewer` can judge whether a conclusion follows from its evidence,
-  but it is model-backed, costs the configured explore budget and may return
-  `indeterminate`; deterministic citation verification remains the acceptance
-  gate. Renamed paths with a different basename remain unresolved until the
-  answer supplies the current path.
+  `task` and `ask` prints the budget and the effects about to be granted and
+  refuses outright without a TTY, and `backup discard` takes no other word for
+  an answer;
+- exact provider-side hard per-turn token enforcement: no supported external
+  provider exposes one uniform mid-turn hard cap, so provider work already in
+  flight can overshoot a reported cost.
 
 The historical design notes remain in
 [`What is not built yet`]({{< relref "not-built-yet" >}}). This page is the current acceptance

@@ -48,25 +48,15 @@ required_files=(
 	"docs/content/v1-contracts.md"
 	"docs/content/v1-readiness.md"
 	"docs/content/v1-final-audit.md"
-	"pkg/contract/assignment.go"
-	"internal/agent/model/model.go"
-	"scripts/opencode-smoke.sh"
-	"scripts/opencode-matrix.sh"
-	"internal/agent/reviewer/citations.go"
-	"internal/agent/review_integration_test.go"
 )
 for file in "${required_files[@]}"; do
 	test -f "$file" || { echo "missing v1 policy anchor: $file" >&2; exit 1; }
 done
 
 policy_docs=(docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md)
-contains 'limits\.max_tokens' "${policy_docs[@]}"
 contains_any 'advisory|hard cap' "${policy_docs[@]}"
-contains_any 'OpenCode.*provider|provider.*OpenCode' docs/content/v1-policy.md docs/content/v1-contracts.md
 contains 'interactive permission|confirmación interactiva|interactivo' \
 	docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains_any 'citation_count|uncited_fields|resolved_path' docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains_any 'Tokensave|Semgrep|Headroom' docs/content/v1-final-audit.md
 contains 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains_any 'code\.impact.*repository\.index|repository\.index.*code\.impact' docs/content/v1-policy.md docs/content/v1-readiness.md docs/content/v1-final-audit.md

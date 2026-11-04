@@ -8,11 +8,6 @@ on:
         required: false
         default: false
         type: boolean
-      live_opencode:
-        description: "Run the real OpenCode provider matrix"
-        required: false
-        default: false
-        type: boolean
   pull_request:
   push:
     tags: ["v*"]
@@ -91,43 +86,3 @@ jobs:
           cache: true
       - name: Start service and handshake
         run: bash scripts/mcp-live-check.sh
-
-  live-opencode:
-    name: opt-in OpenCode provider and MCP matrix
-    timeout-minutes: 45
-    if: ${{ vars.ATENEA_OPENCODE_SMOKE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.live_opencode) }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      ATENEA_OPENCODE_SMOKE: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - name: Install pinned OpenCode client
-        run: |
-          set -eu
-          prefix="$RUNNER_TEMP/opencode"
-          bin_dir="$RUNNER_TEMP/opencode-bin"
-          npm i --silent --no-audit --no-fund --prefix "$prefix" opencode-ai@1.18.15
-          mkdir -p "$bin_dir"
-          for candidate in \
-            "$prefix/node_modules/opencode-linux-x64/bin/opencode" \
-            "$prefix/node_modules/opencode-linux-x64-baseline/bin/opencode"; do
-            if [ -x "$candidate" ]; then
-              ln -sf "$candidate" "$bin_dir/opencode"
-              echo "$bin_dir" >> "$GITHUB_PATH"
-              "$bin_dir/opencode" --version
-              exit 0
-            fi
-          done
-          echo "no OpenCode binary inside opencode-ai@1.18.15" >&2
-          exit 1
-      - name: Run provider/MCP matrix
-        run: bash scripts/opencode-matrix.sh

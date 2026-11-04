@@ -46,8 +46,10 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"android.devices", "android.diagnose", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.open", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved"}
+	wantIDs := []string{
+		"android.devices", "android.diagnose", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
+		"desktop.move", "desktop.open", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved",
+	}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -82,11 +84,15 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		// Pessimistic on purpose: a button may delete or send, and nothing can
 		// know which before it is pressed.
 		case "desktop.click", "desktop.type", "desktop.key":
-			want = []contract.Effect{contract.EffectRead, contract.EffectDevice,
-				contract.EffectWrite, contract.EffectExternal}
+			want = []contract.Effect{
+				contract.EffectRead, contract.EffectDevice,
+				contract.EffectWrite, contract.EffectExternal,
+			}
 		case "desktop.open", "android.tap", "android.type", "android.key":
-			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectProcess,
-				contract.EffectWrite, contract.EffectExternal}
+			want = []contract.Effect{
+				contract.EffectRead, contract.EffectDevice, contract.EffectProcess,
+				contract.EffectWrite, contract.EffectExternal,
+			}
 		default:
 			want = []contract.Effect{contract.EffectRead}
 		}
@@ -94,7 +100,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			t.Errorf("%s effects = %v, want %v", capability.ID, capability.Effects, want)
 		}
 		if strings.HasPrefix(capability.ID, "desktop.") && slices.Contains(
-			[]string{"desktop.click", "desktop.move", "desktop.drag", "desktop.scroll", "desktop.type", "desktop.key"}, capability.ID) {
+			[]string{"desktop.click", "desktop.move", "desktop.drag", "desktop.scroll", "desktop.type", "desktop.key"}, capability.ID,
+		) {
 			if capability.Version.Major != 2 {
 				t.Errorf("%s version = %s, want 2.0.0 contract", capability.ID, capability.Version.String())
 			}
@@ -249,9 +256,6 @@ func TestShippedKnobsAgreeWithTheCompiledFallbacks(t *testing.T) {
 	}
 	if !reflect.DeepEqual(shipped.Security, fallback.Security) {
 		t.Errorf("[security] shipped %+v, fallback %+v", shipped.Security, fallback.Security)
-	}
-	if !reflect.DeepEqual(shipped.Model, fallback.Model) {
-		t.Errorf("[model] shipped %+v, fallback %+v", shipped.Model, fallback.Model)
 	}
 
 	// Standing effects are the documented exception, and the reason this test
@@ -763,11 +767,14 @@ func TestAnUnworkableInstancePolicyIsRefused(t *testing.T) {
 	cases := map[string]string{
 		"unknown policy": process("instance = \"per_chat\"\n"),
 		"per repository without a project placeholder": process(
-			"instance = \"per_repository\"\nargs = [\"--port\", \"{{port}}\"]\n"),
+			"instance = \"per_repository\"\nargs = [\"--port\", \"{{port}}\"]\n",
+		),
 		"a project placeholder with nothing to substitute": process(
-			"args = [\"--project\", \"{{project}}\"]\n"),
+			"args = [\"--project\", \"{{project}}\"]\n",
+		),
 		"per repository on one fixed port": process(
-			"instance = \"per_repository\"\nargs = [\"--project\", \"{{project}}\"]\nport = 9121\n"),
+			"instance = \"per_repository\"\nargs = [\"--project\", \"{{project}}\"]\nport = 9121\n",
+		),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1885,15 +1892,6 @@ func TestAnUnusableAdapterTimeoutIsRefused(t *testing.T) {
 	}
 }
 
-func TestAnUnusableModelTimeoutIsRefused(t *testing.T) {
-	for _, timeout := range []string{"never", "0s", "-5s"} {
-		_, err := config.Load(write(t, minimal+"\n[model]\ntimeout = \""+timeout+"\"\n"))
-		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
-			t.Errorf("timeout = %q -> %v, want invalid_input", timeout, got)
-		}
-	}
-}
-
 func TestHealthProbeEveryAcceptsDisableAndRejectsNegative(t *testing.T) {
 	cfg, err := config.Load(write(t, minimal+"\n[core]\nhealth_probe_every = \"0s\"\n"))
 	if err != nil {
@@ -1914,133 +1912,6 @@ func TestAnInvalidHealthStaleAfterIsRefused(t *testing.T) {
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 			t.Errorf("health_stale_after = %s -> %v, want invalid_input", value, got)
 		}
-	}
-}
-
-// Model's fields have to keep the same names, types and order as
-// model.Options: internal/agent/planner converts cfg.Model to it with a
-// plain struct conversion, which the compiler only accepts when the two
-// shapes are identical. This is the read half of that contract -- the file
-// values have to reach the struct unchanged, per role.
-func TestTheModelBlockIsReadPerRole(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal+`
-[model]
-binary = "claude-custom"
-timeout = "45s"
-explore = "haiku"
-	plan = "claude-opus-5"
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	want := config.Model{Backend: "claude", Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "claude-opus-5",
-		ExploreFallbacks: []string{}, PlanFallbacks: []string{}, CodexNative: true}
-	if !reflect.DeepEqual(cfg.Model, want) {
-		t.Errorf("Model = %+v, want %+v", cfg.Model, want)
-	}
-}
-
-func TestTheModelBlockCanSelectOpenCode(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal+`
-[model]
-backend = "opencode"
-binary = "/tmp/opencode-test"
-explore = "anthropic/sonnet"
-plan = "anthropic/opus"
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Model.Backend != "opencode" || cfg.Model.Binary != "/tmp/opencode-test" {
-		t.Fatalf("Model = %+v, want opencode backend and explicit binary", cfg.Model)
-	}
-}
-
-func TestTheModelBlockReadsExplicitFallbacks(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal+`
-[model]
-explore = "claude-sonnet-5"
-plan = "claude-opus-5"
-explore_fallbacks = ["claude-haiku-4-5"]
-plan_fallbacks = []
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !slices.Equal(cfg.Model.ExploreFallbacks, []string{"claude-haiku-4-5"}) ||
-		len(cfg.Model.PlanFallbacks) != 0 {
-		t.Fatalf("fallbacks = explore %v plan %v", cfg.Model.ExploreFallbacks, cfg.Model.PlanFallbacks)
-	}
-}
-
-func TestTheModelBlockAcceptsAutoPerRole(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal+`
-[model]
-explore = "auto"
-plan = "auto"
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Model.Explore != "auto" || cfg.Model.Plan != "auto" {
-		t.Fatalf("auto models = explore %q, plan %q", cfg.Model.Explore, cfg.Model.Plan)
-	}
-}
-
-func TestTheModelBlockReadsGeneralRuntimeRolesAndEfforts(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal+`
-[model]
-backend = "codex"
-research = "gpt-5.6-sol"
-plan = "gpt-5.6-sol"
-implement = "gpt-5.6-luna"
-review = "gpt-5.6-sol"
-audit = "gpt-6-astra"
-research_reasoning_effort = "medium"
-plan_reasoning_effort = "medium"
-implement_reasoning_effort = "xhigh"
-review_reasoning_effort = "medium"
-audit_reasoning_effort = "medium"
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Model.Backend != "codex" || cfg.Model.Binary != "codex" || cfg.Model.Research != "gpt-5.6-sol" || cfg.Model.Implement != "gpt-5.6-luna" || cfg.Model.Audit != "gpt-6-astra" {
-		t.Fatalf("role models = %+v", cfg.Model)
-	}
-	if cfg.Model.ResearchReasoningEffort != "medium" || cfg.Model.ImplementReasoningEffort != "xhigh" || cfg.Model.AuditReasoningEffort != "medium" {
-		t.Fatalf("role efforts = %+v", cfg.Model)
-	}
-}
-
-func TestTheModelBlockRejectsUnknownReasoningEffort(t *testing.T) {
-	_, err := config.Load(write(t, minimal+`
-[model]
-research_reasoning_effort = "sideways"
-`))
-	if err == nil || !strings.Contains(err.Error(), "reasoning_effort") {
-		t.Fatalf("error = %v, want reasoning effort validation", err)
-	}
-}
-
-func TestTheModelBlockRejectsARepeatedPrimaryFallback(t *testing.T) {
-	_, err := config.Load(write(t, minimal+`
-[model]
-explore = "claude-sonnet-5"
-explore_fallbacks = ["claude-sonnet-5"]
-`))
-	if err == nil || !strings.Contains(err.Error(), "repeats the primary model") {
-		t.Fatalf("error = %v, want repeated primary fallback refusal", err)
-	}
-}
-
-func TestAnUnknownModelBackendIsRefused(t *testing.T) {
-	_, err := config.Load(write(t, minimal+`
-[model]
-backend = "unknown"
-`))
-	if err == nil || !strings.Contains(err.Error(), "model.backend") {
-		t.Fatalf("error = %v, want model.backend validation", err)
 	}
 }
 
@@ -2664,301 +2535,10 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 	}
 }
 
-// Both ceilings are required, which is what default.toml's own header and
-// docs/content/settings.md have always claimed and what nothing checked until
-// now. The consequence of not checking is not a cosmetic one: contract.Limits
-// reads a zero max_tokens as "no boundary was declared", so an [[agent]] that
-// forgot the key used to load happily with its token ceiling switched off.
-//
-// Zero written on purpose still loads, because that is an operator deciding
-// there is no boundary rather than an operator forgetting to decide.
-func TestAnAgentMustDeclareBothCeilings(t *testing.T) {
-	agent := func(extra string) string {
-		return minimal + `
-[[agent]]
-name = "reader"
-kind = "specialized"
-summary = "Reads a file"
-command = "/bin/true"
-context = ["repository"]
-effects = ["read"]
-max_duration = "30s"
-` + extra + `
-  [[agent.result]]
-  name = "ok"
-  type = "bool"
-  required = true
-  summary = "it read"
-`
-	}
-
-	_, err := config.Load(write(t, agent("")))
-	if contract.KindOf(err) != contract.FailureInvalidInput {
-		t.Fatalf("an agent with no max_tokens loaded: kind = %v, want invalid_input", contract.KindOf(err))
-	}
-	if !strings.Contains(err.Error(), "max_tokens") {
-		t.Errorf("error = %q, want it to name the missing key", err)
-	}
-
-	cfg, err := config.Load(write(t, agent("max_tokens = 0\n")))
-	if err != nil {
-		t.Fatalf("an explicit zero must load: %v", err)
-	}
-	for _, a := range cfg.Agents {
-		if a.Spec.Name == "reader" && a.Limits.MaxTokens != 0 {
-			t.Errorf("max_tokens = %d, want the zero the file wrote", a.Limits.MaxTokens)
-		}
-	}
-}
-
-// A key that parses into a struct field nobody assigns is read and thrown
-// away: the file says one thing, the loaded settings say another, and no
-// error is raised anywhere. That happened to `reads_subject` while it was
-// being added and no existing test noticed, so the round trip is asserted
-// here, in both of its readings.
-func TestAnAgentThatDeclaresItReadsASubjectKeepsIt(t *testing.T) {
-	body := minimal + `
-[[agent]]
-name = "planner"
-kind = "specialized"
-summary = "Reads an exploration and returns a graph"
-command = "/bin/true"
-context = ["repository"]
-effects = ["read"]
-max_duration = "30s"
-max_tokens = 1
-reads_subject = true
-
-  [[agent.result]]
-  name = "plan"
-  type = "string"
-  required = true
-  summary = "The graph"
-
-[[agent]]
-name = "reader"
-kind = "specialized"
-summary = "Reads a file"
-command = "/bin/true"
-context = ["repository"]
-effects = ["read"]
-max_duration = "30s"
-max_tokens = 1
-
-  [[agent.result]]
-  name = "ok"
-  type = "bool"
-  required = true
-  summary = "it read"
-
-[[agent]]
-name = "critic"
-kind = "specialized"
-summary = "Audits an answer"
-command = "/bin/true"
-context = ["repository"]
-effects = ["read"]
-max_duration = "30s"
-max_tokens = 1
-pool = "review"
-
-  [[agent.result]]
-  name = "checked"
-  type = "int"
-  required = true
-  summary = "how many claims"
-`
-	cfg, err := config.Load(write(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	byName := map[string]config.AgentType{}
-	for _, a := range cfg.Agents {
-		byName[a.Spec.Name] = a
-	}
-
-	planner := byName["planner"]
-	if !planner.ReadsSubject {
-		t.Error("reads_subject = true was read and dropped")
-	}
-	if !planner.ReadsASubject() {
-		t.Error("a type that declares the input does not read one")
-	}
-	if planner.Pool != config.PoolAgent {
-		t.Errorf("pool = %v: declaring the input must not move the lane", planner.Pool)
-	}
-
-	if byName["reader"].ReadsASubject() {
-		t.Error("a plain agent reads a subject")
-	}
-	// The implication, which is why the flag is never written on a reviewer.
-	if !byName["critic"].ReadsASubject() {
-		t.Error("a reviewer does not read a subject")
-	}
-	if byName["critic"].ReadsSubject {
-		t.Error("the reviewer's declared value was invented rather than implied")
-	}
-}
-
 // A settings file is a copy of the shipped defaults, not a reference to them.
 // Measured 2026-08-14: a file six weeks old had lost all five shipped agent
 // types and read as working configuration until a workflow named one and got
 // "declared are none".
-
-func TestAFileThatPredatesAnAgentTypeStillGetsIt(t *testing.T) {
-	cfg, err := config.Load(write(t, minimal))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	shipped, err := config.Defaults()
-	if err != nil {
-		t.Fatalf("Defaults: %v", err)
-	}
-	if len(shipped.Agents) == 0 {
-		t.Fatal("the built-in settings declare no agents; this test proves nothing")
-	}
-
-	got := make(map[string]bool, len(cfg.Agents))
-	for _, agent := range cfg.Agents {
-		got[agent.Spec.Name] = true
-	}
-	for _, agent := range shipped.Agents {
-		if !got[agent.Spec.Name] {
-			t.Errorf("agent %q is missing: a file that never mentioned it cannot have meant to drop it",
-				agent.Spec.Name)
-		}
-	}
-}
-
-// `reader` is `explore` with Atenea's capability catalog taken off, and it is
-// worth declaring only while it stays exactly that: the saving is entirely in
-// what `agent-exec reader` hands the turn. Measured 2026-08-15 on one
-// repository against one model, cold: starting an `explore` turn costs $0.27
-// and 26,603 tokens of prefix, and the identical probe with no tools at all
-// costs $0.06 and 4,991.
-//
-// So this asserts the pair rather than the block. Everything a step of either
-// type may see, cause, spend and answer has to match, or they are no longer
-// one agent on two surfaces -- and a planner choosing between them on price
-// would be choosing between two different agents.
-func TestTheShippedReaderIsExploreOnACheaperSurface(t *testing.T) {
-	cfg, err := config.Defaults()
-	if err != nil {
-		t.Fatalf("Defaults: %v", err)
-	}
-	reader, err := cfg.AgentTypeByName("reader")
-	if err != nil {
-		t.Fatalf("the shipped settings declare no reader: %v", err)
-	}
-	explore, err := cfg.AgentTypeByName("explore")
-	if err != nil {
-		t.Fatalf("AgentTypeByName(explore): %v", err)
-	}
-
-	// What it spawns: this binary, under the name cmd/atenea dispatches the
-	// cheap surface on. The whole difference between the two types is here.
-	if reader.Command != explore.Command {
-		t.Errorf("command = %q, want %q", reader.Command, explore.Command)
-	}
-	if want := []string{"agent-exec", "reader"}; !slices.Equal(reader.Args, want) {
-		t.Errorf("args = %v, want %v", reader.Args, want)
-	}
-
-	// And everything it is: the same agent, so the same levels, the same
-	// ceiling on what it may cause, the same ceiling on one run, the same
-	// lane, and the same answer.
-	if reader.Spec.Kind != explore.Spec.Kind {
-		t.Errorf("kind = %v, want explore's %v", reader.Spec.Kind, explore.Spec.Kind)
-	}
-	if !slices.Equal(reader.Context, explore.Context) {
-		t.Errorf("context = %v, want explore's %v", reader.Context, explore.Context)
-	}
-	if !slices.Equal(reader.Effects, explore.Effects) {
-		t.Errorf("effects = %v, want explore's %v", reader.Effects, explore.Effects)
-	}
-	if reader.Limits != explore.Limits {
-		t.Errorf("limits = %+v, want explore's %+v", reader.Limits, explore.Limits)
-	}
-	if reader.Pool != explore.Pool || reader.ReadsASubject() != explore.ReadsASubject() {
-		t.Errorf("scheduled as %v/reads-subject %v, want explore's %v/%v",
-			reader.Pool, reader.ReadsASubject(), explore.Pool, explore.ReadsASubject())
-	}
-	if !reflect.DeepEqual(reader.Spec.Result, explore.Spec.Result) {
-		t.Errorf("result shape = %+v, want explore's %+v", reader.Spec.Result, explore.Spec.Result)
-	}
-
-	// The summary is the one line the planner picks a type off, so it has to
-	// carry the tradeoff and not just the name.
-	for _, want := range []string{"cannot search", "fifth"} {
-		if !strings.Contains(reader.Summary, want) {
-			t.Errorf("summary %q never says %q, so the menu does not state the tradeoff",
-				reader.Summary, want)
-		}
-	}
-}
-
-// The shipped declaration is a default, and a file that names an agent means
-// what it says -- including a command of its own.
-func TestAFileThatNamesAnAgentKeepsItsOwn(t *testing.T) {
-	body := minimal + `
-[[agent]]
-name = "filereader"
-kind = "specialized"
-summary = "the operator's own reader"
-command = "/usr/local/bin/my-reader"
-context = ["repository"]
-effects = ["read"]
-max_duration = "30s"
-max_tokens = 1
-
-  [[agent.result]]
-  name = "content"
-  type = "string"
-  required = true
-  summary = "what the file holds"
-`
-	cfg, err := config.Load(write(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	var seen int
-	for _, agent := range cfg.Agents {
-		if agent.Spec.Name != "filereader" {
-			continue
-		}
-		seen++
-		if agent.Command != "/usr/local/bin/my-reader" {
-			t.Errorf("command = %q, want the file's own", agent.Command)
-		}
-	}
-	if seen != 1 {
-		t.Fatalf("filereader appears %d times, want exactly one", seen)
-	}
-	// And the ones it did not name still arrive.
-	if len(cfg.Agents) < 2 {
-		t.Errorf("agents = %d, want the shipped set beside the override", len(cfg.Agents))
-	}
-}
-
-// The built-in settings are parsed by the same function that merges them.
-// Without the guard that is unbounded recursion, and with a wrong guard the
-// shipped file would declare every agent twice.
-func TestTheBuiltInSettingsAreNotMergedIntoThemselves(t *testing.T) {
-	shipped, err := config.Defaults()
-	if err != nil {
-		t.Fatalf("Defaults: %v", err)
-	}
-	seen := make(map[string]int, len(shipped.Agents))
-	for _, agent := range shipped.Agents {
-		seen[agent.Spec.Name]++
-	}
-	for name, n := range seen {
-		if n != 1 {
-			t.Errorf("agent %q appears %d times in the built-in settings", name, n)
-		}
-	}
-}
 
 // `config init` writes what "." meant at the moment it was typed.
 //
@@ -3143,18 +2723,6 @@ func TestOldConfigurationGetsHealthExpiry(t *testing.T) {
 		}
 		if cfg.Selector.HealthStaleAfter != tc.want {
 			t.Fatalf("expiry=%v want %v", cfg.Selector.HealthStaleAfter, tc.want)
-		}
-	}
-}
-
-func TestNativeCodexAppliesOnlyToCodexBackend(t *testing.T) {
-	for _, tc := range []struct {
-		backend string
-		want    bool
-	}{{"codex", true}, {"CODEX", true}, {"claude", false}, {"opencode", false}} {
-		model := config.Model{Backend: tc.backend, CodexNative: true}
-		if got := model.NativeCodex(); got != tc.want {
-			t.Fatalf("backend %q: NativeCodex()=%v want %v", tc.backend, got, tc.want)
 		}
 	}
 }

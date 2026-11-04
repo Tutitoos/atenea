@@ -64,10 +64,7 @@ type Config struct {
 	Contract     contract.Version
 	Core         Core
 	Orchestrator Orchestrator
-	// Model fixes which model backs each of the two model-backed built-in
-	// agents, explore and plan, by role.
-	Model   Model
-	Metrics Metrics
+	Metrics      Metrics
 	// ResultCache is the bounded local cache for read-only code.context results.
 	// Its limits are intentionally explicit and validated at load time.
 	ResultCache resultcache.Config
@@ -78,16 +75,11 @@ type Config struct {
 	// Desktop is the allow-list for the desktop capabilities. See the type.
 	Desktop Desktop
 	// Android is the explicit device allow-list for the Android bridge.
-	Android Android
-	// LocalAgents caps the agent types a repository declares for itself.
-	// Never the zero value: an absent block is DefaultLocalAgents.
-	LocalAgents     LocalAgents
+	Android         Android
 	Selector        selector.Config
 	Capabilities    []contract.Capability
 	Implementations []contract.Implementation
 	Repositories    []contract.Repository
-	// Agents are the declared agent types, resolved by name at dispatch.
-	Agents []AgentType
 	// Missing names implementations the shipped catalog declares and this
 	// settings file does not.
 	//
@@ -291,8 +283,7 @@ type Metrics struct {
 
 // Retention is how long the record of what Atenea did is kept.
 //
-// It covers the two stores that grow without a shape of their own: the run
-// receipts on disk and the agent traces in SQLite. The measurement base is not
+// It covers the run receipts on disk. The measurement base is not
 // here -- it has a retention LADDER of its own, folding attempts into hours
 // and hours into days, so it grows in detail rather than in rows.
 //
@@ -394,66 +385,6 @@ type Orchestrator struct {
 	Tokensave  TokensaveAdapter
 	Desktop    DesktopAdapter
 	Android    AndroidAdapter
-}
-
-// Model fixes which model backs each model-backed built-in agent by role. Its fields mirror
-// internal/agent/model.Options -- same names, same types, same order --
-// because internal/config cannot import that package without a cycle
-// (internal/core, which the model client dials for Atenea's own tools,
-// already imports internal/config); the caller that holds both packages
-// converts with a plain model.Options(cfg.Model) instead.
-//
-// Backend and model choice are fixed here, per role, and not chosen per task:
-// there is
-// no cost data yet a per-task choice could be justified against, and a knob
-// nobody can tune correctly is worse than one fixed default that is visible
-// in a file and changed by hand once it is wrong.
-type Model struct {
-	// Backend selects the model CLI protocol: "claude" or "opencode".
-	// Empty is normalized to "claude" by the model client for compatibility
-	// with older settings files.
-	Backend string
-	// Binary is the CLI executable that answers a model turn. A bare name
-	// is looked up on PATH.
-	Binary string
-	// Timeout caps one turn. A model turn is slower than a tool call by
-	// nature; see ClaudeCodeAdapter.Timeout for the same reasoning.
-	Timeout time.Duration
-	// Explore is the model name for the agent that explores a repository:
-	// an alias the CLI resolves itself ("sonnet", "opus"), a full name, or
-	// "auto" to let the decision router choose from its safe candidates.
-	// Empty means the role has no model configured, so a dispatch to it is
-	// refused rather than silently spending against a hardcoded default --
-	// the same reason ClaudeCodeAdapter ships out of Runners.
-	Explore string
-	// Plan is the model name for the agent that turns a discovery graph into a
-	// plan, or "auto" to select the pinned high-reasoning plan model.
-	Plan string
-	// ExploreFallbacks and PlanFallbacks are explicit provider-side fallbacks.
-	// They are never inferred and travel with the selected route.
-	ExploreFallbacks         []string
-	PlanFallbacks            []string
-	Research                 string
-	Implement                string
-	Review                   string
-	Audit                    string
-	ResearchReasoningEffort  string
-	PlanReasoningEffort      string
-	ImplementReasoningEffort string
-	ReviewReasoningEffort    string
-	AuditReasoningEffort     string
-	// CodexNative selects the durable App Server transport for visible Codex
-	// agent turns. The transport itself is injected only by tests or an
-	// embedding host; settings never carry a process or socket handle.
-	CodexNative        bool
-	CodexNativeOptions codex.AppServerOptions
-}
-
-// NativeCodex reports whether visible Codex App Server execution applies to
-// this backend. CodexNative may remain true in shared defaults without
-// changing Claude or OpenCode transports.
-func (m Model) NativeCodex() bool {
-	return strings.EqualFold(strings.TrimSpace(m.Backend), "codex") && m.CodexNative
 }
 
 // LocalRunner configures the stand-in that runs when no client adapter is
@@ -816,74 +747,6 @@ type Security struct {
 	Sensitive []string
 }
 
-// LocalAgents is the ceiling on an agent type a repository declares in its
-// own `.atenea/config.toml`.
-//
-// It exists because "may only narrow" needs something to be narrower than. A
-// repository redefining a shipped type is measured against that type, but a
-// repository adding a NEW one has no counterpart, and a rule with no referent
-// is not a rule. This is the referent.
-//
-// The defaults are the whole design. A settings file that predates this
-// feature says nothing about it, which is every settings file in existence
-// when it shipped -- and an absent ceiling that reads as no ceiling is the
-// same failure as an unmeasured cost that reads as free. So the zero value of
-// this struct is never what applies: [DefaultLocalAgents] is, and the file
-// may only be read on top of it. The same shape is already documented one
-// field up in Config.Missing, where a settings file predating a release never
-// gained what that release shipped and nothing said so.
-type LocalAgents struct {
-	// Effects is the most a locally declared type may cause. Read alone by
-	// default: it is what every type this project ships holds, so it is the
-	// floor of usefulness rather than a token gesture.
-	//
-	// An explicitly empty list turns the feature off -- a type that may
-	// cause nothing is refused by AgentType.Validate -- which is the switch
-	// for a machine that wants none of this.
-	Effects []contract.Effect
-	// Context is the most a locally declared type may be served. The
-	// repository alone by default, because it is the only level that cannot
-	// leak: `workspace` is the catalog of every repository on this machine
-	// and `history` is what other runs of the same type were told.
-	Context []contract.ContextLevel
-	// Limits caps one run of a locally declared type. Zero on either field
-	// means the machine states no number of its own and the ceiling is the
-	// one already in force: the limits of the shipped type being run, which
-	// a local type may lower and never raise. That is a real bound, so an
-	// omitted key here is not an open door -- it is a deferral to a door
-	// that is already shut.
-	Limits contract.Limits
-}
-
-// orDefault fills in what nobody stated, field by field.
-//
-// Two ways to arrive here with nothing set, and they need the same answer.
-// The settings file may have no [local_agents] block, which build already
-// handles; or a Config may be assembled in code -- a test, an embedder --
-// where the zero value is nil rather than the default. Left alone, nil reads
-// as an empty list, which is the machine allowing local types NOTHING: fail
-// closed, and safe, but a feature that quietly stops working is not the same
-// as one that was turned off on purpose. An explicitly empty list still means
-// off, because empty and absent stay different all the way down.
-func (l LocalAgents) orDefault() LocalAgents {
-	fallback := DefaultLocalAgents()
-	if l.Effects == nil {
-		l.Effects = fallback.Effects
-	}
-	if l.Context == nil {
-		l.Context = fallback.Context
-	}
-	return l
-}
-
-// DefaultLocalAgents is what applies when the settings file says nothing.
-func DefaultLocalAgents() LocalAgents {
-	return LocalAgents{
-		Effects: []contract.Effect{contract.EffectRead},
-		Context: []contract.ContextLevel{contract.ContextRepository},
-	}
-}
-
 // RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
 // RunnerTokensave, RunnerDesktop, RunnerAndroid and RunnerLocal are the
 // values orchestrator.runners accepts.
@@ -1130,35 +993,6 @@ func missingImplementations(cfg Config) []string {
 	return out
 }
 
-// shippedAgents returns the agent types the built-in settings declare and
-// this file does not name, in the order they ship.
-//
-// A file that names an agent keeps its own: the shipped declaration is a
-// default, and a person who edited `filereader` to spawn something else
-// meant it. Nothing is ever removed here.
-//
-// The BuiltIn guard is what stops the recursion -- Defaults() is parse() of
-// the shipped file -- and a defaults file that will not parse is a build
-// fault this must not turn into a failure to load a working user file, the
-// same reasoning missingImplementations spells out above.
-func shippedAgents(source string, named map[string]bool) []AgentType {
-	if source == BuiltIn {
-		return nil
-	}
-	shipped, err := Defaults()
-	if err != nil {
-		return nil
-	}
-	var out []AgentType
-	for _, agent := range shipped.Agents {
-		if named[agent.Spec.Name] {
-			continue
-		}
-		out = append(out, agent)
-	}
-	return out
-}
-
 // WriteDefault copies the built-in settings to path.
 //
 // The modes are 0700 on the directory and 0600 on the file, which is what the
@@ -1249,7 +1083,6 @@ type file struct {
 	Contract        string               `toml:"contract"`
 	Core            fileCore             `toml:"core"`
 	Orchestrator    fileOrchestrator     `toml:"orchestrator"`
-	Model           fileModel            `toml:"model"`
 	Metrics         fileMetrics          `toml:"metrics"`
 	ResultCache     fileResultCache      `toml:"result_cache"`
 	Retention       fileRetention        `toml:"retention"`
@@ -1257,12 +1090,10 @@ type file struct {
 	Security        fileSecurity         `toml:"security"`
 	Desktop         fileDesktop          `toml:"desktop"`
 	Android         fileAndroid          `toml:"android"`
-	LocalAgents     fileLocalAgents      `toml:"local_agents"`
 	Selector        fileSelector         `toml:"selector"`
 	Capabilities    []fileCapability     `toml:"capability"`
 	Implementations []fileImpl           `toml:"implementation"`
 	Repositories    []fileRepository     `toml:"repository"`
-	Agents          []fileAgent          `toml:"agent"`
 	MCPServers      []fileMCPServer      `toml:"mcp_server"`
 	DesktopProfiles []fileDesktopProfile `toml:"desktop_profile"`
 }
@@ -1271,27 +1102,6 @@ type fileResultCache struct {
 	MaxEntries *int   `toml:"max_entries"`
 	MaxBytes   *int64 `toml:"max_bytes"`
 	TTL        string `toml:"ttl"`
-}
-
-// fileModel is [model] as written.
-type fileModel struct {
-	Backend                  string   `toml:"backend"`
-	Binary                   string   `toml:"binary"`
-	Timeout                  string   `toml:"timeout"`
-	Explore                  string   `toml:"explore"`
-	Plan                     string   `toml:"plan"`
-	ExploreFallbacks         []string `toml:"explore_fallbacks"`
-	PlanFallbacks            []string `toml:"plan_fallbacks"`
-	Research                 string   `toml:"research"`
-	Implement                string   `toml:"implement"`
-	Review                   string   `toml:"review"`
-	Audit                    string   `toml:"audit"`
-	ResearchReasoningEffort  string   `toml:"research_reasoning_effort"`
-	PlanReasoningEffort      string   `toml:"plan_reasoning_effort"`
-	ImplementReasoningEffort string   `toml:"implement_reasoning_effort"`
-	ReviewReasoningEffort    string   `toml:"review_reasoning_effort"`
-	AuditReasoningEffort     string   `toml:"audit_reasoning_effort"`
-	CodexNative              *bool    `toml:"codex_native"`
 }
 
 type fileCore struct {
@@ -1360,18 +1170,6 @@ type fileOMPAdapter struct {
 	Implementations *[]string `toml:"implementations"`
 	MatchLimit      *int      `toml:"match_limit"`
 	Timeout         string    `toml:"timeout"`
-}
-
-// fileLocalAgents is [local_agents] as written. Pointers throughout, so that
-// an omitted key inherits the default and an explicitly empty list is the
-// machine saying no -- the same distinction fileSecurity draws, for a closer
-// reason: `effects = []` here refuses every locally declared type, and
-// leaving `effects` out must not be read as the same statement.
-type fileLocalAgents struct {
-	Effects     *[]string `toml:"effects"`
-	Context     *[]string `toml:"context"`
-	MaxDuration *string   `toml:"max_duration"`
-	MaxTokens   *int      `toml:"max_tokens"`
 }
 
 type fileClaudeCodeAdapter struct {
@@ -1937,12 +1735,6 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
 		return Config{}, err
 	}
-	if cfg.Model, err = decoded.Model.build(source); err != nil {
-		return Config{}, err
-	}
-	if cfg.LocalAgents, err = decoded.LocalAgents.build(source); err != nil {
-		return Config{}, err
-	}
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
 		return Config{}, err
 	}
@@ -2029,37 +1821,6 @@ func parse(raw []byte, source string) (Config, error) {
 		}
 		cfg.Repositories = append(cfg.Repositories, repo)
 	}
-	// Two agent types under one name would make the resolver's answer depend
-	// on declaration order, and a caller asking by name would silently get
-	// whichever came first. Refusing is how the file says which it meant.
-	named := make(map[string]bool, len(decoded.Agents))
-	for _, raw := range decoded.Agents {
-		agent, err := raw.build(source)
-		if err != nil {
-			return Config{}, err
-		}
-		if named[agent.Spec.Name] {
-			return Config{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: agent %s is declared twice", source, agent.Spec.Name)
-		}
-		named[agent.Spec.Name] = true
-		cfg.Agents = append(cfg.Agents, agent)
-	}
-	// A settings file written by `config init` is a copy, not a reference:
-	// it replaces the shipped defaults rather than layering over them. Every
-	// agent type shipped after that copy was taken is therefore invisible,
-	// and the only symptom is `declared are none` at dispatch -- measured
-	// 2026-08-14 on a file six weeks old, which had lost all five shipped
-	// agents and read as a working configuration until something tried to
-	// run one.
-	//
-	// Agents, and not the rest of the catalog, on purpose. An implementation
-	// names a program that has to exist on this machine, and handing back
-	// one a person removed because they do not have it would be Atenea
-	// claiming something can answer when it cannot; that class is reported
-	// by Missing instead, which says so without acting. An agent type is
-	// inert until a plan names it.
-	cfg.Agents = append(cfg.Agents, shippedAgents(source, named)...)
 	// Two blocks under one id would silently make one of them dead: the
 	// payload is a map keyed by id, so the later would win and the earlier
 	// would never be probed or declared. Refusing is the only way the file
@@ -3102,58 +2863,6 @@ func (s fileSecurity) build() Security {
 	return Security{Sensitive: *s.Sensitive}
 }
 
-// build reads [local_agents] ON TOP OF the defaults, never instead of them.
-// A file with no block, which is every file written before this shipped,
-// comes back capped rather than uncapped.
-func (l fileLocalAgents) build(source string) (LocalAgents, error) {
-	out := DefaultLocalAgents()
-	fail := func(format string, args ...any) (LocalAgents, error) {
-		return LocalAgents{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: local_agents: %s", source, fmt.Sprintf(format, args...))
-	}
-	if l.Effects != nil {
-		effects := make([]contract.Effect, 0, len(*l.Effects))
-		for _, name := range *l.Effects {
-			effect, err := contract.ParseEffect(name)
-			if err != nil {
-				return fail("%v", err)
-			}
-			effects = append(effects, effect)
-		}
-		out.Effects = effects
-	}
-	if l.Context != nil {
-		levels := make([]contract.ContextLevel, 0, len(*l.Context))
-		for _, name := range *l.Context {
-			level, err := contract.ParseContextLevel(name)
-			if err != nil {
-				return fail("%v", err)
-			}
-			levels = append(levels, level)
-		}
-		out.Context = levels
-	}
-	if l.MaxDuration != nil {
-		parsed, err := time.ParseDuration(strings.TrimSpace(*l.MaxDuration))
-		if err != nil {
-			return fail("max_duration %q: %v", *l.MaxDuration, err)
-		}
-		if parsed <= 0 {
-			return fail("max_duration must be positive, got %v", parsed)
-		}
-		out.Limits.MaxDuration = parsed
-	}
-	if l.MaxTokens != nil {
-		// Zero is a declaration of no token limit, not a mistake -- the value
-		// is advisory and nothing enforces it. See contract.Limits.MaxTokens.
-		if *l.MaxTokens < 0 {
-			return fail("max_tokens cannot be negative, got %d", *l.MaxTokens)
-		}
-		out.Limits.MaxTokens = *l.MaxTokens
-	}
-	return out, nil
-}
-
 func (c fileCore) build(source string) (Core, error) {
 	out := Core{ShutdownGrace: defaultShutdownGrace, HealthProbeEvery: 15 * time.Minute}
 	if c.ShutdownGrace != "" {
@@ -3182,154 +2891,6 @@ func (c fileCore) build(source string) (Core, error) {
 	}
 	out.HealthProbeEvery = healthEvery
 	return out, nil
-}
-
-// defaultModelTimeout mirrors claudecode's own DefaultTimeout: a model turn
-// through internal/agent/model runs the same CLI, on the same machine, so
-// the same measured ceiling applies. Duplicated rather than imported --
-// internal/config cannot import internal/agent/model without a cycle
-// (internal/core, which that package dials for Atenea's own tools, already
-// imports internal/config) -- so the two constants are kept in sync by hand.
-const (
-	defaultModelBinary  = "claude"
-	defaultModelTimeout = 180 * time.Second
-	defaultModelBackend = "claude"
-)
-
-func (m fileModel) build(source string) (Model, error) {
-	out := Model{Backend: defaultModelBackend, Binary: defaultModelBinary, Timeout: defaultModelTimeout, CodexNative: true}
-	if strings.TrimSpace(m.Backend) != "" {
-		out.Backend = strings.ToLower(strings.TrimSpace(m.Backend))
-	}
-	if out.Backend != "claude" && out.Backend != "opencode" && out.Backend != "codex" {
-		return Model{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: model.backend %q must be claude, opencode or codex", source, m.Backend)
-	}
-	if strings.TrimSpace(m.Binary) != "" {
-		out.Binary = strings.TrimSpace(m.Binary)
-	}
-	// The distributed base file names Claude's binary. A repository override
-	// that selects Codex but omits binary must not inherit that unrelated
-	// executable through the merge layer.
-	if out.Backend == "codex" && (strings.TrimSpace(m.Binary) == "" || strings.TrimSpace(m.Binary) == defaultModelBinary) {
-		out.Binary = "codex"
-	}
-	if m.Timeout != "" {
-		timeout, err := time.ParseDuration(m.Timeout)
-		if err != nil {
-			return Model{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: model.timeout %q: %v", source, m.Timeout, err)
-		}
-		if timeout <= 0 {
-			return Model{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: model.timeout must be positive, got %s", source, timeout)
-		}
-		out.Timeout = timeout
-	}
-	// Empty is a valid, deliberate answer for a role: see Model.Explore's
-	// own doc for why an unconfigured role is refused at dispatch rather
-	// than defaulted here to some model that costs money by surprise.
-	out.Explore = strings.TrimSpace(m.Explore)
-	out.Plan = strings.TrimSpace(m.Plan)
-	out.Research = strings.TrimSpace(m.Research)
-	out.Implement = strings.TrimSpace(m.Implement)
-	out.Review = strings.TrimSpace(m.Review)
-	out.Audit = strings.TrimSpace(m.Audit)
-	out.ResearchReasoningEffort = strings.TrimSpace(m.ResearchReasoningEffort)
-	out.PlanReasoningEffort = strings.TrimSpace(m.PlanReasoningEffort)
-	out.ImplementReasoningEffort = strings.TrimSpace(m.ImplementReasoningEffort)
-	out.ReviewReasoningEffort = strings.TrimSpace(m.ReviewReasoningEffort)
-	out.AuditReasoningEffort = strings.TrimSpace(m.AuditReasoningEffort)
-	if m.CodexNative != nil {
-		out.CodexNative = *m.CodexNative
-	}
-	if out.Backend == "codex" {
-		if out.Research == "" {
-			out.Research = "gpt-5.6-sol"
-		}
-		if out.Plan == "" {
-			out.Plan = "gpt-5.6-sol"
-		}
-		if out.Implement == "" {
-			out.Implement = "gpt-5.6-luna"
-		}
-		if out.Review == "" {
-			out.Review = "gpt-5.6-sol"
-		}
-		if out.Audit == "" {
-			out.Audit = "gpt-6-astra"
-		}
-		if out.ResearchReasoningEffort == "" {
-			out.ResearchReasoningEffort = "medium"
-		}
-		if out.PlanReasoningEffort == "" {
-			out.PlanReasoningEffort = "medium"
-		}
-		if out.ImplementReasoningEffort == "" {
-			out.ImplementReasoningEffort = "xhigh"
-		}
-		if out.ReviewReasoningEffort == "" {
-			out.ReviewReasoningEffort = "medium"
-		}
-		if out.AuditReasoningEffort == "" {
-			out.AuditReasoningEffort = "medium"
-		}
-	}
-	for role, effort := range map[string]string{
-		"research": out.ResearchReasoningEffort, "plan": out.PlanReasoningEffort,
-		"implement": out.ImplementReasoningEffort, "review": out.ReviewReasoningEffort,
-		"audit": out.AuditReasoningEffort,
-	} {
-		if !validReasoningEffort(effort) {
-			return Model{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: model.%s_reasoning_effort %q is not supported", source, role, effort)
-		}
-	}
-	exploreFallbacks, err := modelFallbacks(source, "explore", out.Explore, m.ExploreFallbacks)
-	if err != nil {
-		return Model{}, err
-	}
-	out.ExploreFallbacks = exploreFallbacks
-	out.PlanFallbacks, err = modelFallbacks(source, "plan", out.Plan, m.PlanFallbacks)
-	if err != nil {
-		return Model{}, err
-	}
-	return out, nil
-}
-
-func modelFallbacks(source, role, primary string, raw []string) ([]string, error) {
-	out := make([]string, 0, len(raw))
-	seen := map[string]bool{}
-	for _, value := range raw {
-		name := strings.TrimSpace(value)
-		if name == "" {
-			return nil, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: model.%s_fallbacks contains an empty model", source, role)
-		}
-		if name == primary {
-			return nil, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: model.%s_fallbacks repeats the primary model %q", source, role, name)
-		}
-		if seen[name] {
-			return nil, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: model.%s_fallbacks repeats %q", source, role, name)
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
-	return out, nil
-}
-
-func validReasoningEffort(effort string) bool {
-	if effort == "" {
-		return true
-	}
-	switch strings.ToLower(effort) {
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
-		return true
-	default:
-		return false
-	}
 }
 
 func (c fileCapability) build(source string) (contract.Capability, error) {

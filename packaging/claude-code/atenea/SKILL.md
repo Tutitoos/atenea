@@ -1,6 +1,6 @@
 ---
 name: atenea
-description: Run a read-only Atenea status, metrics, traces, catalog, doctor, detect, incidents, floor, config or intent command.
+description: Run a read-only Atenea status, metrics, catalog, doctor, detect, incidents, config or intent command.
 disable-model-invocation: true
 ---
 

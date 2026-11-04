@@ -25,14 +25,6 @@ func commandPrompts() []promptDefinition {
 		{Name: "help", Title: "Atenea help", Description: "List read-only Atenea chat commands."},
 		{Name: "status", Title: "Atenea status", Description: "Show Atenea service health and client policy."},
 		{Name: "metrics", Title: "Atenea metrics", Description: "Show measured capability and provider metrics.", Arguments: metricPromptArguments()},
-		{Name: "traces", Title: "Atenea traces", Description: "Show recent Atenea execution traces.", Arguments: []map[string]any{
-			{"name": "id", "description": "Optional execution id", "required": false},
-			{"name": "type", "description": "Optional trace type", "required": false},
-			{"name": "verdict", "description": "Optional verdict filter", "required": false},
-			{"name": "open", "description": "Only open traces: true or false", "required": false},
-			{"name": "since", "description": "Positive duration such as 24h", "required": false},
-			{"name": "limit", "description": "Optional row limit", "required": false},
-		}},
 		{Name: "catalog", Title: "Atenea catalog", Description: "Show capabilities and repositories."},
 		{Name: "doctor", Title: "Atenea doctor", Description: "Show compatibility telemetry for a client.", Arguments: []map[string]any{
 			{"name": "client", "description": "claude, chatgpt or codex", "required": false},
@@ -44,7 +36,6 @@ func commandPrompts() []promptDefinition {
 		{Name: "incidents", Title: "Atenea incidents", Description: "Show the crash notebook.", Arguments: []map[string]any{
 			{"name": "all", "description": "Include already-read incidents: true or false", "required": false},
 		}},
-		{Name: "floor", Title: "Atenea floor", Description: "Show measured turn-start costs."},
 		{Name: "config", Title: "Atenea config", Description: "Show a redacted effective settings summary."},
 		{Name: "intent", Title: "Atenea intent", Description: "Show safe client declarations for a repository.", Arguments: []map[string]any{
 			{"name": "repository", "description": "Registered repository id", "required": true},
@@ -116,24 +107,6 @@ func (v *conversation) promptsGet(raw json.RawMessage) (any, *rpcError) {
 			request.Repository = value
 		case "id":
 			request.ID = value
-		case "type":
-			request.Type = value
-		case "verdict":
-			request.Verdict = value
-		case "open":
-			parsed, err := strconv.ParseBool(value)
-			if err != nil {
-				return nil, &rpcError{Code: codeInvalidParams, Message: "prompts/get: open must be true or false"}
-			}
-			request.Open = parsed
-		case "since":
-			request.Since = value
-		case "limit":
-			limit, err := strconv.Atoi(value)
-			if err != nil {
-				return nil, &rpcError{Code: codeInvalidParams, Message: "prompts/get: limit must be an integer"}
-			}
-			request.Limit = limit
 		case "client":
 			request.Client = value
 		case "profile":

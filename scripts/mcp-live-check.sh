@@ -5,8 +5,7 @@ set -euo pipefail
 # aborted the script with "unbound variable" and status 1 before either of these
 # lines could run, so the operator who simply ran the script got a shell error
 # instead of the instruction, and the documented opt-in status 2 was never the
-# one returned. opencode-smoke.sh and opencode-matrix.sh already spell it this
-# way; this script was the one that did not.
+# one returned.
 if [[ "${ATENEA_MCP_CHECK:-}" != "1" ]]; then
 	echo "This smoke starts a real Atenea service and MCP bridge." >&2
 	echo "Set ATENEA_MCP_CHECK=1 to confirm the opt-in run." >&2

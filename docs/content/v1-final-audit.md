@@ -21,6 +21,8 @@ cobertura de código ni una promesa de compatibilidad universal.
 
 > El motor de workflows (`atenea workflow`, el piloto de recuperación y el almacén de conocimiento) se midió en el momento de esta auditoría; ya no forma parte de Atenea (véase #212).
 
+> Los agentes integrados, el floor y las trazas (`atenea agent`, `atenea floor`, `atenea traces`) se midieron en el momento de esta auditoría; ya no forman parte de Atenea (véase #212).
+
 El contenido de esta auditoría es un snapshot histórico. El estado fechado
 posterior a la integración de Kivgraph 0.9.2 (incluidos contratos dormidos,
 supervisor, Scrapling y deudas abiertas) está en la sección **Current

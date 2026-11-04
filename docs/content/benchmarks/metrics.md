@@ -7,6 +7,8 @@ dashboard: metrics
 > Historical evidence: any Serena references below describe a provider retired in
 > contract 4.0.0. They are not operational setup instructions.
 
+> The built-in agents, floor and traces (`atenea agent`, `atenea floor`, `atenea traces`) were measured at the time of this audit; they are no longer part of Atenea (see #212). Their `internal/agent` rows below are dated evidence.
+
 # Metrics de tests
 
 | Package | Ejecutados | Pasados | Fallidos | Omitidos | Pass rate | Cobertura | Estado |
