@@ -10,7 +10,7 @@ providers, execute tools, start MCP backends, or affect the selector's cost base
 ```sh
 atenea stats
 atenea stats --today
-atenea stats --week --provider kivgraph
+atenea stats --week --provider tokensave
 atenea stats --month --repo current
 atenea stats --since 2h --tool search --used
 atenea stats --since 2026-09-01T00:00:00+02:00 --json

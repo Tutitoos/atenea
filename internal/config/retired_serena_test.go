@@ -28,7 +28,7 @@ func TestRetiredSerenaConfigurationIsRejected(t *testing.T) {
 	}
 }
 
-func TestRetiredProviderKeepsOnlyUnsupportedContractsDormant(t *testing.T) {
+func TestEveryShippedCapabilityHasAnImplementation(t *testing.T) {
 	cfg, err := config.Defaults()
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +44,8 @@ func TestRetiredProviderKeepsOnlyUnsupportedContractsDormant(t *testing.T) {
 		}
 	}
 	slices.Sort(dormant)
-	if !slices.Equal(dormant, []string{"symbol.unresolved"}) {
-		t.Fatalf("dormant = %v", dormant)
+	if len(dormant) != 0 {
+		t.Fatalf("declared without an implementation = %v", dormant)
 	}
 	if _, err := config.Load(write(t, minimal)); err != nil {
 		t.Fatalf("migrated config rejected: %v", err)

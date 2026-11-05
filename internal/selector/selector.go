@@ -205,10 +205,10 @@ type Drop struct {
 	Code string
 	// Raw is the provider's own text behind Reason, when the record that
 	// produced this drop kept one. Most drops come from the core's own
-	// bookkeeping -- a language it does not speak, an index it lacks -- and
-	// have nothing to add here. A health drop is the exception: the reason is
-	// Atenea's summary of somebody else's failure, and this is that failure's
-	// own words.
+	// bookkeeping -- a language it does not speak, a scale it does not fit --
+	// and have nothing to add here. A health drop is the exception: the reason
+	// is Atenea's summary of somebody else's failure, and this is that
+	// failure's own words.
 	Raw string
 }
 
@@ -314,7 +314,7 @@ func (s *Selector) Select(req Request) (Decision, error) {
 // filterReach drops what no attached far side can execute.
 //
 // It runs after constraints so the trace carries the most useful reason it
-// can: a provider that needs an index it does not have should be told so, not
+// can: a provider that does not fit the repository should be told so, not
 // merely reported as unwired. Only what could otherwise have worked here is
 // left to fail on wiring.
 func filterReach(req Request, candidates []contract.Implementation) ([]contract.Implementation, Stage) {
@@ -365,12 +365,6 @@ func fits(impl contract.Implementation, repo contract.Repository) (string, bool)
 	if !repo.SpeaksAny(c.Languages) {
 		return fmt.Sprintf("speaks %s, repository has %s",
 			list(c.Languages), list(repo.Languages)), false
-	}
-	if c.RequiresIndex && !repo.IndexedBy(impl.Provider) {
-		return fmt.Sprintf(
-			"needs an index from provider %s, repository has none -- "+
-				"atenea detect looks for one; the provider must be indexed externally",
-			impl.Provider), false
 	}
 	if c.RequiresVCS && repo.VCS == contract.VCSAbsent {
 		return "needs version control at the repository root, repository has none", false
@@ -655,7 +649,8 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation, qual
 			return chosen, fmt.Sprintf("one-call preference selects %s via %s", chosen.ID, preferred), nil
 		}
 		notices = append(notices, fmt.Sprintf(
-			"one-call preference selects %s, which did not survive the funnel; falling back", preferred))
+			"one-call preference selects %s, which did not survive the funnel; falling back", preferred,
+		))
 	}
 	if rule, ok := s.ruleFor(req.Capability, req.Repository.ID); ok {
 		if idx := slices.IndexFunc(survivors, func(i contract.Implementation) bool {
@@ -667,7 +662,8 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation, qual
 		// than stopping. But changing it silently would betray what the user
 		// asked for, so it is announced.
 		notices = append(notices, fmt.Sprintf(
-			"user rule prefers %s, which did not survive the funnel; falling back", rule.Prefer))
+			"user rule prefers %s, which did not survive the funnel; falling back", rule.Prefer,
+		))
 	}
 	ranked := slices.Clone(survivors)
 	slices.SortFunc(ranked, rankWithQuality(req.Measuring, dominationCounts(ranked), quality, s.quality.MinimumSamples(), req.Language))
@@ -679,7 +675,8 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation, qual
 		notices = append(notices, fmt.Sprintf(
 			"%s takes the break-in turn ahead of %s, which the record says is %s: "+
 				"an implementation nobody has measured cannot earn its numbers without being sent the work",
-			ranked[0].ID, ranked[1].ID, ranked[1].Health.State))
+			ranked[0].ID, ranked[1].ID, ranked[1].Health.State,
+		))
 	}
 	return ranked[0], reasonForQuality(ranked, req.Measuring, quality, s.quality.MinimumSamples(), req.Language), notices
 }

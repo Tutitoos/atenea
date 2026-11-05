@@ -87,7 +87,7 @@ func TestRunTestsAndBenchmarksProduceEvidence(t *testing.T) {
 
 func TestRunCorpusWritesInitialEvidence(t *testing.T) {
 	output := t.TempDir()
-	root := filepath.Join(repositoryRoot(), "benchmarks", "corpus", "v2")
+	root := filepath.Join(repositoryRoot(), "benchmarks", "corpus", "v3")
 	if err := runCorpus(context.Background(), output, root, corpus.CanonicalCorpusSHA256); err != nil {
 		t.Fatal(err)
 	}

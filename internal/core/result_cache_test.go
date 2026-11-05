@@ -378,7 +378,7 @@ func cacheFixtureRequest(root string) contract.RunRequest {
 	return contract.RunRequest{
 		Capability:     contract.Capability{ID: "code.context", Version: contract.Version{Major: 1}, Effects: []contract.Effect{contract.EffectRead}, Inputs: []contract.Field{{Name: "task", Type: contract.TypeString}}},
 		Implementation: contract.Implementation{ID: "fixture.context", Provider: "fixture", Capability: "code.context"},
-		Repository:     contract.NewRepository("repo", root, []string{"go"}, contract.ScaleSmall, contract.VCSAbsent, nil),
+		Repository:     contract.NewRepository("repo", root, []string{"go"}, contract.ScaleSmall, contract.VCSAbsent),
 		Payload:        map[string]any{"task": "find entry"}, Permission: contract.Permission{Task: "cache", Effects: []contract.Effect{contract.EffectRead}},
 	}
 }

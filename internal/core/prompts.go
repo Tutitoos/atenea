@@ -30,9 +30,7 @@ func commandPrompts() []promptDefinition {
 			{"name": "client", "description": "claude, chatgpt or codex", "required": false},
 			{"name": "profile", "description": "Optional Atenea desktop profile", "required": false},
 		}},
-		{Name: "detect", Title: "Atenea detect", Description: "Probe declared providers and indexes.", Arguments: []map[string]any{
-			{"name": "repository", "description": "Optional registered repository id", "required": false},
-		}},
+		{Name: "detect", Title: "Atenea detect", Description: "Probe declared MCP servers."},
 		{Name: "incidents", Title: "Atenea incidents", Description: "Show the crash notebook.", Arguments: []map[string]any{
 			{"name": "all", "description": "Include already-read incidents: true or false", "required": false},
 		}},

@@ -99,7 +99,7 @@ checkpoints = true
 checkpoint_dir = ""
 
 # Who actually executes a step: any of "omp", "claudecode", "codex",
-# "kivgraph", "tokensave", "desktop", "android" and "local" -- the same eight the loader
+# "tokensave", "desktop", "android" and "local" -- the same seven the loader
 # accepts, in the order it lists them when it refuses a name it does not know.
 #
 # Atenea decides and delegates, so execution always happens on the far side of
@@ -115,9 +115,6 @@ checkpoint_dir = ""
 # there is no endpoint to fall back on, so it is launched from its own
 # [orchestrator.tokensave.process] table and naming it without that table is
 # refused at startup rather than discovered as a dead provider mid-run.
-# "kivgraph" is the other graph-backed provider, but unlike tokensave it also
-# has a daemon reachable over streamable HTTP -- see [orchestrator.kivgraph]
-# below for the choice between endpoint and process.
 # "local" is a stand-in
 # that searches the disk directly, for a machine with no client installed. It
 # and omp both serve ripgrep, so attaching both is refused at load: the choice
@@ -183,93 +180,6 @@ runners = ["omp"]
   app_binary = "/Applications/ChatGPT.app/Contents/Resources/codex"
   implementations = ["codex.search"]
   timeout = "120s"
-
-  [orchestrator.kivgraph]
-  # Where kivgraph's own daemon is listening. `kivgraph daemon` serves the
-  # same MCP tool surface as the supervised stdio child further down, over
-  # streamable HTTP at a fixed local port, and is ordinarily already running
-  # under its own systemd user unit before Atenea starts.
-  # Mutually exclusive with process further down: a server is
-  # reached one way, and declaring both is refused at load rather than
-  # silently preferring one.
-  endpoint = "http://127.0.0.1:7788/mcp"
-  # The daemon handles reads; repository.index invokes this official CLI
-  # explicitly and never starts a second MCP server.
-  binary = "kivgraph"
-  # The daemon refuses every request without this (401 otherwise). It is
-  # stable across daemon restarts but generated per install, so unlike
-  # endpoint above there is no value a shipped repo default could bake in --
-  # read it from ~/.local/state/kivgraph/daemon.json on whichever machine
-  # runs the daemon and paste it here. Meaningless, and refused, without an
-  # endpoint to send it to.
-  # token = "the daemon's token, from ~/.local/state/kivgraph/daemon.json"
-
-  # The official binary is used for both the supervised read server and the
-  # explicit repository.index operation. Indexing remains permission-gated and
-  # is never triggered by detection or by a read capability.
-  implementations = [
-    "kivgraph.definition",
-    "kivgraph.references",
-    "kivgraph.implementations",
-    "kivgraph.overview",
-    "kivgraph.cross_repo_consumers",
-    "kivgraph.get",
-    "kivgraph.intent_search",
-    "kivgraph.dependencies",
-    "kivgraph.status",
-    "kivgraph.impact",
-    "kivgraph.index",
-    "kivgraph.search",
-    "kivgraph.source",
-    "kivgraph.symbol_impact",
-    "kivgraph.repositories",
-    "kivgraph.ensure_fresh",
-    "kivgraph.context",
-  ]
-  timeout = "90s"             # opens a graph db cold, a cold graph read
-  index_timeout = "30m"
-  # Narrow standing authorization; never grants registration or general writes.
-  auto_reindex_registered = false
-  index_env = [] # Explicit environment for the full-index child only.
-
-  # Kivgraph's optional web viewer is a separate HTTP process. If enabled,
-  # dashboard must use a fixed port matching dashboard_process.port; the
-  # process binds locally and Atenea never opens a browser during startup.
-  # dashboard = "http://127.0.0.1:7777"
-  # [orchestrator.kivgraph.dashboard_process]
-  # command = "kivgraph"
-  # args = ["ui", "--addr", "127.0.0.1:7777"]
-  # lifecycle = "persistent"
-  # port = 7777
-
-    # [orchestrator.kivgraph.process]
-    # Uncomment to have Atenea launch and supervise the kivgraph server
-    # itself instead of dialing endpoint above -- an alternative to it, not a
-    # companion: the two are mutually exclusive, and leaving endpoint active
-    # while uncommenting this block is refused at load, so comment out (or
-    # blank) endpoint above first. Same shape as
-    # other managed process declarations but over a stdio transport instead
-    # of http: Spec.Transport = stdio carries this over the same
-    # restart-limit / on_demand / idle-timeout machinery every http-transport
-    # process block already uses. Left commented for the same reason
-    # an HTTP endpoint is: `command` below is a path that
-    # exists on this machine and no other, and a shipped repo default must
-    # never bake in one operator's filesystem. Uncommenting is a per-machine
-    # decision, not a compiled default.
-    #
-    # Persistent stdio MCP server, one for the machine: the graph is a single
-    # global corpus and readers share it by atomic generation publishing, so a
-    # second copy buys nothing. on_demand so an unused install costs no process.
-    #
-    # command = "/home/devlabs/.local/opt/kivgraph/bin/kivgraph"
-    # args = ["serve"]
-    # HOME is load-bearing and MUST be the real one: an isolated/empty HOME makes
-    # `serve` scaffold a fresh EMPTY config and publish an empty graph that
-    # answers nothing, successfully. Absolute, never ~ .
-    # env = ["HOME=/home/tutitoos"]
-    # instance = "shared"
-    # lifecycle = "on_demand"
-    # idle_timeout = "10m"
 
   [orchestrator.desktop]
   # This machine's own screen, pointer and accessibility tree, answered through
@@ -352,25 +262,20 @@ runners = ["omp"]
   frame_ttl = "30s"
 
   [orchestrator.tokensave]
-  # tokensave is the second stdio far side, and the one that is not a corpus of
-  # repositories but ONE project rooted at a directory: it speaks paths relative
+  # tokensave is a stdio far side that is not a corpus of repositories but ONE
+  # project rooted at a directory: it speaks paths relative
   # to that root, so `root` is required and absolute. Every repository this
   # provider can answer for has to live under it.
-  #
-  # No index-building implementation either, for a different reason than kivgraph's: this
-  # far side re-syncs its own index on every call, so there is nothing for the
-  # funnel to trigger.
   # root = "/absolute/path/to/the/served/project"
   implementations = [
     "tokensave.calls",
     "tokensave.context",
     "tokensave.overview",
   ]
-  timeout = "90s"             # re-syncs an index before answering: same class as kivgraph
+  timeout = "90s"             # re-syncs an index before answering
 
     # [orchestrator.tokensave.process]
-    # Same shape as the kivgraph block above and left commented for the same
-    # reason: the command below is one machine's path.
+    # Left commented: the command below is one machine's path.
     #
     # command = "tokensave"
     # args = ["serve", "--path", "/absolute/path/to/the/served/project"]
@@ -829,809 +734,13 @@ effects = ["read", "process"]
     summary = "The matching line with its surrounding context."
 
 [[capability]]
-id = "symbol.search"
-version = "1.0.0"
-summary = "Find declarations by structural name and rank them."
-semantics = """
-Structural symbol search against a provider's language-aware index. The query is
-the provider's name-path pattern, so results are declarations rather than text
-matches; each result carries its qualified name, kind, source range and a
-deterministic rank. Use code.search when the question is about literal text.
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "mode"
-  type = "string"
-  enum = ["exact", "qualified_exact", "prefix", "substring"]
-  summary = "Name matching mode; defaults to substring."
-
-  [[capability.input]]
-  name = "cursor"
-  type = "string"
-  summary = "Continue the same structural query from its previous page."
-
-  [[capability.output]]
-  name = "truncated"
-  type = "bool"
-  summary = "Whether additional matching declarations remain."
-
-  [[capability.output]]
-  name = "next_cursor"
-  type = "string"
-  summary = "Continuation token for the same query."
-
-  [[capability.input]]
-  name = "query"
-  type = "string"
-  required = true
-  summary = "A structural name or name-path pattern."
-
-  [[capability.input]]
-  name = "scope"
-  type = "string_list"
-  required = false
-  summary = "Repository-relative directories or files to keep."
-
-  [[capability.input]]
-  name = "kind"
-  type = "string"
-  required = false
-  summary = "Optional provider symbol kind, such as function or class."
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-  summary = "Maximum number of ranked matches; defaults to 50 and caps at 200."
-
-  [[capability.output]]
-  name = "matches"
-  type = "record_list"
-  required = true
-  summary = "Ranked structural declarations, best match first."
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-    summary = "Provider-qualified symbol name."
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = true
-    summary = "Provider symbol kind."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "Repository-relative source path."
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-    summary = "Declaration start line, starting at 1."
-
-    [[capability.output.field]]
-    name = "end_line"
-    type = "int"
-    required = true
-    summary = "Declaration end line, starting at 1."
-
-    [[capability.output.field]]
-    name = "rank"
-    type = "int"
-    required = true
-    summary = "Stable rank, where 1 is the strongest match."
-
-    [[capability.output.field]]
-    name = "stable_key"
-    type = "string"
-    summary = "Provider identity accepted by symbol.get."
-
-[[capability]]
-id = "symbol.intent_search"
-version = "1.0.0"
-summary = "Find declarations from a plain-language description when their names are unknown."
-semantics = """
-Intent retrieval ranks lexical candidates from a description and optional code
-vocabulary. It is neither literal code.search nor structural symbol.search:
-the match class and term diagnostics remain visible so callers do not mistake
-lexical similarity for a resolved graph edge. Results are always confined to
-the requested repository.
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "intent"
-  type = "string"
-  required = true
-  summary = "Plain-language description, up to 400 characters."
-
-  [[capability.input]]
-  name = "keywords"
-  type = "string_list"
-  required = false
-  summary = "Optional code vocabulary, up to 16 terms."
-
-  [[capability.input]]
-  name = "path_prefix"
-  type = "string"
-  required = false
-  summary = "Repository-relative path prefix that narrows candidate retrieval."
-
-  [[capability.input]]
-  name = "kind"
-  type = "string"
-  required = false
-  summary = "Optional provider symbol kind."
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-  summary = "Page size from 1 to 50; defaults to 10."
-
-  [[capability.input]]
-  name = "cursor"
-  type = "string"
-  required = false
-  summary = "Opaque cursor returned by the previous page."
-
-  [[capability.output]]
-  name = "matches"
-  type = "record_list"
-  required = true
-  summary = "Lexical candidates in provider order."
-
-    [[capability.output.field]]
-    name = "rank"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "qualified_name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "end_line"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "match"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "terms"
-    type = "int"
-    required = true
-
-  [[capability.output]]
-  name = "term_diagnostics"
-  type = "record_list"
-  required = true
-
-    [[capability.output.field]]
-    name = "term"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "symbols"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "frequency"
-    type = "string"
-    required = true
-
-  [[capability.output]]
-  name = "unmatched_terms"
-  type = "string_list"
-  required = true
-
-  [[capability.output]]
-  name = "truncated"
-  type = "bool"
-  required = true
-
-  [[capability.output]]
-  name = "next_cursor"
-  type = "string"
-  required = false
-
-[[capability]]
-id = "symbol.dependencies"
-version = "1.0.0"
-summary = "Trace bounded outgoing dependencies from a symbol, optionally to one destination."
-semantics = """
-Position-first dependency traversal. Without a destination it returns a bounded
-fan-out; with to and optional to_path it returns the witness route in hop order.
-The answer preserves traversal metrics, the edge that reached each symbol and
-Kivgraph's completeness verdict. This is not code.impact, which starts from a
-Git diff and walks incoming consumers.
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "file"
-  type = "string"
-  required = true
-
-  [[capability.input]]
-  name = "line"
-  type = "int"
-  required = true
-
-  [[capability.input]]
-  name = "column"
-  type = "int"
-  required = true
-
-  [[capability.input]]
-  name = "name"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "to"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "to_path"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "depth"
-  type = "int"
-  required = false
-  summary = "Maximum hop depth from 0 to 5; defaults to 3."
-
-  [[capability.input]]
-  name = "max_nodes"
-  type = "int"
-  required = false
-  summary = "Traversal budget from 1 to 25000; defaults to 5000."
-
-  [[capability.input]]
-  name = "edge_kinds"
-  type = "string_list"
-  required = false
-
-  [[capability.input]]
-  name = "confidence"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "include_derived"
-  type = "bool"
-  required = false
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-  summary = "Page size from 1 to 500; unavailable for witness routes."
-
-  [[capability.input]]
-  name = "cursor"
-  type = "string"
-  required = false
-
-  [[capability.output]]
-  name = "dependencies"
-  type = "record_list"
-  required = true
-
-    [[capability.output.field]]
-    name = "repository"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "qualified_name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "end_line"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "depth"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "reached_from"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "via_kind"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "via_confidence"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "via_provenance"
-    type = "string"
-    required = true
-
-  [[capability.output]]
-  name = "reached"
-  type = "int"
-  required = true
-
-  [[capability.output]]
-  name = "deepest_depth"
-  type = "int"
-  required = true
-
-  [[capability.output]]
-  name = "truncated"
-  type = "bool"
-  required = true
-
-  [[capability.output]]
-  name = "next_cursor"
-  type = "string"
-  required = false
-
-  [[capability.output]]
-  name = "witness_to"
-  type = "string"
-  required = false
-
-  [[capability.output]]
-  name = "witness_hops"
-  type = "int"
-  required = false
-
-[[capability]]
-id = "symbol.definition"
-version = "1.0.0"
-summary = "From a symbol, find the one place where it is born."
-semantics = """
-Where a symbol is DEFINED, not where it is mentioned -- that second question is \
-code.search's, and answering this one with a text match would be a different \
-answer wearing the same name. The symbol is given by POSITION: a workspace of \
-forty repositories holds the same name many times over, and a position is \
-unambiguous where a name is not. The name is a hint -- it breaks a tie and it \
-makes the request readable -- and an implementation may ignore it. The location \
-always comes back; the fragment only when asked, so a caller that needs to read \
-the definition does not pay a second round trip for it.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "file"
-  type = "string"
-  required = true
-  summary = "File holding the symbol, relative to the repository root."
-
-  [[capability.input]]
-  name = "line"
-  type = "int"
-  required = true
-  summary = "Line where the symbol appears, starting at 1."
-
-  [[capability.input]]
-  name = "column"
-  type = "int"
-  required = true
-  summary = "Column where the symbol starts on that line, starting at 1."
-
-  [[capability.input]]
-  name = "name"
-  type = "string"
-  required = false
-  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
-
-  [[capability.input]]
-  name = "include_snippet"
-  type = "bool"
-  required = false
-  summary = "Intent: return the definition itself, not only where it is."
-
-  [[capability.input]]
-  name = "snippet_lines"
-  type = "int"
-  required = false
-  summary = "How much of the definition to return. Small by default, on purpose."
-
-  [[capability.output]]
-  name = "location"
-  type = "record"
-  required = true
-  summary = "Where the symbol is defined."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "File holding the definition, relative to the repository root."
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-    summary = "Line where the definition starts, starting at 1."
-
-    [[capability.output.field]]
-    name = "snippet"
-    type = "string"
-    required = false
-    summary = "The definition itself, present only when it was asked for."
-
-[[capability]]
-id = "symbol.references"
-version = "1.0.0"
-summary = "From a symbol, find every place it is used."
-semantics = """
-Every site that USES or mentions the symbol, which is the opposite direction \
-from symbol.definition and inherits its way of naming one: position first, name \
-as a hint. The one thing it adds is scope, and it is not decoration -- with \
-forty repositories a question asked without one drowns the caller in hundreds \
-of hits. Empty scope means the whole repository, deliberately, so the default \
-is honest rather than quietly narrow.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "file"
-  type = "string"
-  required = true
-  summary = "File holding the symbol, relative to the repository root."
-
-  [[capability.input]]
-  name = "line"
-  type = "int"
-  required = true
-  summary = "Line where the symbol appears, starting at 1."
-
-  [[capability.input]]
-  name = "column"
-  type = "int"
-  required = true
-  summary = "Column where the symbol starts on that line, starting at 1."
-
-  [[capability.input]]
-  name = "name"
-  type = "string"
-  required = false
-  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
-
-  [[capability.input]]
-  name = "scope"
-  type = "string_list"
-  required = false
-  summary = "Paths to look in. Empty means the whole repository."
-
-  [[capability.input]]
-  name = "include_snippet"
-  type = "bool"
-  required = false
-  summary = "Intent: return the line at each use site, not only where it is."
-
-  [[capability.input]]
-  name = "snippet_lines"
-  type = "int"
-  required = false
-  summary = "How much to return around each use. Small by default, on purpose."
-
-  [[capability.output]]
-  name = "locations"
-  type = "record_list"
-  required = true
-  summary = "Every place the symbol is used, in the order the provider found them."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "File holding the use, relative to the repository root."
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-    summary = "Line of the use, starting at 1."
-
-    [[capability.output.field]]
-    name = "snippet"
-    type = "string"
-    required = false
-    summary = "The line at the use site, present only when it was asked for."
-
-[[capability]]
-id = "symbol.implementations"
-version = "1.2.0"
-summary = "From something abstract, find who really implements it."
-semantics = """
-Given an interface or an overridable method, the concrete implementations \
-behind it. Same mould as symbol.references down to the last field, because the \
-question is shaped the same way and only its meaning changes: not who mentions \
-this, but who fulfils it. Asking it of something concrete is not an error, it \
-is an empty answer.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "file"
-  type = "string"
-  required = true
-  summary = "File holding the symbol, relative to the repository root."
-
-  [[capability.input]]
-  name = "line"
-  type = "int"
-  required = true
-  summary = "Line where the symbol appears, starting at 1."
-
-  [[capability.input]]
-  name = "column"
-  type = "int"
-  required = true
-  summary = "Column where the symbol starts on that line, starting at 1."
-
-  [[capability.input]]
-  name = "name"
-  type = "string"
-  required = false
-  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
-
-  [[capability.input]]
-  name = "scope"
-  type = "string_list"
-  required = false
-  summary = "Paths to look in. Empty means the whole repository."
-
-  [[capability.input]]
-  name = "include_snippet"
-  type = "bool"
-  required = false
-  summary = "Intent: return the line at each implementation, not only where it is."
-
-  [[capability.input]]
-  name = "snippet_lines"
-  type = "int"
-  required = false
-  summary = "How much to return around each implementation. Small by default."
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-  summary = "Page size, 1 to 500; defaults to 50."
-
-  [[capability.input]]
-  name = "cursor"
-  type = "string"
-  required = false
-  summary = "Previous next_cursor; keep scope and other arguments unchanged."
-
-  [[capability.input]]
-  name = "detection"
-  type = "string"
-  required = false
-  summary = "Optional declared or structural evidence filter."
-  enum = ["declared", "structural"]
-
-  [[capability.input]]
-  name = "language"
-  type = "string"
-  required = false
-  enum = ["go", "typescript"]
-  summary = "Optional source language; inferred from .go, .ts, .tsx, .mts or .cts when omitted."
-
-  [[capability.output]]
-  name = "locations"
-  type = "record_list"
-  required = true
-  summary = "Every concrete implementation, in the order the provider found them."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "File holding the implementation, relative to the repository root."
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-    summary = "Line where the implementation starts, starting at 1."
-
-    [[capability.output.field]]
-    name = "snippet"
-    type = "string"
-    required = false
-    summary = "The line at the implementation, present only when it was asked for."
-
-    [[capability.output.field]]
-    name = "repository"
-    type = "string"
-    required = false
-    summary = "Provider repository."
-
-    [[capability.output.field]]
-    name = "qualified_name"
-    type = "string"
-    required = false
-    summary = "Provider qualified name."
-
-    [[capability.output.field]]
-    name = "stable_key"
-    type = "string"
-    required = false
-    summary = "Provider stable key."
-
-    [[capability.output.field]]
-    name = "confidence"
-    type = "string"
-    required = false
-    summary = "Provider confidence."
-
-    [[capability.output.field]]
-    name = "provenance"
-    type = "string"
-    required = false
-    summary = "Provider provenance."
-
-    [[capability.output.field]]
-    name = "detection"
-    type = "string"
-    required = false
-    summary = "Provider detection."
-
-    [[capability.output.field]]
-    name = "resolution"
-    type = "string"
-    required = true
-    enum = ["exact"]
-    summary = "Atenea-derived resolution; every published location is exact."
-
-    [[capability.output.field]]
-    name = "language"
-    type = "string"
-    required = true
-    enum = ["go", "typescript"]
-    summary = "Language of the implementation source."
-
-    [[capability.output.field]]
-    name = "edge_kind"
-    type = "string"
-    required = true
-    enum = ["IMPLEMENTS", "OVERRIDES"]
-    summary = "Semantic relation kind."
-
-  [[capability.output]]
-  name = "truncated"
-  type = "bool"
-  required = false
-  summary = "More implementations are available."
-
-  [[capability.output]]
-  name = "next_cursor"
-  type = "string"
-  required = false
-  summary = "Cursor for the next page of this generation."
-
-  [[capability.output]]
-  name = "snapshot_id"
-  type = "int"
-  required = false
-  summary = "Generation that served this page."
-
-  [[capability.output]]
-  name = "completeness"
-  type = "string"
-  required = false
-  summary = "COMPLETE or LOWER_BOUND within the analyzed corpus."
-
-  [[capability.output]]
-  name = "total"
-  type = "int"
-  required = false
-  summary = "Total matching implementations before pagination."
-
-  [[capability.output]]
-  name = "coverage_notes"
-  type = "string_list"
-  required = false
-  summary = "Observed limits of the analysis and generation."
-
-  [[capability.output]]
-  name = "coverage"
-  type = "record"
-  required = true
-  summary = "The provider's exact, candidate, unresolved_related and package_level coverage counts."
-
-    [[capability.output.field]]
-    name = "exact"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "candidate"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "unresolved_related"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "package_level"
-    type = "int"
-    required = true
-
-[[capability]]
 id = "symbol.overview"
 version = "1.0.0"
 summary = "What a file declares, without knowing any of it by name first."
 semantics = """
 The entry move into an unfamiliar file: every symbol it declares, before \
-anything in it can be asked about by name or position. Every other symbol.* \
-capability needs one of those handed to it; this is the one that hands it \
-back. Depth controls how far to descend into nested symbols -- a struct's \
+anything in it can be asked about by name or position. Symbol-level questions need one of those handed to \
+them; this is the one that hands it back. Depth controls how far to descend into nested symbols -- a struct's \
 fields, for languages that have them -- with 0, the default, listing only \
 what the file declares at its own top level. Line and column both come back, \
 and both are real positions, not a hint: line is what the provider reports, \
@@ -1726,8 +835,8 @@ version = "1.0.0"
 summary = "From a symbol, walk the call graph in a chosen direction."
 semantics = """
 Where a symbol sits on the CALL graph, not everywhere it is mentioned -- that is \
-symbol.references's question, and a call is one narrow kind of mention among the \
-many it does not separate out. Position and the name hint are inherited from the \
+a reference question, and a call is one narrow kind of mention among the \
+many a reference search does not separate out. Position and the name hint are inherited from the \
 same family. Direction is not guessed: incoming and outgoing are different \
 questions with different answers, so the caller states which one, or both. Depth \
 bounds how far the walk goes, small by default, because a workspace of many \
@@ -1840,395 +949,6 @@ effects = ["read"]
 
 # ---------------------------------------------------------------------------
 # Baseline impact and provider indexing.
-
-[[capability]]
-id = "code.impact"
-version = "1.0.0"
-summary = "From a change, find what it reaches."
-semantics = """
-Compare the current working tree with baseline, resolve declarations touched by
-the changed lines, and walk incoming graph consumers from those declarations.
-The directly changed declaration is depth 0. Paths are relative to the
-requested repository; a global provider must omit foreign repositories when the
-capability result has no repository field.
-"""
-effects = ["read", "process"]
-
-  [[capability.input]]
-  name = "baseline"
-  type = "string"
-  required = true
-
-  [[capability.input]]
-  name = "scope"
-  type = "string_list"
-  required = false
-
-  [[capability.input]]
-  name = "depth"
-  type = "int"
-  required = false
-
-  [[capability.input]]
-  name = "include_snippet"
-  type = "bool"
-  required = false
-
-  [[capability.input]]
-  name = "snippet_lines"
-  type = "int"
-  required = false
-
-  [[capability.output]]
-  name = "changed_files"
-  type = "string_list"
-  required = true
-
-  [[capability.output]]
-  name = "affected_symbols"
-  type = "record_list"
-  required = true
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = false
-
-    [[capability.output.field]]
-    name = "depth"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "snippet"
-    type = "string"
-    required = false
-
-[[capability]]
-id = "repository.index"
-version = "1.0.0"
-summary = "Build or refresh a provider's index for a repository."
-semantics = """
-Run the provider's explicit indexing operation. This is separate from read
-capabilities because it writes provider state and can run a long-lived process;
-it is never an implicit repair performed by detection.
-"""
-effects = ["write", "process"]
-
-  [[capability.input]]
-  name = "mode"
-  type = "string"
-  required = false
-  enum = ["full"]
-
-  [[capability.output]]
-  name = "status"
-  type = "string"
-  required = true
-
-  [[capability.output]]
-  name = "nodes"
-  type = "int"
-  required = true
-
-  [[capability.output]]
-  name = "edges"
-  type = "int"
-  required = true
-
-# ---------------------------------------------------------------------------
-# Kivgraph capabilities. The adapter exposes position resolution, references,
-# overview, cross-repository consumers, stable-key retrieval, intent retrieval,
-# dependency traversal, impact, graph identity and explicit indexing. It does
-# not claim symbol.unresolved because Kivgraph 0.9.2 deliberately removed the
-# raw get_unresolved_references MCP tool; completeness now travels with the
-# queries whose absences it qualifies.
-# ---------------------------------------------------------------------------
-
-[[capability]]
-id = "symbol.consumers"
-version = "1.0.0"
-summary = "From a symbol, find who consumes it from other repositories."
-semantics = """
-Resolved cross-repository consumers of one symbol, sorted into exact_symbol, package, \
-candidate and unresolved -- an edge the graph actually resolved, not two files that \
-share a path. Position first, name as a hint, as symbol.references names one; a caller \
-holding only a name asks symbol.definition first. Neither a language server (one \
-repository) nor a path-shape match (a guess) can give this. \
-\
-A package row is not an exact_symbol row read loosely: it proves the consuming \
-repository depends on the provider PACKAGE, never that it uses this symbol, and it \
-carries no path for exactly that reason. Counting it as a use nobody observed is the \
-one mistake this shape invites. \
-\
-Answering from a position costs one extra lookup inside the provider: Kivgraph \
-addresses symbols by a stable key, not by position, so the implementation resolves \
-file/line/column to that key before it can ask the graph anything. That lookup is the \
-provider's own cost, never this capability's -- callers still pay in file and line, \
-the same currency every other position-first capability on this page takes, and never \
-in a key that only this one provider could ever mint.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "file"
-  type = "string"
-  required = true
-  summary = "File holding the symbol, relative to the repository root."
-
-  [[capability.input]]
-  name = "line"
-  type = "int"
-  required = true
-  summary = "Line where the symbol appears, starting at 1."
-
-  [[capability.input]]
-  name = "column"
-  type = "int"
-  required = true
-  summary = "Column where the symbol starts on that line, starting at 1."
-
-  [[capability.input]]
-  name = "name"
-  type = "string"
-  required = false
-  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
-
-  [[capability.input]]
-  name = "resolution"
-  type = "string"
-  required = false
-  summary = "Narrow to one class: exact_symbol, package, candidate or unresolved. Empty means all four."
-
-  [[capability.output]]
-  name = "consumers"
-  type = "record_list"
-  required = true
-  summary = "Consumers in other repositories, grouped by resolution class."
-
-    [[capability.output.field]]
-    name = "repository"
-    type = "string"
-    required = true
-    summary = "The consuming repository."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = false
-    summary = "File holding the consuming reference, relative to that repository's root. Empty for a package-level consumer, which names a dependency on the package and never a use of the symbol."
-
-    [[capability.output.field]]
-    name = "resolution"
-    type = "string"
-    required = true
-    summary = "How firmly it resolved: exact_symbol, package, candidate or unresolved."
-    enum = ["exact_symbol", "package", "candidate", "unresolved"]
-
-[[capability]]
-id = "symbol.get"
-version = "1.0.0"
-summary = "Return one symbol by its stable key."
-semantics = """
-The identity retrieval the position-first family cannot do: a stable key every \
-Kivgraph answer carries, resolved back to the one symbol it names, so a reference \
-held across an edit that moved its line still points at the same thing. The key is \
-the address; there is no file and no line to pass.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "stable_key"
-  type = "string"
-  required = true
-  summary = "The symbol's stable key, as returned by any other answer. Position-independent."
-
-  [[capability.output]]
-  name = "symbol"
-  type = "record_list"
-  required = true
-  summary = "The one symbol the key names, as a single-row list, or empty if the key is unknown."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "File where the symbol is declared, relative to the repository root."
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-    summary = "Line of the declaration, starting at 1."
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-    summary = "The symbol's own name."
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = true
-    summary = "The kind of symbol, in the graph's own vocabulary."
-
-[[capability]]
-id = "symbol.unresolved"
-version = "1.0.0"
-summary = "List the references that resolve to no exact symbol."
-semantics = """
-The graph's blind spots, not its edges: references it recorded but could not tie to a \
-definition. A completeness surface, repository-scoped, for judging how much of an answer \
-to trust before trusting it.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "reason"
-  type = "string"
-  required = false
-  summary = "Narrow to one failure reason, e.g. PACKAGE_PROVIDER_NOT_FOUND. Empty means every reason."
-
-  [[capability.input]]
-  name = "requested_package"
-  type = "string"
-  required = false
-  summary = "Narrow to references that asked for this package."
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-  summary = "Cap the number of rows returned."
-
-  [[capability.output]]
-  name = "unresolved"
-  type = "record_list"
-  required = true
-  summary = "References with no exact target, in the order the provider found them."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "File holding the unresolved reference, relative to the repository root."
-
-    [[capability.output.field]]
-    name = "offset"
-    type = "int"
-    required = true
-    summary = "Byte offset of the reference. Kivgraph records no line here, and this declares what it has rather than a line it would have to guess."
-
-    [[capability.output.field]]
-    name = "reason"
-    type = "string"
-    required = true
-    summary = "Why it did not resolve, e.g. PACKAGE_PROVIDER_NOT_FOUND."
-
-    [[capability.output.field]]
-    name = "requested_package"
-    type = "string"
-    required = false
-    summary = "The package the reference asked for, when the reason names one."
-
-[[capability]]
-id = "graph.status"
-version = "1.0.0"
-summary = "Report the published graph: snapshot, provenance, counts and health."
-semantics = """
-The one repository-agnostic capability here, because the graph is one global thing. It \
-reports the published snapshot and where it came from, its counts, and its dependency \
-health. An empty or absent graph is reported AS a fault, never as a graph with zero of \
-everything -- see the implementation note on requires_index below.\
-"""
-effects = ["read"]
-
-  # Deliberately no inputs: the provider's own graph_status tool takes none
-  # -- not even a repository filter -- and reports the whole published graph
-  # every time. The draft here once offered an optional `repository` input;
-  # a live call against the real tool showed it accepts zero arguments
-  # (empty inputSchema, additionalProperties = false), so declaring one would
-  # promise a scope the provider cannot honor.
-
-  [[capability.output]]
-  name = "snapshot"
-  type = "record_list"
-  required = true
-  summary = "The published snapshot's provenance, counts and dependency health."
-
-    [[capability.output.field]]
-    name = "content_state"
-    type = "string"
-    summary = "Content freshness: fresh, stale, unverified or unavailable."
-
-    [[capability.output.field]]
-    name = "content_generation"
-    type = "int"
-    summary = "Generation checked by the source inventory."
-
-    [[capability.output.field]]
-    name = "status"
-    type = "string"
-    required = true
-    summary = "\"ready\", or the word the provider gives for why the graph cannot answer."
-
-    [[capability.output.field]]
-    name = "snapshot_id"
-    type = "int"
-    required = true
-    summary = "The published snapshot's own generation number."
-
-    [[capability.output.field]]
-    name = "snapshot_built_at"
-    type = "string"
-    required = true
-    summary = "When this snapshot was built, as the provider reports it."
-
-    [[capability.output.field]]
-    name = "symbols"
-    type = "int"
-    required = true
-    summary = "How many symbols the published snapshot holds."
-
-    [[capability.output.field]]
-    name = "edges"
-    type = "int"
-    required = true
-    summary = "How many resolved edges the published snapshot holds."
-
-    [[capability.output.field]]
-    name = "files"
-    type = "int"
-    required = true
-    summary = "How many files the published snapshot covers."
-
-    [[capability.output.field]]
-    name = "repositories"
-    type = "int"
-    required = true
-    summary = "How many repositories are registered in the published snapshot."
-
-    [[capability.output.field]]
-    name = "unresolved"
-    type = "int"
-    required = true
-    summary = "How many references the snapshot recorded but could not resolve."
 
 # ---------------------------------------------------------------------------
 # Implementations: the "who and how". Four blocks each -- capability,
@@ -3541,7 +2261,6 @@ scope_guarantee = "confined"   # targets() refuses any path outside scope before
 
   [implementation.constraints]
   languages = []          # agnostic: it does not parse anything
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -3557,7 +2276,6 @@ scope_guarantee = "filtered"   # the model is only asked nicely; every returned 
 
   [implementation.constraints]
   languages = []          # a model reads whatever it is shown
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -3577,196 +2295,12 @@ scope_guarantee = "filtered"   # Codex is instructed to stay inside the reposito
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
   [implementation.cost]
   estimated_duration = "12s"
   estimated_tokens = 20000
-
-# The ten kivgraph implementations share one provider and one server (see
-# [orchestrator.kivgraph] above -- either its own daemon over streamable
-# HTTP or a supervised stdio child, never both): a handful of tools called
-# against it over the same wire, no second index to build.
-#
-# Duration below is not a guess: it comes from the provider's own measured
-# SLOs, not this page's usual "nearest shape already shipped" fallback --
-# docs/performance/slo.md puts find_cross_repo_consumers at p95 <= 5ms, and
-# benchmarks/mcp-client/report.md measures the backend itself at 0.014ms p95,
-# both point queries against a published in-memory snapshot. The estimates
-# below sit in the low tens of milliseconds instead of matching that
-# directly, because they cost the stdio round trip on top -- one write and
-# one read against the child's pipes -- which neither number above includes.
-# Token sizes follow the usual sizing-by-shape reasoning.
-#
-# The three position-first implementations pay a get_file_outline call before
-# their own tool, to turn a position into the declaration containing it, so
-# they are declared at roughly twice the cost of the point lookups beside
-# them. symbol.definition is the exception that pays only that one call: for
-# a graph of declarations, the declaration a position falls inside of already
-# IS the definition.
-#
-# Implementation relations are provided by find_implementations.
-
-[[implementation]]
-id = "kivgraph.cross_repo_consumers"
-provider = "kivgraph"
-capability = "symbol.consumers"
-
-  [implementation.constraints]
-  languages = []              # the graph is polyglot; language is the graph's problem, not the funnel's
-  requires_index = true       # empty/absent graph -> detect reports not-indexed -> dropped, not answered empty
-  min_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "20ms"
-  estimated_tokens = 900
-
-[[implementation]]
-id = "kivgraph.definition"
-provider = "kivgraph"
-capability = "symbol.definition"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "15ms"
-  estimated_tokens = 200
-
-[[implementation]]
-id = "kivgraph.references"
-provider = "kivgraph"
-capability = "symbol.references"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "25ms"
-  estimated_tokens = 800
-
-[[implementation]]
-id = "kivgraph.implementations"
-provider = "kivgraph"
-capability = "symbol.implementations"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "25ms"
-  estimated_tokens = 800
-
-[[implementation]]
-id = "kivgraph.overview"
-provider = "kivgraph"
-capability = "symbol.overview"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "15ms"
-  estimated_tokens = 700
-
-[[implementation]]
-id = "kivgraph.get"
-provider = "kivgraph"
-capability = "symbol.get"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "10ms"
-  estimated_tokens = 300
-
-[[implementation]]
-id = "kivgraph.search"
-provider = "kivgraph"
-capability = "symbol.search"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "20ms"
-  estimated_tokens = 800
-
-[[implementation]]
-id = "kivgraph.intent_search"
-provider = "kivgraph"
-capability = "symbol.intent_search"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-	estimated_duration = "20ms"
-	estimated_tokens = 800
-
-[[implementation]]
-id = "kivgraph.dependencies"
-provider = "kivgraph"
-capability = "symbol.dependencies"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-	estimated_duration = "40ms"
-	estimated_tokens = 1600
-
-[[implementation]]
-id = "kivgraph.status"
-provider = "kivgraph"
-capability = "graph.status"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true       # graph.status on an empty/absent graph is a fault; requires_index makes it one
-
-  [implementation.cost]
-  estimated_duration = "8ms"
-  estimated_tokens = 200
-
-[[implementation]]
-id = "kivgraph.impact"
-provider = "kivgraph"
-capability = "code.impact"
-scope_guarantee = "confined"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "2s"
-  estimated_tokens = 2500
-
-[[implementation]]
-id = "kivgraph.index"
-provider = "kivgraph"
-capability = "repository.index"
-scope_guarantee = "confined"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = false
-
-  [implementation.cost]
-  estimated_duration = "5m"
-  estimated_tokens = 300
 
 # ---------------------------------------------------------------------------
   [[capability.output]]
@@ -3836,311 +2370,18 @@ scope_guarantee = "confined"
     summary = "Measured helper time including preparation."
 
 
-[[capability]]
-id = "symbol.source"
-version = "1.0.0"
-summary = "Read current source for a bounded batch of graph declarations."
-semantics = "Read current source for a bounded batch of graph declarations."
-effects = ["read"]
-
-  [[capability.input]]
-  name = "symbols"
-  type = "record_list"
-  required = true
-  summary = "One to twenty declarations in the bound repository."
-
-    [[capability.input.field]]
-    name = "path"
-    type = "string"
-    required = true
-
-    [[capability.input.field]]
-    name = "qualified_name"
-    type = "string"
-    required = true
-
-  [[capability.input]]
-  name = "context_lines"
-  type = "int"
-  required = false
-  summary = "Surrounding lines, from zero to 100."
-
-  [[capability.output]]
-  name = "source"
-  type = "string"
-  required = true
-  summary = "Provider source blocks, including drift or unavailable notices."
-
-[[capability]]
-id = "symbol.impact"
-version = "1.0.0"
-summary = "Inspect bounded incoming impact while retaining cross-repository identities."
-semantics = "Inspect bounded incoming impact while retaining cross-repository identities."
-effects = ["read"]
-
-  [[capability.input]]
-  name = "file"
-  type = "string"
-  required = true
-
-  [[capability.input]]
-  name = "line"
-  type = "int"
-  required = true
-
-  [[capability.input]]
-  name = "column"
-  type = "int"
-  required = true
-
-  [[capability.input]]
-  name = "name"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "depth"
-  type = "int"
-  required = false
-
-  [[capability.input]]
-  name = "max_nodes"
-  type = "int"
-  required = false
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-
-  [[capability.input]]
-  name = "cursor"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "edge_kinds"
-  type = "string_list"
-  required = false
-
-  [[capability.input]]
-  name = "confidence"
-  type = "string"
-  required = false
-
-  [[capability.input]]
-  name = "include_derived"
-  type = "bool"
-  required = false
-
-  [[capability.output]]
-  name = "symbols"
-  type = "record_list"
-  required = true
-  summary = "Affected declarations."
-
-    [[capability.output.field]]
-    name = "repository"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-
-    [[capability.output.field]]
-    name = "depth"
-    type = "int"
-    required = true
-
-  [[capability.output]]
-  name = "truncated"
-  type = "bool"
-  required = true
-
-  [[capability.output]]
-  name = "next_cursor"
-  type = "string"
-  required = false
-
-[[capability]]
-id = "graph.repositories"
-version = "1.0.0"
-summary = "List the repositories present in the published graph."
-semantics = "List the repositories present in the published graph."
-effects = ["read"]
-
-  [[capability.input]]
-  name = "limit"
-  type = "int"
-  required = false
-
-  [[capability.input]]
-  name = "cursor"
-  type = "string"
-  required = false
-
-  [[capability.output]]
-  name = "repositories"
-  type = "record_list"
-  required = true
-  summary = "Graph inventory, not Atenea configuration."
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-
-    [[capability.output.field]]
-    name = "derived"
-    type = "bool"
-    required = true
-
-    [[capability.output.field]]
-    name = "indexed_commit"
-    type = "string"
-    required = false
-
-    [[capability.output.field]]
-    name = "current_commit"
-    type = "string"
-    required = false
-
-    [[capability.output.field]]
-    name = "moved"
-    type = "bool"
-    required = true
-
-  [[capability.output]]
-  name = "truncated"
-  type = "bool"
-  required = true
-
-  [[capability.output]]
-  name = "next_cursor"
-  type = "string"
-  required = false
-
-[[capability]]
-id = "graph.ensure_fresh"
-version = "1.0.0"
-summary = "Verify the graph and rebuild only registered repositories under explicit authorization."
-semantics = "Verify the graph and rebuild only registered repositories under explicit authorization."
-effects = ["read", "write", "process"]
-
-  [[capability.output]]
-  name = "status"
-  type = "string"
-  required = true
-
-  [[capability.output]]
-  name = "generation"
-  type = "int"
-  required = true
-
-  [[capability.output]]
-  name = "rebuilt"
-  type = "bool"
-  required = true
-
-[[implementation]]
-id = "kivgraph.source"
-provider = "kivgraph"
-capability = "symbol.source"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "30ms"
-  estimated_tokens = 1200
-
-[[implementation]]
-id = "kivgraph.symbol_impact"
-provider = "kivgraph"
-capability = "symbol.impact"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "30ms"
-  estimated_tokens = 1200
-
-[[implementation]]
-id = "kivgraph.repositories"
-provider = "kivgraph"
-capability = "graph.repositories"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = false
-
-  [implementation.cost]
-  estimated_duration = "30ms"
-  estimated_tokens = 1200
-
-[[implementation]]
-id = "kivgraph.ensure_fresh"
-provider = "kivgraph"
-capability = "graph.ensure_fresh"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = false
-
-  [implementation.cost]
-  estimated_duration = "5m"
-  estimated_tokens = 1200
-
-[[implementation]]
-id = "kivgraph.context"
-provider = "kivgraph"
-capability = "code.context"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-
-  [implementation.cost]
-  estimated_duration = "30ms"
-  estimated_tokens = 1200
-
 # tokensave: the syntactic call graph of ONE rooted project.
 #
-# It answers the cold-start capability code.context first, then two of the same
-# capabilities the graph providers above do. The cold start is why this adapter
-# exists as more than another call-graph reader: a client holding only a task in
-# prose cannot ask a position-first symbol question yet. tokensave keeps its
-# own index in step on every call and never needs one built ahead of time,
-# which is why none of the implementations below declares requires_index.
+# It answers the cold-start capability code.context first, then symbol.overview
+# and symbol.calls. The cold start is why this adapter exists as more than
+# another call-graph reader: a client holding only a task in prose cannot ask a
+# position-first symbol question yet. tokensave keeps its own index in step on
+# every call and never needs one built ahead of time, which is why none of the
+# implementations below declares requires_index.
 #
 # No code.search here: tokensave has no text engine, and answering a flat
 # search from a symbol index would be a different answer wearing the same
-# name. No symbol.definition either -- see the adapter's package doc.
+# name.
 # ---------------------------------------------------------------------------
 
 [[implementation]]
@@ -4150,7 +2391,6 @@ capability = "code.context"
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4170,7 +2410,6 @@ capability = "symbol.calls"
 
   [implementation.constraints]
   languages = []          # its parsers cover go, typescript, rust, python, js and more
-  requires_index = false  # it syncs its own index on every call
   min_scale = ""
   max_scale = ""
 
@@ -4191,7 +2430,6 @@ capability = "symbol.overview"
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4215,7 +2453,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4235,9 +2472,8 @@ id = "current"
 path = "."
 languages = ["go"]
 scale = ""                # nobody has measured this repository yet, and unspecified never
-                          # disqualifies; a guess of "small" drops every graph implementation
+                          # disqualifies; a guess of "small" drops every scale-bounded implementation
 vcs = ""                  # unknown until declared; unspecified never disqualifies (pkg/contract/implementation.go)
-indexed_by = []           # providers holding a ready index for this repository
 
 # ---------------------------------------------------------------------------
 # MCP servers: endpoints `atenea wrap` hands to a client instead of letting it
@@ -4310,7 +2546,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4328,7 +2563,6 @@ scope_guarantee = "confined"
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4346,7 +2580,6 @@ scope_guarantee = "confined"
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4362,7 +2595,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4380,7 +2612,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4398,7 +2629,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4416,7 +2646,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4434,7 +2663,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -4452,7 +2680,6 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
 
@@ -5250,7 +3477,6 @@ capability = "android.devices"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5264,7 +3490,6 @@ capability = "android.diagnose"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5278,7 +3503,6 @@ capability = "android.screenshot"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5292,7 +3516,6 @@ capability = "android.inspect"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5306,7 +3529,6 @@ capability = "android.tap"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5320,7 +3542,6 @@ capability = "android.swipe"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5334,7 +3555,6 @@ capability = "android.type"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5348,7 +3568,6 @@ capability = "android.key"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5362,7 +3581,6 @@ capability = "android.mirror"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]
@@ -5376,7 +3594,6 @@ capability = "android.unmirror"
 scope_guarantee = "confined"
   [implementation.constraints]
   languages = []
-  requires_index = false
   min_scale = ""
   max_scale = ""
   [implementation.cost]

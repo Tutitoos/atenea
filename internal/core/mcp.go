@@ -255,7 +255,7 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 	case MethodStatus:
 		out.Result = v.core.Status()
 	case MethodDetect:
-		result, rpcErr := v.detect(ctx, req.Params)
+		result, rpcErr := v.detect(ctx)
 		out.Result, out.Error = result, rpcErr
 	case MethodInitialize:
 		var requested struct {
@@ -424,19 +424,10 @@ func (v *conversation) command(ctx context.Context, raw json.RawMessage) (any, *
 }
 
 // detect answers a probe request on the service's behalf, in the service's
-// environment. That last clause is the entire reason this method exists.
-//
-// Params are optional: an empty body is every repository, the same default the
-// command's --repo flag has. A malformed body is refused rather than read as
-// "everything", because a caller that sent something meant something.
-func (v *conversation) detect(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
-	var params detectParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, &rpcError{Code: codeInvalid, Message: "params: " + err.Error()}
-		}
-	}
-	out, err := v.core.Detect(ctx, params.Repository)
+// environment. That last clause is the entire reason this method exists. It
+// takes no parameters: a sweep always covers every declared server.
+func (v *conversation) detect(ctx context.Context) (any, *rpcError) {
+	out, err := v.core.Detect(ctx)
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: err.Error()}
 	}
@@ -760,7 +751,7 @@ func (v *conversation) aimable(schema map[string]any) map[string]any {
 	properties, _ := out["properties"].(map[string]any)
 	properties[routePreferArg] = map[string]any{
 		"type":        "string",
-		"description": "Optional exact implementation ID (kivgraph.overview) or provider name (kivgraph). Must implement this capability. Valid but unavailable preferences may fall back, reported in atenea_usage. See catalog.repositories for per-repository availability.",
+		"description": "Optional exact implementation ID (tokensave.overview) or provider name (tokensave). Must implement this capability. Valid but unavailable preferences may fall back, reported in atenea_usage. See catalog.repositories for per-repository availability.",
 	}
 	return out
 }
@@ -1363,11 +1354,9 @@ func (v *conversation) repositoriesTool() map[string]any {
 	return map[string]any{
 		"name": toolListRepositories,
 		"description": "List every repository registered with Atenea: name, absolute path on disk, " +
-			"languages present, indexed providers, and per-capability implementations with availability and exclusion categories. " +
-			"Call this before any code or symbol tool when you do not already know the repository name. " +
-			"Symbol tools require a compatible provider and ready index. Check tools/list for offered capabilities. " +
-			"Code-search and impact tools require the repository to be " +
-			"indexed by the provider (check indexed_by).",
+			"languages present, and per-capability implementations with availability and exclusion categories. " +
+			"Call this before any code tool when you do not already know the repository name. " +
+			"Check tools/list for offered capabilities.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 	}
 }
@@ -1387,7 +1376,6 @@ func (v *conversation) listRepositories() (any, *rpcError) {
 			"id":           repo.ID,
 			"path":         abs,
 			"languages":    repo.Languages,
-			"indexed_by":   repo.Indexes(),
 			"capabilities": v.repositoryCapabilities(repo),
 		})
 	}

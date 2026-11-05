@@ -92,8 +92,7 @@ func (e *legacyProtocolError) Error() string { return e.message }
 // defaults when left zero, so Options{} is a legitimate call.
 type Options struct {
 	// ClientName and ClientVersion identify Atenea to the far side, the
-	// way every MCP client introduces itself. Default "atenea" / "0", the
-	// same identity internal/mcphttp/mcphttp.go's own handshake uses.
+	// way every MCP client introduces itself. Default "atenea" / "0".
 	ClientName    string
 	ClientVersion string
 	// ProtocolVersion is the MCP revision this session declares. Default
@@ -258,7 +257,7 @@ func (s *Session) legacyInitialize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Mirrors internal/mcphttp: a server that does not introduce itself
+	// A server that does not introduce itself
 	// leaves this empty, which is a fact rather than a guess, and a handshake
 	// whose shape this cannot read is not a handshake that failed.
 	var hello struct {
@@ -399,7 +398,7 @@ func (s *Session) StableIdentity() string {
 }
 
 // Call runs one tool and returns the concatenated text of every text-typed
-// content entry, mirroring internal/mcphttp/mcphttp.go's own call. A
+// content entry. A
 // result with isError=true becomes an error carrying that text, or the raw
 // frame clipped to 300 chars when the far side flagged a failure and then
 // said nothing about it.
@@ -505,8 +504,8 @@ func (s *Session) markDead(why error) {
 // NewReaderSize only sets how much is read per syscall and puts no roof on a
 // single message: a child that writes to stdout and never emits a newline
 // grows that slice until the kernel kills Atenea for it. The children behind
-// this package are the ones internal/supervisor launches -- kivgraph and
-// tokensave, indexers whose stdout is a protocol and whose stderr the
+// this package are the ones internal/supervisor launches -- tokensave and the
+// desktop helper, whose stdout is a protocol and whose stderr the
 // supervisor already caps with a ring for the same reason -- so the one pipe
 // that was unbounded was the one carrying the most data.
 func (s *Session) read(stdout io.Reader) {
@@ -859,8 +858,7 @@ func (p *pending) clear() {
 }
 
 // rpcRequest is one JSON-RPC call. ID is omitted for notifications, which is
-// what distinguishes them on the wire -- the same shape
-// internal/mcphttp/mcphttp.go's own rpcRequest uses.
+// what distinguishes them on the wire.
 type rpcRequest struct {
 	Version string `json:"jsonrpc"`
 	ID      int64  `json:"id,omitempty"`

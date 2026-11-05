@@ -16,10 +16,6 @@ func withLanguages(langs ...string) implOption {
 	return func(i *contract.Implementation) { i.Constraints.Languages = langs }
 }
 
-func needsIndex() implOption {
-	return func(i *contract.Implementation) { i.Constraints.RequiresIndex = true }
-}
-
 func maxInput(name string, bound int) implOption {
 	return func(i *contract.Implementation) {
 		if i.Constraints.MaxInput == nil {
@@ -82,8 +78,8 @@ func impl(id string, opts ...implOption) contract.Implementation {
 	return out
 }
 
-func smallGoRepo(indexes ...string) contract.Repository {
-	return contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, indexes)
+func smallGoRepo() contract.Repository {
+	return contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
 }
 
 // funnel wraps the selector so the cases that are not about reach do not have
@@ -146,16 +142,15 @@ func stage(t *testing.T, decision selector.Decision, name string) selector.Stage
 	return selector.Stage{}
 }
 
-// Stage 1 answers "who CAN work here". Each of the three constraints has to be
-// able to drop a candidate on its own.
-func TestConstraintsDropOnLanguageIndexAndScale(t *testing.T) {
+// Stage 1 answers "who CAN work here". Each of the constraints has to be able
+// to drop a candidate on its own.
+func TestConstraintsDropOnLanguageAndScale(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: smallGoRepo(),
 		Candidates: []contract.Implementation{
 			impl("ripgrep"),
 			impl("dart.analyzer", withLanguages("dart")),
-			impl("fixture.search", provider("fixture"), needsIndex()),
 			impl("graph.search", scaleRange(contract.ScaleMedium, contract.ScaleUnspecified)),
 		},
 	})
@@ -171,9 +166,8 @@ func TestConstraintsDropOnLanguageIndexAndScale(t *testing.T) {
 		reasons[drop.Implementation] = drop.Reason
 	}
 	for id, want := range map[string]string{
-		"dart.analyzer":  "speaks dart",
-		"fixture.search": "needs an index from provider fixture",
-		"graph.search":   "needs a medium repository or bigger",
+		"dart.analyzer": "speaks dart",
+		"graph.search":  "needs a medium repository or bigger",
 	} {
 		if !strings.Contains(reasons[id], want) {
 			t.Errorf("%s dropped for %q, want it to mention %q", id, reasons[id], want)
@@ -284,56 +278,10 @@ func TestMaxInputAcceptsAWholeFloat(t *testing.T) {
 	}
 }
 
-// The drop reason for a missing index names the detection command and leaves
-// the actual indexing to the provider's own tooling.
-func TestMissingIndexReasonNamesTheFix(t *testing.T) {
-	decision, err := mustSelector(t).Select(selector.Request{
-		Capability: "code.search",
-		Repository: smallGoRepo(),
-		Candidates: []contract.Implementation{
-			impl("ripgrep"),
-			impl("fixture.search", provider("fixture"), needsIndex()),
-		},
-	})
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	constraints := stage(t, decision, selector.StageConstraints)
-	drops := map[string]string{}
-	for _, drop := range constraints.Dropped {
-		drops[drop.Implementation] = drop.Reason
-	}
-	reason, ok := drops["fixture.search"]
-	if !ok {
-		t.Fatalf("fixture.search was not dropped: %+v", constraints.Dropped)
-	}
-	for _, want := range []string{"atenea detect", "indexed externally"} {
-		if !strings.Contains(reason, want) {
-			t.Errorf("reason %q does not mention %q", reason, want)
-		}
-	}
-}
-
-// A warm index belongs to the provider, so an implementation whose provider is
-// already indexed here must survive.
-func TestIndexConstraintIsSatisfiedByTheProviderIndex(t *testing.T) {
-	decision, err := mustSelector(t).Select(selector.Request{
-		Capability: "code.search",
-		Repository: smallGoRepo("fixture"),
-		Candidates: []contract.Implementation{impl("fixture.search", provider("fixture"), needsIndex())},
-	})
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if decision.Chosen.ID != "fixture.search" {
-		t.Fatalf("chosen = %s", decision.Chosen.ID)
-	}
-}
-
 // An unclassified repository is not a proven mismatch. Dropping candidates for
 // a size nobody has measured would silently empty the funnel.
 func TestUnspecifiedScaleNeverDisqualifies(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleUnspecified, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleUnspecified, contract.VCSUnspecified)
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: repo,
@@ -353,7 +301,7 @@ func TestUnspecifiedScaleNeverDisqualifies(t *testing.T) {
 // measure against without one: an implementation that requires version
 // control must be dropped, cleanly, before it ever reaches the provider.
 func TestNoVCSDisqualifiesAnImplementationThatRequiresIt(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSAbsent, nil)
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSAbsent)
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: repo,
@@ -379,7 +327,7 @@ func TestNoVCSDisqualifiesAnImplementationThatRequiresIt(t *testing.T) {
 // said either way about must not lose access to every provider that needs
 // version control the moment the constraint starts existing.
 func TestUnspecifiedVCSNeverDisqualifies(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified)
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: repo,
@@ -668,8 +616,8 @@ func TestAProviderNobodyServesNeverWins(t *testing.T) {
 }
 
 // Reach runs after constraints so the trace carries the most useful reason it
-// can. A provider that both needs a missing index and has nothing wired up
-// should be reported for the index: that is the fact the user can act on, and
+// can. A provider that both does not fit the repository and has nothing wired
+// up should be reported for the fit: that is the fact the user can act on, and
 // the one that would still block it after the wiring was fixed.
 func TestTheMostUsefulReasonWins(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
@@ -677,7 +625,7 @@ func TestTheMostUsefulReasonWins(t *testing.T) {
 		Repository: smallGoRepo(),
 		Candidates: []contract.Implementation{
 			impl("ripgrep"),
-			impl("fixture.search", provider("fixture"), needsIndex()),
+			impl("fixture.search", provider("fixture"), withLanguages("dart")),
 		},
 		Reachable: []string{"ripgrep"},
 	})
@@ -691,8 +639,8 @@ func TestTheMostUsefulReasonWins(t *testing.T) {
 	}
 
 	dropped := stage(t, decision, selector.StageConstraints).Dropped
-	if len(dropped) != 1 || !strings.Contains(dropped[0].Reason, "index") {
-		t.Errorf("constraints dropped %+v, want the index reason", dropped)
+	if len(dropped) != 1 || !strings.Contains(dropped[0].Reason, "speaks dart") {
+		t.Errorf("constraints dropped %+v, want the language reason", dropped)
 	}
 	if len(stage(t, decision, selector.StageReach).Dropped) != 0 {
 		t.Error("reach repeated a drop that constraints had already explained")

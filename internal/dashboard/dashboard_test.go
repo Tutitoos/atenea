@@ -33,42 +33,13 @@ func TestResolveByIDAndSkipServersWithoutDashboard(t *testing.T) {
 	}
 }
 
-func TestResolveConfigIncludesKivgraphViewer(t *testing.T) {
-	cfg := config.Config{
-		MCPServers: []config.MCPServer{{ID: "headroom", Dashboard: "http://127.0.0.1:8787"}},
-	}
-	cfg.Orchestrator.Kivgraph.Dashboard = "http://127.0.0.1:7777"
-	entry, err := ResolveConfig(cfg, "kivgraph")
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	if entry.ID != "kivgraph" || entry.Alias != "kivgraph" || entry.URL != "http://127.0.0.1:7777" {
-		t.Fatalf("entry = %+v", entry)
-	}
-	entries, err := AllConfig(cfg)
-	if err != nil {
-		t.Fatalf("AllConfig: %v", err)
-	}
-	if len(entries) != 2 || entries[1].ID != "kivgraph" {
-		t.Fatalf("entries = %+v", entries)
-	}
-}
-
-func TestDashboardCatalogRejectsMissingAndDuplicateDeclarations(t *testing.T) {
-	if _, err := ResolveConfig(config.Config{}, "kivgraph"); err == nil || !strings.Contains(err.Error(), "no dashboard") {
-		t.Fatalf("missing Kivgraph dashboard error = %v", err)
-	}
+func TestDashboardCatalogRejectsDuplicateDeclarations(t *testing.T) {
 	servers := []config.MCPServer{
 		{ID: "same", Dashboard: "http://127.0.0.1:1"},
 		{ID: "same", Dashboard: "http://127.0.0.1:2"},
 	}
 	if _, err := All(servers); err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("duplicate dashboard error = %v", err)
-	}
-	cfg := config.Config{MCPServers: []config.MCPServer{{ID: KivgraphID, Dashboard: "http://127.0.0.1:1"}}}
-	cfg.Orchestrator.Kivgraph.Dashboard = "http://127.0.0.1:2"
-	if _, err := AllConfig(cfg); err == nil || !strings.Contains(err.Error(), "conflicts") {
-		t.Fatalf("Kivgraph alias conflict = %v", err)
 	}
 }
 

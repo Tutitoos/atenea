@@ -8,6 +8,8 @@ weight: 6
 
 # What is not built yet
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 The commission flow (`atenea task` and `atenea resume`) was measured at the time of this audit; it is no longer part of Atenea (see #212).
 
 The design was written before the code, in twenty-eight sheets, and it ordered the

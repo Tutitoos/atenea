@@ -189,14 +189,6 @@ func jsonStepOf(step orchestrator.StepResult) jsonStep {
 	return js
 }
 
-type jsonIndexReport struct {
-	Repository string `json:"repository"`
-	Provider   string `json:"provider"`
-	Ready      bool   `json:"ready"`
-	Hint       string `json:"hint,omitempty"`
-	Err        string `json:"error,omitempty"`
-}
-
 type jsonServerProbe struct {
 	ID                       string `json:"id"`
 	Transport                string `json:"transport"`
@@ -217,15 +209,12 @@ type jsonServerProbe struct {
 //
 // An object with two keys, where this used to be a bare array of index
 // reports. The array could not grow a second kind of row without every reader
-// having to guess which kind it was holding, and a detection that reported
-// indexes while staying silent about whether the providers behind them are
-// even reachable is the shape of report this whole change exists to end. The
-// break is deliberate and belongs to a 0.x CLI, not to the contract in
-// pkg/contract, which is untouched.
+// having to guess which kind it was holding. The break is deliberate and
+// belongs to a 0.x CLI, not to the contract in pkg/contract, which is
+// untouched.
 type jsonDetection struct {
 	AnsweredBy jsonAnsweredBy    `json:"answered_by"`
 	Servers    []jsonServerProbe `json:"servers"`
-	Indexes    []jsonIndexReport `json:"indexes"`
 }
 
 // jsonAnsweredBy is an object rather than a bare string so a third source of
@@ -246,7 +235,7 @@ type jsonAnsweredBy struct {
 
 // printDetectionJSON is the machine-readable twin of the two prose sections.
 func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) error {
-	servers, reports := detection.Servers, detection.Indexes
+	servers := detection.Servers
 	js := jsonDetection{
 		AnsweredBy: jsonAnsweredBy{
 			By:       "command",
@@ -254,7 +243,6 @@ func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) 
 			Refused:  by.Refused,
 		},
 		Servers: make([]jsonServerProbe, len(servers)),
-		Indexes: make([]jsonIndexReport, len(reports)),
 	}
 	if by.Service {
 		js.AnsweredBy = jsonAnsweredBy{By: "service", PID: by.PID}
@@ -274,15 +262,6 @@ func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) 
 			PinnedPath:               server.PinnedPath,
 			RequestedProtocolVersion: server.RequestedProtocolVersion,
 			ObservedProtocolVersion:  server.ObservedProtocolVersion,
-		}
-	}
-	for i, report := range reports {
-		js.Indexes[i] = jsonIndexReport{
-			Repository: report.Repository,
-			Provider:   report.Provider,
-			Ready:      report.Ready,
-			Hint:       report.Hint,
-			Err:        report.Err,
 		}
 	}
 	return encodeJSON(out, js)

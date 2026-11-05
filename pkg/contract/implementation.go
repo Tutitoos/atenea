@@ -110,14 +110,10 @@ func ParseVCS(s string) (VCS, error) {
 // provider can work at all.
 //
 // Everything here is measured per repository, never per workspace. A monorepo
-// is many repositories, and one global index over all of them is the thing the
-// design refused: the selector asks "is there an index for THIS repository?".
+// is many repositories, and the selector asks about THIS one.
 type Constraints struct {
 	// Languages the provider understands. Empty means language-agnostic.
 	Languages []string
-	// RequiresIndex means the provider is useless until the repository has been
-	// indexed by its provider.
-	RequiresIndex bool
 	// RequiresVCS means the provider needs the repository to sit under version
 	// control -- it measures against a point in history, and there is none
 	// without one.
@@ -432,7 +428,7 @@ var slugID = regexp.MustCompile(`^[a-z][a-z0-9]*([._-][a-z0-9]+)*$`)
 func (i Implementation) Validate() error {
 	if !slugID.MatchString(i.ID) {
 		return Fail(FailureInvalidInput,
-			"implementation id %q must be lowercase, e.g. ripgrep or kivgraph.definition", i.ID)
+			"implementation id %q must be lowercase, e.g. ripgrep or tokensave.overview", i.ID)
 	}
 	if firstSegment(i.ID) == ReservedNamespace {
 		return Fail(FailureInvalidInput,

@@ -1,10 +1,9 @@
-// Package tokensave is the sixth adapter, and the second whose far side is a
-// stdio MCP server Atenea itself spawns and holds the pipes of.
+// Package tokensave is an adapter whose far side is a stdio MCP server Atenea
+// itself spawns and holds the pipes of.
 //
-// It is the kivgraph arrangement with one difference that changes everything
-// downstream: kivgraph publishes ONE global corpus addressed by repository
-// name, while tokensave serves ONE project rooted at a directory on disk and
-// speaks paths relative to that root. This workspace is 51 independent git
+// Its one distinguishing fact is that tokensave serves ONE project rooted at a
+// directory on disk and speaks paths relative to that root, rather than a
+// corpus of repositories addressed by name. This workspace is 51 independent git
 // repositories plus cli/ under one umbrella root, and Atenea also declares
 // that root itself for workspace-wide code.context calls. The mapping is not
 // optional: an individual repository is a path PREFIX inside tokensave's
@@ -24,7 +23,7 @@
 //
 // tokensave syncs its SQLite index incrementally on every call, so a server
 // pointed at a directory it has not indexed answers successfully with nothing
-// -- the same shape as kivgraph's empty snapshot. Measured against v7.9.0:
+// -- an empty graph that looks like a success. Measured against v7.9.0:
 // tokensave_status carries node_count, edge_count and file_count, so every
 // capability pays for one status call before any other answer is trusted
 // (checkGraphReady), and a zero-count graph becomes
@@ -103,7 +102,7 @@ const (
 
 // DefaultTimeout caps one call. tokensave re-syncs its index before
 // answering, which is the same class of cost as opening a cold graph, so this
-// sits at kivgraph's own ceiling rather than inventing a new number.
+// is generous rather than tight.
 const DefaultTimeout = 90 * time.Second
 
 // defaultDepth is how far symbol.calls walks when the caller does not say.
@@ -1117,7 +1116,7 @@ func inScope(relative string, scope []string) bool {
 // but they cannot see a symlink: `services/api/vendor` pointing at /etc is a
 // path that never climbs out of the root and still reads outside it. So the
 // containment is checked twice, once lexically and once on the resolved path,
-// exactly as the kivgraph adapter does for the same reason. A path that does
+// for the same reason every adapter here does. A path that does
 // not exist resolves to no error: the caller's own read reports that case, and
 // a missing file is not an escape.
 func within(root, relative string) (string, error) {

@@ -55,8 +55,8 @@ type Transport string
 
 const (
 	// TransportHTTP is streamable-HTTP: the server listens on Host:Port and
-	// speaks the wire format internal/mcphttp/mcphttp.go and this
-	// package's own probe already speak. It is the zero value, so every
+	// speaks the wire format this package's own probe speaks. It is the zero
+	// value, so every
 	// Spec written before stdio existed keeps behaving exactly as it did.
 	TransportHTTP Transport = "http"
 	// TransportStdio is JSON-RPC over the child's own stdin and stdout, the
@@ -81,8 +81,7 @@ const (
 )
 
 // The defaults every zero-valued Spec field falls back to. They live here
-// rather than only in internal/config for the same reason
-// internal/mcphttp keeps its own DefaultTimeout: a caller building a
+// rather than only in internal/config: a caller building a
 // Spec by hand -- a test, or some future caller that is not the settings
 // file -- gets a working server without having to know these numbers too.
 const (
@@ -147,7 +146,7 @@ var idleCheckEvery = 30 * time.Second
 // Spec describes one MCP server Atenea may launch and keep alive.
 type Spec struct {
 	// ID names the server for the status screen and for EnsureReady. It
-	// matches the runner name it backs, e.g. "kivgraph".
+	// matches the runner name it backs, e.g. "tokensave".
 	ID string
 	// Command and Args launch the server. A bare Command is looked up on
 	// PATH. An element of Args equal to "{{port}}" is replaced with the

@@ -26,10 +26,8 @@ import (
 // because a sub-table written after the repositories would be extending the
 // wrong entry.
 var healthy = strings.Replace(catalog,
-	`  requires_index = true
-  min_scale = "large"`,
-	`  requires_index = true
-  min_scale = "large"
+	`  min_scale = "large"`,
+	`  min_scale = "large"
 
   [implementation.health]
   state = "alive"

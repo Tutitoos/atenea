@@ -216,9 +216,6 @@ func TestDetectionJSONCarriesSourceAndProbeDetails(t *testing.T) {
 		}, {
 			ID: "broken", Transport: "stdio", Where: "local", Reason: "not found", Took: 2 * time.Millisecond,
 		}},
-		Indexes: []core.IndexReport{{Repository: "api", Provider: "fixture", Ready: true}, {
-			Repository: "web", Provider: "fixture", Hint: "index missing", Err: "probe failed",
-		}},
 	}
 	var out bytes.Buffer
 	printDetectionJSON(&out, detection, answeredBy{Service: true, PID: 99})
@@ -230,10 +227,13 @@ func TestDetectionJSONCarriesSourceAndProbeDetails(t *testing.T) {
 	if answered["by"] != "service" || answered["pid"].(float64) != 99 {
 		t.Fatalf("answered_by = %#v", answered)
 	}
-	if len(decoded["servers"].([]any)) != 2 || len(decoded["indexes"].([]any)) != 2 {
+	if len(decoded["servers"].([]any)) != 2 {
 		t.Fatalf("detection arrays = %#v", decoded)
 	}
-	if !strings.Contains(out.String(), "filesystem") || !strings.Contains(out.String(), "probe failed") {
+	if _, present := decoded["indexes"]; present {
+		t.Fatalf("detection json still carries the removed index reports: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "filesystem") || !strings.Contains(out.String(), "not found") {
 		t.Fatalf("detection json omitted probe details: %s", out.String())
 	}
 	out.Reset()

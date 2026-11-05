@@ -61,9 +61,6 @@ type Entry struct {
 	Alias string
 }
 
-// KivgraphID is the stable id used for the optional graph viewer dashboard.
-const KivgraphID = "kivgraph"
-
 // Resolve returns one configured dashboard by MCP id.
 func Resolve(servers []config.MCPServer, id string) (Entry, error) {
 	for _, server := range servers {
@@ -76,26 +73,6 @@ func Resolve(servers []config.MCPServer, id string) (Entry, error) {
 		return Entry{ID: server.ID, URL: server.Dashboard, Alias: server.ID}, nil
 	}
 	return Entry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
-}
-
-// ResolveConfig includes dashboards owned by an orchestrator as well as
-// ordinary [[mcp_server]] declarations. Kivgraph's MCP endpoint is normally
-// authenticated HTTP in 0.9.2 (with stdio as an explicit alternative), so its
-// viewer is represented by the orchestrator configuration instead of a second
-// fake MCP declaration.
-func ResolveConfig(cfg config.Config, id string) (Entry, error) {
-	entry, err := Resolve(cfg.MCPServers, id)
-	if err == nil || id != KivgraphID {
-		return entry, err
-	}
-	if cfg.Orchestrator.Kivgraph.Dashboard == "" {
-		return Entry{}, fmt.Errorf("%w: %s", ErrNotDeclared, id)
-	}
-	return Entry{
-		ID:    KivgraphID,
-		URL:   cfg.Orchestrator.Kivgraph.Dashboard,
-		Alias: KivgraphID,
-	}, nil
 }
 
 // All returns configured dashboards in declaration order and rejects duplicate
@@ -114,24 +91,6 @@ func All(servers []config.MCPServer) ([]Entry, error) {
 		out = append(out, Entry{ID: server.ID, URL: server.Dashboard, Alias: server.ID})
 	}
 	return out, nil
-}
-
-// AllConfig is the complete dashboard catalog, including Kivgraph's separate
-// read-only viewer when one is configured.
-func AllConfig(cfg config.Config) ([]Entry, error) {
-	entries, err := All(cfg.MCPServers)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.Orchestrator.Kivgraph.Dashboard == "" {
-		return entries, nil
-	}
-	for _, entry := range entries {
-		if entry.Alias == KivgraphID {
-			return nil, fmt.Errorf("%w: %s", ErrAliasConflict, KivgraphID)
-		}
-	}
-	return append(entries, Entry{ID: KivgraphID, URL: cfg.Orchestrator.Kivgraph.Dashboard, Alias: KivgraphID}), nil
 }
 
 // Check performs a harmless GET and considers any HTTP response evidence that

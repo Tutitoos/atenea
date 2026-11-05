@@ -98,7 +98,6 @@ type localRepository struct {
 	Languages *[]string `toml:"languages"`
 	Scale     *string   `toml:"scale"`
 	VCS       *string   `toml:"vcs"`
-	IndexedBy *[]string `toml:"indexed_by"`
 }
 
 type localSelector struct {
@@ -306,6 +305,11 @@ func refuseUnreadableKeys(meta toml.MetaData, source string) error {
 			}
 			blocked[block] = true
 			reasons = append(reasons, retiredSections[block])
+		case retiredKeyMessage(name) != "":
+			if msg := retiredKeyMessage(name); !blocked[msg] {
+				blocked[msg] = true
+				reasons = append(reasons, msg)
+			}
 		default:
 			// Not in the global schema either: a typo, and the message for a
 			// typo is the one the global file already gives.
@@ -371,7 +375,6 @@ func localRepositories(cfg Config, declared []localRepository, root, source stri
 			Languages: existing.Languages,
 			Scale:     existing.Scale.String(),
 			VCS:       existing.VCS.String(),
-			IndexedBy: existing.Indexes(),
 		}
 	} else {
 		// A repository the global file never declared. The id has to come
@@ -399,9 +402,6 @@ func localRepositories(cfg Config, declared []localRepository, root, source stri
 	}
 	if block.VCS != nil {
 		merged.VCS = *block.VCS
-	}
-	if block.IndexedBy != nil {
-		merged.IndexedBy = *block.IndexedBy
 	}
 
 	built, err := merged.build(source)

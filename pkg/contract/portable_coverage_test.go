@@ -93,7 +93,7 @@ func TestPortableRunRequestAndOutputSchema(t *testing.T) {
 	request := contract.RunRequest{
 		Capability:     capability,
 		Implementation: contract.Implementation{ID: "searcher", Provider: "local", Capability: capability.ID},
-		Repository:     contract.NewRepository("repo", "/tmp/repo", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		Repository:     contract.NewRepository("repo", "/tmp/repo", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified),
 		Payload:        map[string]any{"query": "needle"},
 		Permission:     contract.Permission{Task: "search", Effects: []contract.Effect{contract.EffectRead}},
 	}

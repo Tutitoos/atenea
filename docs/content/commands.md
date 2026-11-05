@@ -22,7 +22,7 @@ client as `/mcp__atenea__<command>` or in its prompt/command picker.
 /atenea metrics --capability code.search
 /atenea catalog
 /atenea doctor --client claude --profile claude
-/atenea detect --repository current
+/atenea detect
 /atenea incidents
 /atenea config
 /atenea intent --repository current
@@ -46,7 +46,7 @@ fields can request JSON:
 | `metrics` | Show measured capability/provider rows and filters |
 | `catalog` | Show registered capabilities and repositories |
 | `doctor` | Show compatibility telemetry for a client/profile |
-| `detect` | Probe declared providers and indexes |
+| `detect` | Probe the declared MCP servers |
 | `incidents` | Read the crash notebook without marking incidents read |
 | `config` | Show a redacted effective settings summary |
 | `intent` | Show safe client declarations for one registered repository |

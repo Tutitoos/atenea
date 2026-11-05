@@ -55,65 +55,16 @@ func (g guardedRunner) Run(ctx context.Context, req contract.RunRequest) (contra
 // does not itself implement can still be found.
 //
 // It exists because guardedRunner embeds contract.Runner -- an interface -- so
-// only that method set is promoted and every optional one is dropped. For
-// contract.IndexProber that is solved by guardedProber below, and it has to
-// be: a probe must be bracketed by Acquire/Release like any other question for
-// the far side. But an optional interface that needs NO bracketing gets no
-// benefit from a wrapper type, and a type per combination is how two optional
-// interfaces become four types and three of them get written wrong. Those are
-// found through here instead.
+// only that method set is promoted and every optional one is dropped. An
+// optional interface that needs no bracketing gets no benefit from a wrapper
+// type, and a type per combination is how two optional interfaces become four
+// types and three of them get written wrong. Those are found through here
+// instead.
 func (g guardedRunner) Unwrap() contract.Runner { return g.Runner }
 
-// guardedProber is guardedRunner for a runner that also answers
-// contract.IndexProber.
-//
-// Two types rather than one because the interface is optional and a type
-// assertion is how the core finds it. guardedRunner embeds contract.Runner,
-// an interface, so only that method set is promoted: ProbeIndex is dropped
-// on the floor, and the runner disappears from the detect sweep with no
-// error anywhere -- which is how kivgraph, the first supervised runner that
-// also probes, silently reported no index for a graph it was holding. The
-// alternative, giving guardedRunner a ProbeIndex of its own, is worse: it
-// would make every guarded runner satisfy IndexProber, dragging in the ones
-// that deliberately do not probe indexes. Deciding at construction preserves
-// the wrapped runner's optional interface.
-type guardedProber struct {
-	guardedRunner
-	prober contract.IndexProber
-}
-
-// ProbeIndex brackets the probe exactly as Run brackets a call. A probe is a
-// question for the far side like any other: on an on_demand process it is
-// usually the first thing to wake it, and without Acquire/Release the idle
-// reaper is free to stop the server mid-probe and turn "is there an index"
-// into "the provider is down".
-func (g guardedProber) ProbeIndex(ctx context.Context, root string) (bool, string, error) {
-	// Only the path is known here. That is enough for every provider this
-	// can reach today: a probing runner under the shared policy ignores the
-	// repository entirely, and the one per_repository provider does not
-	// implement IndexProber. A per_repository prober added later would need
-	// the id, and would get an unknown-instance failure from EnsureReady
-	// rather than a wrong answer.
-	id := g.instanceID(contract.Repository{Path: root})
-	// Acquired first, for the reason guardedRunner.Run's own comment gives:
-	// the pair has to bracket EnsureReady, not follow it, or the reaper can
-	// stop the server in the gap between the two.
-	g.procs.Acquire(id)
-	defer g.procs.Release(id)
-	if _, err := g.procs.EnsureReady(ctx, id); err != nil {
-		return false, "", guardFailure(err, ctx, id)
-	}
-	return g.prober.ProbeIndex(ctx, root)
-}
-
-// guard wraps runner so the supervisor brackets every call, preserving
-// contract.IndexProber when the runner answers it.
+// guard wraps runner so the supervisor brackets every call.
 func guard(runner contract.Runner, procs *supervisor.Supervisor, instanceID func(contract.Repository) string) contract.Runner {
-	guarded := guardedRunner{Runner: runner, procs: procs, instanceID: instanceID}
-	if prober, ok := runner.(contract.IndexProber); ok {
-		return guardedProber{guardedRunner: guarded, prober: prober}
-	}
-	return guarded
+	return guardedRunner{Runner: runner, procs: procs, instanceID: instanceID}
 }
 
 // optional finds a runner's optional interface, through any wrapper.
@@ -196,16 +147,6 @@ func guardFailure(err error, ctx context.Context, id string) *contract.Failure {
 // boot.
 func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 	var specs []supervisor.Spec
-	if p := cfg.Orchestrator.Kivgraph.Process; p != nil {
-		added, err := kivgraphSpecs(cfg.Source, *p)
-		if err != nil {
-			return nil, err
-		}
-		specs = append(specs, added...)
-	}
-	if p := cfg.Orchestrator.Kivgraph.DashboardProcess; p != nil {
-		specs = append(specs, kivgraphDashboardSpec(*p))
-	}
 	if p := cfg.Orchestrator.Tokensave.Process; p != nil {
 		added, err := tokensaveSpecs(cfg.Source, *p)
 		if err != nil {
@@ -226,53 +167,15 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 	return supervisor.New(specs...)
 }
 
-// kivgraphDashboardSpec is deliberately separate from kivgraphSpecs. The MCP
-// server speaks stdio and the viewer speaks HTTP; sharing a process id or
-// transport would make the dashboard look healthy while the MCP child was
-// actually the one being supervised.
-func kivgraphDashboardSpec(p config.ManagedProcess) supervisor.Spec {
-	return supervisor.Spec{
-		ID:           "kivgraph-dashboard",
-		Command:      p.Command,
-		Args:         p.Args,
-		Env:          p.Env,
-		Lifecycle:    p.Lifecycle,
-		Port:         p.Port,
-		EndpointPath: "/",
-		Readiness:    supervisor.ReadinessHTTP,
-		RestartLimit: p.RestartLimit,
-		RestartDelay: p.RestartDelay,
-		StableAfter:  p.StableAfter,
-		ReadyTimeout: p.ReadyTimeout,
-		StopGrace:    p.StopGrace,
-	}
-}
-
-// kivgraphSpecs turns the settings file's kivgraph declaration into the
-// one supervisor.Spec it launches. There is only ever one:
-// the graph is one global corpus, published by atomic generation and read
-// by every repository alike (see the adapter's own package doc comment),
-// so per_repository has no meaning here and is refused loudly rather than
-// silently collapsed into the one shared server a caller might not have
-// meant.
-func kivgraphSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
-	if p.Instance == config.InstancePerRepository {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.kivgraph.process.instance is %q, but kivgraph publishes one global "+
-				"graph -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
-	}
-	return []supervisor.Spec{stdioSpec(config.RunnerKivgraph, p)}, nil
-}
-
 // stdioSpec turns the settings file's declaration into what the supervisor
 // package needs to launch and watch it. Transport is TransportStdio, and
 // Host, Port and EndpointPath are left zero: a stdio server listens on
 // nothing, and the supervisor package itself refuses a spec that sets any of
 // them rather than silently ignoring a likely config mistake.
 //
-// Shared by both stdio far sides (kivgraph and tokensave) because the spec is
-// the same shape for either: only the id and the command differ, and those are
-// the caller's.
+// Shared by the stdio far sides (tokensave and the desktop helper) because the
+// spec is the same shape for either: only the id and the command differ, and
+// those are the caller's.
 func stdioSpec(id string, p config.ManagedProcess) supervisor.Spec {
 	return supervisor.Spec{
 		ID:           id,
@@ -291,10 +194,9 @@ func stdioSpec(id string, p config.ManagedProcess) supervisor.Spec {
 }
 
 // tokensaveSpecs turns the settings file's tokensave declaration into the one
-// supervisor.Spec it launches. Like kivgraph there is only ever one, and for
-// the same reason read the other way round: the graph belongs to the served
-// root, and a second copy of a server pointed at the same root would index
-// the same files twice into the same database.
+// supervisor.Spec it launches. There is only ever one: the graph belongs to
+// the served root, and a second copy of a server pointed at the same root
+// would index the same files twice into the same database.
 func tokensaveSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
 	if p.Instance == config.InstancePerRepository {
 		return nil, contract.Fail(contract.FailureInvalidInput,

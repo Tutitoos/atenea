@@ -169,7 +169,7 @@ func TestAllClientsReceiveToolVisibilityInstructions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got := result(t, dial(t).handshake(name), "initialize")
 			instructions, _ := got["instructions"].(string)
-			for _, phrase := range []string{"catalog.repositories", "Before every", "user-visible chat preamble", "<target>: <purpose>", "parallel calls", "repeated calls", "Kivgraph is requested, not confirmed", "atenea_kivgraph_usage", "not individual upstream MCP calls", "consent", "atenea_usage", "symbol.intent_search", "composes code.context", "current source bytes", "invoked=false", "LOWER_BOUND", "verified content freshness"} {
+			for _, phrase := range []string{"catalog.repositories", "Before every", "user-visible chat preamble", "<target>: <purpose>", "parallel calls", "repeated calls", "requested, not confirmed", "not individual upstream MCP calls", "consent", "atenea_usage", "symbol.overview", "code.context", "current source bytes", "invoked=false", "LOWER_BOUND"} {
 				if !strings.Contains(instructions, phrase) {
 					t.Errorf("instructions missing %q", phrase)
 				}
@@ -178,11 +178,10 @@ func TestAllClientsReceiveToolVisibilityInstructions(t *testing.T) {
 	}
 }
 
-// A local fixture carries the Kivgraph provider label to exercise the complete
-// response path without depending on an installed graph or calling an agent.
-func TestMCPReturnsKivgraphReceiptWithoutChangingStructuredAnswer(t *testing.T) {
-	settings := strings.Replace(mcpSettings(t), `provider = "ripgrep"`, `provider = "kivgraph"`, 1)
-	atenea := buildService(t, settings)
+// The receipt rides beside the answer for every provider and carries no
+// provider-named alias: Kivgraph's atenea_kivgraph_usage key went with it.
+func TestMCPReturnsTheUsageReceiptWithoutChangingStructuredAnswer(t *testing.T) {
+	atenea := buildService(t, mcpSettings(t))
 	defer serve(t, atenea)()
 	c := dial(t)
 	c.handshake("codex")
@@ -201,8 +200,9 @@ func TestMCPReturnsKivgraphReceiptWithoutChangingStructuredAnswer(t *testing.T) 
 		if !reflect.DeepEqual(textAnswer, got["structuredContent"]) {
 			t.Fatal("text answer and structured answer differ")
 		}
-		if !strings.Contains(fmt.Sprint(content[1]), "atenea_kivgraph_usage") {
-			t.Fatalf("missing receipt: %v", content[1])
+		receipt := fmt.Sprint(content[1])
+		if !strings.Contains(receipt, "atenea_usage") || strings.Contains(receipt, "kivgraph") {
+			t.Fatalf("receipt = %v", content[1])
 		}
 	}
 }

@@ -47,7 +47,7 @@ Read recorded activity without probing tools. Defaults to all retained history.
 
 Examples:
   atenea stats --today
-  atenea stats --week --provider kivgraph
+  atenea stats --week --provider tokensave
   atenea stats --month --json
   atenea stats --today --used --watch
 `

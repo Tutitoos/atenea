@@ -56,8 +56,7 @@ Commands:
   dashboard ID            Check and open the dashboard declared by an MCP server
   intent [--json]        Read the client config this repo carries and say how
                          Atenea answers it; launches nothing from it
-  detect [--repo ID]     Ask attached providers whether they already hold a
-                         ready index; corrects indexed_by in memory when they do
+  detect                 Probe the declared MCP servers and say which are reachable
   run                    Run as a service until interrupted
   desktop ACTION         Do one thing on this machine's screen or keyboard,
                          after showing it and asking. --repo ID --app BUNDLE_ID
@@ -196,13 +195,10 @@ to preview changes, and --check to inspect the file without writing it.
 `,
 	"detect": `Usage: atenea detect [flags]
 
-Ask every attached provider that can tell whether it already holds a ready
-index, and correct indexed_by in memory with whatever it finds. Read-only
-about the repository -- it asks providers and never builds an index; providers
-must be indexed externally.
+Probe every declared [[mcp_server]] now, in the environment of the running
+service when there is one, and say whether each is reachable and why not.
 
 Flags:
-  --repo ID   repository to check (default: every repository registered)
   --json      print the result as json instead of prose
 `,
 	"select": `Usage: atenea select CAPABILITY [flags]
@@ -378,7 +374,7 @@ the repository's own .atenea/config.toml or from the global file.
 A repository may carry .atenea/config.toml at its root. It is a partial
 overlay: what it declares wins, what it omits falls back to the global
 file, and a repository without one changes nothing. It may declare what
-the repository is ([[repository]]: languages, scale, vcs, indexed_by),
+the repository is ([[repository]]: languages, scale, vcs),
 which implementation to prefer for it ([[selector.rule]]) and further
 files to treat as delicate ([security] sensitive, added to the global list
 and never removed from it). Every other key is refused by name: a file
@@ -741,7 +737,7 @@ func cmdDashboard(settingsPath string, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"dashboard %s takes only --check", args[0])
 	}
-	entry, err := dashboard.ResolveConfig(cfg, args[0])
+	entry, err := dashboard.Resolve(cfg.MCPServers, args[0])
 	if err != nil {
 		if errors.Is(err, dashboard.ErrNotFound) || errors.Is(err, dashboard.ErrNotDeclared) {
 			return contract.Fail(contract.FailureNotFound, "%v", err)
@@ -774,7 +770,7 @@ func cmdDashboardHosts(cfg config.Config, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"dashboard hosts takes --dry-run, --check or --remove-obsolete")
 	}
-	entries, err := dashboard.AllConfig(cfg)
+	entries, err := dashboard.All(cfg.MCPServers)
 	if err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -955,10 +951,9 @@ func printStatus(out io.Writer, status core.Status) error {
 
 	fmt.Fprintf(out, "\nrepositories\n")
 	for _, repo := range status.Repositories {
-		fmt.Fprintf(out, "  %-16s %-28s scale=%-8s vcs=%-8s languages=%s  indexes=%s\n",
+		fmt.Fprintf(out, "  %-16s %-28s scale=%-8s vcs=%-8s languages=%s\n",
 			repo.ID, repo.Path, orDash(repo.Scale), orDash(repo.VCS),
-			orDash(strings.Join(repo.Languages, ",")),
-			orDash(strings.Join(repo.Indexes, ",")))
+			orDash(strings.Join(repo.Languages, ",")))
 	}
 	return nil
 }
@@ -1547,9 +1542,8 @@ func cmdCatalog(settingsPath string, out io.Writer) error {
 		fmt.Fprintf(out, "  implementations\n")
 		for _, impl := range impls {
 			fmt.Fprintf(out, "    %s (provider %s)\n", impl.ID, impl.Provider)
-			fmt.Fprintf(out, "      constraints  languages=%s index=%v vcs=%v scale=%s..%s\n",
+			fmt.Fprintf(out, "      constraints  languages=%s vcs=%v scale=%s..%s\n",
 				orDash(strings.Join(impl.Constraints.Languages, ",")),
-				impl.Constraints.RequiresIndex,
 				impl.Constraints.RequiresVCS,
 				orDash(impl.Constraints.MinScale.String()),
 				orDash(impl.Constraints.MaxScale.String()))
@@ -1580,33 +1574,21 @@ func printFields(out io.Writer, indent string, fields []contract.Field) {
 	}
 }
 
-// cmdDetect answers two questions an operator has at the same moment: are the
-// declared servers actually there, and does any attached provider already hold
-// a ready index.
-//
-// The servers come first because they are underneath. An index that cannot be
-// reported because the provider never started is one fact, not two, and
-// reading the reachability line first is what turns the second line from a
-// puzzle into a consequence.
-//
-// Unlike select and ask it defaults to every repository rather than requiring
-// one: sweeping the whole catalog is the common case, a single dispatch target
-// is not.
+// cmdDetect answers the question an operator has when a server misbehaves: are
+// the declared servers actually there.
 func cmdDetect(settingsPath string, args []string, out io.Writer) error {
-	var repository string
 	var jsonOut bool
 	flags := flag.NewFlagSet("detect", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.StringVar(&repository, "repo", "", "repository to check (default: every repository registered)")
 	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose")
-	if err := flags.Parse(args); err != nil {
-		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return contract.Fail(contract.FailureInvalidInput, "detect takes only --json")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	detection, by, err := detectVia(ctx, settingsPath, repository)
+	detection, by, err := detectVia(ctx, settingsPath)
 	if err != nil {
 		return err
 	}
@@ -1614,7 +1596,6 @@ func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 		return printDetectionJSON(out, detection, by)
 	}
 	printServerProbes(out, detection.Servers, by)
-	printIndexReports(out, detection.Indexes)
 	return nil
 }
 
@@ -1648,13 +1629,13 @@ type answeredBy struct {
 // file asks what that file gives. The fallback is not a nicety -- detect is the
 // command you run when things are broken, and needing a healthy service to
 // diagnose a sick one would be backwards.
-func detectVia(ctx context.Context, settingsPath, repository string) (core.Detection, answeredBy, error) {
+func detectVia(ctx context.Context, settingsPath string) (core.Detection, answeredBy, error) {
 	cfg, err := config.Load(settingsPath)
 	if err != nil {
 		return core.Detection{}, answeredBy{}, err
 	}
 	var by answeredBy
-	switch detection, ok := core.AskedDetect(ctx, repository); {
+	switch detection, ok := core.AskedDetect(ctx); {
 	case ok && detection.Settings == cfg.Source:
 		return detection, answeredBy{Service: true, PID: detection.PID}, nil
 	case ok:
@@ -1673,7 +1654,7 @@ func detectVia(ctx context.Context, settingsPath, repository string) (core.Detec
 		return core.Detection{}, answeredBy{}, err
 	}
 	defer func() { _ = atenea.Shutdown() }()
-	detection, err := atenea.Detect(ctx, repository)
+	detection, err := atenea.Detect(ctx)
 	if err != nil {
 		return core.Detection{}, answeredBy{}, err
 	}
@@ -1969,23 +1950,6 @@ func printIntentJSON(out io.Writer, report clientconfig.Report) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(payload)
-}
-
-func printIndexReports(out io.Writer, reports []core.IndexReport) {
-	if len(reports) == 0 {
-		fmt.Fprintln(out, "no attached provider can report index readiness")
-		return
-	}
-	for _, report := range reports {
-		switch {
-		case report.Err != "":
-			fmt.Fprintf(out, "%-12s %-16s could not tell: %s\n", report.Repository, report.Provider, report.Err)
-		case report.Ready:
-			fmt.Fprintf(out, "%-12s %-16s ready\n", report.Repository, report.Provider)
-		default:
-			fmt.Fprintf(out, "%-12s %-16s not ready: %s\n", report.Repository, report.Provider, orDash(report.Hint))
-		}
-	}
 }
 
 func cmdSelect(settingsPath string, args []string, out io.Writer) error {
@@ -3085,7 +3049,6 @@ func cmdConfigShow(settingsPath string, out io.Writer) error {
 		fmt.Fprintf(out, "  %-8s languages   %s\n", origin("languages"), orNone(repo.Languages))
 		fmt.Fprintf(out, "  %-8s scale       %s\n", origin("scale"), orUnset(repo.Scale.String()))
 		fmt.Fprintf(out, "  %-8s vcs         %s\n", origin("vcs"), orUnset(repo.VCS.String()))
-		fmt.Fprintf(out, "  %-8s indexed_by  %s\n", origin("indexed_by"), orNone(repo.Indexes()))
 	}
 
 	if len(cfg.Selector.Rules) > 0 {

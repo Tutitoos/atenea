@@ -76,7 +76,7 @@ func TestRunContextTranslatesInputsAndDropsForeignRowsOutLoud(t *testing.T) {
 	root, _ := workspace(t)
 	// This repository is webs/apela.gg in the report, not services/api from
 	// workspace(), so make the fixture match the real prefix arrangement.
-	repo := contract.NewRepository("apela.gg", root+"/webs/apela.gg", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("apela.gg", root+"/webs/apela.gg", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified)
 	fake, sess := newFakeTokensave(t)
 	fake.on(toolStatus, readyStatus, false)
 	fake.on(toolContext, measuredContextReport, false)
@@ -139,7 +139,7 @@ func TestRunContextTranslatesInputsAndDropsForeignRowsOutLoud(t *testing.T) {
 
 func TestRunContextAtTheWorkspaceRootKeepsCrossRepositoryRows(t *testing.T) {
 	root, _ := workspace(t)
-	repo := contract.NewRepository("kena-workspace", root, nil, contract.ScaleLarge, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("kena-workspace", root, nil, contract.ScaleLarge, contract.VCSUnspecified)
 	fake, sess := newFakeTokensave(t)
 	fake.on(toolStatus, readyStatus, false)
 	fake.on(toolContext, measuredContextReport, false)
@@ -220,7 +220,7 @@ func discoveryNotes(out contract.Outcome) []string {
 
 func TestRunContextDefaultsToTheRepositoryPrefixButLeavesTheUmbrellaGlobal(t *testing.T) {
 	root, individual := workspace(t)
-	umbrella := contract.NewRepository("kena-workspace", root, nil, contract.ScaleLarge, contract.VCSUnspecified, nil)
+	umbrella := contract.NewRepository("kena-workspace", root, nil, contract.ScaleLarge, contract.VCSUnspecified)
 	for _, tc := range []struct {
 		name string
 		repo contract.Repository

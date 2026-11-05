@@ -162,7 +162,6 @@ The source includes these adapters and the local stand-in:
 | `omp` | Text search through the omp CLI | Default runner; requires `omp` on `PATH` |
 | `claudecode` | `code.search` through Claude Code | Optional; authenticated `claude` CLI and a spending grant |
 | `codex` | `code.search` through Codex | Optional; authenticated `codex` CLI and a spending grant |
-| `kivgraph` | Structural search, source, references, dependencies, impact, context and graph maintenance | Configured MCP transport and registered, indexed repositories |
 | `tokensave` | Context, symbol calls and overview | Configured stdio process and repository scope |
 | `desktop` | macOS application inspection, screenshots and interaction | Local Swift helper and macOS permissions |
 | `local` | Filesystem `code.search` | No external client; intended for local development and smoke tests |
@@ -175,19 +174,11 @@ Use `atenea catalog` for declared contracts, implementations and repositories.
 MCP clients should read `catalog.repositories` and `tools/list` for their actual
 surface, which also depends on attached runners and client policy.
 
-Kivgraph provides **`symbol.search`** and **`symbol.implementations`**. The latter
-requires a locally maintained Kivgraph build exposing `find_implementations`;
-these provider changes are not included in an upstream release. Install its
-complete matching bundle and rebuild the graph before using the capability.
-**`symbol.unresolved` has no implementation**: it remains declared but is absent
-from `tools/list`; direct calls return `not_offered`.
-See [maintenance, compatibility and diagnostic statistics](docs/content/maintenance-and-stats.md)
-for provider requirements and evidence limits.
-
-Graph queries require verified content freshness. Automatic rebuilding is off
-by default; `graph.ensure_fresh` is an explicit maintenance capability with
-read/write/process effects. `atenea detect` probes providers and indexes without
-building an index. See [graph freshness](docs/content/kivgraph-freshness.md) and
+`code.context`, `symbol.overview` and `symbol.calls` are answered by `tokensave`;
+the symbol and graph capabilities that only Kivgraph served are removed (see the
+[5.0 migration guide](docs/content/migration-5.md)). See
+[device flows and diagnostic statistics](docs/content/maintenance-and-stats.md)
+for provider requirements and evidence limits, and
 [routing and usage receipts](docs/content/tool-visibility.md).
 
 ### Permissions and budgets
@@ -284,22 +275,22 @@ the notice is rendered depends on the client/model. See
 
 ```sh
 atenea status
-atenea detect --repo current
+atenea detect
 atenea stats --today
-atenea stats --week --provider kivgraph
+atenea stats --week --provider tokensave
 atenea stats --today --used --watch
 atenea metrics
 atenea incidents
 atenea backup list
 ```
 
-`status` reports service state or a labeled disk fallback. `detect` performs
-provider probes; a successful handshake does not prove every tool works.
+`status` reports service state or a labeled disk fallback. `detect` probes the
+declared MCP servers; a successful handshake does not prove every tool works.
 `stats` separates requests, provider attempts, refusals and failures.
 Calendar periods, filters and historical limits are in the
 [stats guide](docs/content/stats.md).
 
-`atenea dashboard ID` checks and opens the web UI that a declared provider or MCP
+`atenea dashboard ID` checks and opens the web UI that a declared MCP
 server publishes in its own `dashboard` setting; see the
 [settings reference](docs/content/settings.md).
 
@@ -313,12 +304,14 @@ provide separate execution evidence. State normally lives under
 
 ### From 4.x to 5.0.0
 
-Contract `5.0.0` removed the built-in agents, the workflow engine, `decide`
-and the knowledge store. A settings file that still has `[model]`, `[[agent]]`,
-`[local_agents]`, `[workflow]`, `[[workflow_profile]]`, `[decision]` or
-`[knowledge]` is refused at load, naming the table; delete them and set
-`contract = "5.0.0"`. `ask` and the MCP capability surface are unchanged, and old
-state files stay on disk unused. See the
+Contract `5.0.0` removed the built-in agents, the workflow engine, `decide`,
+the knowledge store and the Kivgraph provider with the capabilities only it
+served. A settings file that still has `[model]`, `[[agent]]`, `[local_agents]`,
+`[workflow]`, `[[workflow_profile]]`, `[decision]`, `[knowledge]`,
+`[orchestrator.kivgraph]`, the `kivgraph` runner, `indexed_by` or `requires_index`
+is refused at load, naming the setting; delete them and set `contract = "5.0.0"`.
+`ask` and the remaining MCP capability surface are unchanged, and old state
+files stay on disk unused. See the
 [5.0 migration guide](docs/content/migration-5.md).
 
 ### From 3.x to 4.0.0
@@ -374,7 +367,6 @@ and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
 ## Credits
 
 Atenea builds on [ripgrep](https://github.com/BurntSushi/ripgrep),
-[Kivgraph](https://github.com/Luqueee/kivgraph),
 [DuckDB](https://github.com/duckdb/duckdb), along with the CLIs and MCP providers
 configured by its users. Documentation uses [Hugo](https://github.com/gohugoio/hugo)
 and [hugo-book](https://github.com/alex-shpak/hugo-book).

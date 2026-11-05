@@ -1097,7 +1097,7 @@ func (r *Runner) cleanHit(record map[string]any, root string, ask search) (map[s
 // reported VerdictOK with an empty list.
 //
 // Containment is checked twice, lexically and again after resolving symlinks,
-// the way the kivgraph adapter does it: a symlinked directory inside the
+// the way every adapter here does it: a symlinked directory inside the
 // repository can point outside it, and a path this adapter hands back as
 // "repository-relative" would then name a file that is not in the repository
 // at all. A path that does not exist is not an escape -- the far side may be

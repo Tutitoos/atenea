@@ -30,7 +30,7 @@ func TestQualityRanksOnlyTwoTestedImplementations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := contract.NewRepository("repo", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSAbsent, nil)
+	repo := contract.NewRepository("repo", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSAbsent)
 	impl := func(id string) contract.Implementation {
 		return contract.Implementation{ID: id, Provider: id, Capability: "code.context", Health: contract.Health{State: contract.HealthAlive}, Cost: contract.Cost{Estimated: contract.Sample{Tokens: 1}}}
 	}
@@ -54,7 +54,7 @@ func TestPreferenceStillOutranksQuality(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := contract.NewRepository("repo", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSAbsent, nil)
+	repo := contract.NewRepository("repo", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSAbsent)
 	impl := func(id string) contract.Implementation {
 		return contract.Implementation{ID: id, Provider: id, Capability: "code.context", Health: contract.Health{State: contract.HealthAlive}}
 	}

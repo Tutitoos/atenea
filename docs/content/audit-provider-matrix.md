@@ -6,6 +6,8 @@ The workflow engine (`atenea workflow`, recovery pilot and the knowledge store) 
 
 The built-in agents, floor and traces (`atenea agent`, `atenea floor`, `atenea traces`) were measured at the time of this audit; they are no longer part of Atenea (see #212). The agent table at the end of this page is dated evidence.
 
+Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
+
 | Capability | Implementations | Validation |
 |---|---|---|
 | code.context | kivgraph.context, tokensave.context | Declaration and local contracts |

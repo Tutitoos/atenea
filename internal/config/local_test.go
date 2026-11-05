@@ -47,7 +47,6 @@ func base(t *testing.T, root string) Config {
 	first, err := fileRepository{
 		ID: "decoy", Path: "/somewhere/else",
 		Languages: []string{"rust"}, Scale: "large", VCS: "present",
-		IndexedBy: []string{"fixture"},
 	}.build("global")
 	if err != nil {
 		t.Fatalf("decoy: %v", err)
@@ -55,7 +54,6 @@ func base(t *testing.T, root string) Config {
 	second, err := fileRepository{
 		ID: "workspace", Path: root,
 		Languages: []string{"go", "typescript"}, Scale: "large", VCS: "present",
-		IndexedBy: []string{"graph"},
 	}.build("global")
 	if err != nil {
 		t.Fatalf("subject: %v", err)
@@ -87,9 +85,6 @@ func TestDeclaredKeyWinsAndOmittedKeyInherits(t *testing.T) {
 	}
 	if subject.VCS.String() != "present" {
 		t.Errorf("vcs = %q, want the global value inherited", subject.VCS)
-	}
-	if got := strings.Join(subject.Indexes(), ","); got != "graph" {
-		t.Errorf("indexed_by = %q, want the global value inherited", got)
 	}
 }
 
@@ -399,6 +394,25 @@ func TestAnOverlayWithARetiredAgentKeyIsRefusedByName(t *testing.T) {
 		if !strings.Contains(err.Error(), "was removed in contract 5.0.0") || !strings.Contains(err.Error(), "migration-5.md") {
 			t.Errorf("%s: error %q does not name the removal and its remedy", key, err)
 		}
+	}
+}
+
+// indexed_by left the schema with the Kivgraph provider (#208), so an overlay
+// that still carries it is refused by name, once, with the same remedy the
+// global file gets.
+func TestAnOverlayWithTheRemovedIndexedByKeyIsRefusedByName(t *testing.T) {
+	root := repo(t, t.TempDir(), "[[repository]]\nscale = \"small\"\nindexed_by = [\"fixture\"]\n")
+	_, err := withLocal(base(t, root), root)
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err = %v)", contract.KindOf(err), err)
+	}
+	for _, want := range []string{"indexed_by was removed in contract 5.0.0", "migration-5.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("error %q is the bare typo message", err)
 	}
 }
 

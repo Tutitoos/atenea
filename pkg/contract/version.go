@@ -1,6 +1,6 @@
 // Package contract defines the wire contract shared by the Atenea core and its
 // adapters: omp, Claude Code and Codex for client CLIs,
-// and Kivgraph and Tokensave for graph and context operations. OpenCode is an
+// and Tokensave for graph and context operations. OpenCode is an
 // opt-in model backend rather than an adapter, and does not compile against
 // this package.
 //

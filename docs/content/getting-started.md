@@ -101,10 +101,11 @@ will hand it the work outright when you want it.
 
 ### Symbol providers
 
-Kivgraph and Tokensave offer the supported graph-backed symbol capabilities.
-Configure the provider and mark a repository indexed only after indexing succeeds.
-Kivgraph provides `symbol.implementations` with compiler evidence and paginated
-results. `symbol.unresolved` has no provider and is absent from `tools/list`.
+Tokensave answers `code.context`, `symbol.overview` and `symbol.calls`. It is a
+stdio process Atenea launches from `[orchestrator.tokensave.process]` once you
+declare it and add `tokensave` to `orchestrator.runners`. The symbol and graph
+capabilities that only Kivgraph served were removed in 5.0.0 (see the
+[migration guide]({{< relref "migration-5" >}})).
 
 ## Write your own settings
 
@@ -263,59 +264,47 @@ did: `answered current for $0.10 of its $0.90 ceiling`.
 
 ## Ask for one capability
 
-`ask` is the one capability, one repository case, and a position is something
-only the caller has:
+`ask` is the one capability, one repository case. The payload is typed by the
+capability's own declaration:
 
 ```sh
-./bin/atenea ask symbol.definition --repo current \
-  --set file=internal/selector/selector.go --set line=167 --set column=20
+./bin/atenea ask code.search --repo current \
+  --set query=readOnlyCommands --set scope=internal/core --set match_case=true
 ```
 
 ```text
-run       20260808T172223-d465d5
-task      symbol.definition in current
+run       20261104T221251-be01bb686364cd5d59c9037b651e8587
+task      code.search in current
 verdict   ok
-spent     158ms of tool time over 1 step(s), 207ms elapsed
-  ask      1 step(s), 158ms in 178ms
-
-discovered
-  [repository] position internal/selector/selector.go:167:20 names "Select", which is symbol Select
-  [repository] kivgraph answered symbol.definition for current with 1 location(s)
+spent     69ms of tool time over 1 step(s), 94ms elapsed
+  ask      1 step(s), 69ms in 87ms
 
 run with --trace for the plan, the funnel and every review
 
 answer
-  location
-    line     167
-    path     internal/selector/selector.go
+  matches (4)
+    1
+      column   5
+      line     43
+      path     internal/core/command.go
+      snippet  const commandTool = "atenea.command"
+      ...
 ```
 
-A position is a position in *this* tree: these two examples name real lines in
-Atenea's own source, and editing the file moves them. If one comes back
-`not_found`, the line moved — that is the capability working, not failing.
+The answer above is cut after the first match; a real run prints all four. It
+names real lines in Atenea's own source, so editing the files changes the
+numbers.
 
-`--set` takes `name=value` and is typed by the capability's own declaration:
-`line` is an integer because the capability says so, and a value that is not
-one is refused before anything is dispatched. Repeat it for a list field, and
-repeat the flag for each entry:
-
-```sh
-./bin/atenea ask symbol.references --repo current \
-  --set file=pkg/contract/capability.go --set line=189 --set column=6 \
-  --set scope=internal --set scope=cmd
-```
-
-There is no `matches` line: an ask has an answer, not a tally.
+`--set` takes `name=value`. `match_case` is a boolean because the capability says
+so, and a value that is not one is refused before anything is dispatched:
+`atenea: invalid_input: match_case must be true or false, got "maybe"`. Repeat
+the flag for each entry of a list field.
 
 Everything above prints for a person. `ask` and `detect` also
 take `--json`, which prints the whole result as one JSON object instead — always
 complete, and it ignores `--trace` rather than interleaving prose into it. That
 is the mode to parse; the prose layout above is not a format anything should
 depend on.
-
-The trace names the symbol the position resolved to. That is not decoration:
-Atenea speaks positions and graph providers speak symbols, so the answer cannot be
-checked against the question without it.
 
 ## Run it as a service
 
