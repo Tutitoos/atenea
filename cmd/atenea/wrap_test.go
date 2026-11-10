@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -155,7 +156,7 @@ func TestWrapRefusesRemovedHeadroomFlagsByName(t *testing.T) {
 		{"--via-headroom", "claude", "--", "-p", "hello"},
 		{"claude", "--headroom-port", "9876"},
 	} {
-		_, err := parseWrapOptions(args)
+		err := cmdWrap("", args, io.Discard)
 		if contract.KindOf(err) != contract.FailureInvalidInput {
 			t.Fatalf("%v: kind = %v, want invalid input: %v", args, contract.KindOf(err), err)
 		}

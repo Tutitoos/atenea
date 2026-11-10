@@ -22,7 +22,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/mcpcompat"
-	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 type wrapOptions struct {
@@ -53,7 +52,7 @@ func parseWrapOptions(args []string) (wrapOptions, error) {
 			options.EmitConfig = true
 		case "--via-headroom", "--headroom-port":
 			// Named, not a bare unknown flag: shell aliases still pass it.
-			return wrapOptions{}, contract.Fail(contract.FailureInvalidInput,
+			return wrapOptions{}, fmt.Errorf(
 				"%s was removed in contract 5.0.0 with Headroom; run `atenea wrap CLIENT` instead (see docs/content/migration-5.md)", args[i])
 		default:
 			if options.Client == "" && !strings.HasPrefix(args[i], "-") {
