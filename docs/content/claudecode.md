@@ -31,10 +31,6 @@ Use `atenea wrap claude ...` when Claude Code should consume Atenea's checked
 MCP configuration. The wrapper is ephemeral and does not rewrite the client's
 configuration files.
 
-Use `atenea wrap --via-headroom claude ...` to compose that MCP overlay with
-Headroom's HTTP proxy. Headroom handles model traffic and Atenea remains the
-single MCP bridge; the command fails closed if Headroom is unavailable.
-
 ## Current audit status
 
 On 2026-08-22 the authenticated CLI was rechecked against `taxiprime-backend`

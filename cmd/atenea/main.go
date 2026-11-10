@@ -1534,9 +1534,9 @@ func detectVia(ctx context.Context, settingsPath string) (core.Detection, answer
 // printServerProbes reports every declared server with a verdict and a reason.
 //
 // Every declaration gets a line, including the ones no capability and no raw
-// namespace ever reaches: headroom on this machine is declared, is not raw and
-// is named as provider by no implementation, so the status screen can only ever
-// call it unknown and this command is the only place it can be given a real
+// namespace ever reaches: a server that is declared, is not raw and is named as
+// provider by no implementation, so the status screen can only ever call it
+// unknown and this command is the only place it can be given a real
 // verdict. That is also the server that was invisible when this started.
 //
 // The pinned/inherited column is not decoration. A verdict earned under the

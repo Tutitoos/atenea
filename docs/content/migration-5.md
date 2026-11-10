@@ -60,6 +60,29 @@ mcp_server "fixture" key dashboard was removed in contract 5.0.0 with the provid
 Delete the key. A repository `.atenea/config.toml` may not declare
 `[[mcp_server]]` at all, so the overlay needs no edit.
 
+## Headroom
+
+Headroom is no longer part of Atenea (#234). `atenea wrap --via-headroom` and
+`atenea wrap --headroom-port` are gone, with the Headroom overlay and its
+re-entry shim; run `atenea wrap CLIENT` instead. A command line that still
+passes either flag is refused by name, not as an unknown flag:
+
+```text
+--via-headroom was removed in contract 5.0.0 with Headroom; run `atenea wrap CLIENT` instead (see docs/content/migration-5.md)
+```
+
+Nothing else changes in a settings file. `headroom` is not a reserved id: an
+`[[mcp_server]]` with `id = "headroom"` is an ordinary MCP server and still
+loads, so no edit is required. `tools/mcp-agree` now treats `atenea` alone as
+the core.
+
+On your machine, outside this repository and not done by Atenea:
+
+- replace every shell alias that calls `atenea wrap --via-headroom CLIENT` with
+  `atenea wrap CLIENT`;
+- run `headroom unwrap CLIENT` for each client you wrapped with Headroom;
+- stop the Headroom proxy.
+
 ## The Kivgraph provider and the capabilities only it served
 
 Kivgraph is no longer part of Atenea (#208): the adapter, its `kivgraph`

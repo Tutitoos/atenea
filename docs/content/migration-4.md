@@ -18,8 +18,7 @@ Do not update only the version header: first remove the following declarations:
 
 Then change the header to `contract = "4.0.0"` and run `atenea config show`.
 Unknown adapter tables, the retired runner, MCP ID, implementation IDs and index
-markers are rejected rather than silently ignored. Keep `--no-serena` in
-Headroom/OpenCode wrappers: it prevents automatic registration of this retired provider.
+markers are rejected rather than silently ignored.
 
 At the original retirement, `symbol.implementations`, `symbol.search` and
 `symbol.unresolved` had no provider. The subsequent Kivgraph integration restores
