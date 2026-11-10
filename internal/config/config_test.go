@@ -671,26 +671,21 @@ func rawBlock(extra string) string {
 // reachable thing.
 func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 	cases := map[string]string{
-		"no id":                  "\n[[mcp_server]]\nurl = \"http://127.0.0.1:1/mcp\"\n",
-		"neither":                "\n[[mcp_server]]\nid = \"x\"\n",
-		"both":                   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ncommand = [\"sh\"]\n",
-		"relative url":           "\n[[mcp_server]]\nid = \"x\"\nurl = \"/mcp\"\n",
-		"wrong scheme":           "\n[[mcp_server]]\nid = \"x\"\nurl = \"ws://127.0.0.1:1/mcp\"\n",
-		"dashboard relative":     "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"/ui\"\n",
-		"dashboard wrong scheme": "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"ws://127.0.0.1:1\"\n",
-		"dashboard credentials":  "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"http://user:pass@127.0.0.1:1\"\n",
-		"dashboard bad port":     "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"http://127.0.0.1:65536\"\n",
-		"dashboard bad alias":    "\n[[mcp_server]]\nid = \"a_b\"\ncommand = [\"sh\"]\ndashboard = \"http://127.0.0.1:1\"\n",
-		"empty argument":         "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"\"]\n",
-		"bad timeout":            "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"soon\"\n",
-		"negative timeout":       "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
-		"dotted id":              "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
-		"unknown expose":         "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
-		"cwd over http":          rawBlock("") + "working_directory = \"/project\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
-		"relative cwd":           "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\nworking_directory = \"project\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
-		"unclean cwd":            "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\nworking_directory = \"/project/../other\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
-		"pointer cwd":            "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nworking_directory = \"/project\"\n",
-		"unknown raw instance":   rawBlock("") + "instance = \"per_repository\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"no id":                "\n[[mcp_server]]\nurl = \"http://127.0.0.1:1/mcp\"\n",
+		"neither":              "\n[[mcp_server]]\nid = \"x\"\n",
+		"both":                 "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ncommand = [\"sh\"]\n",
+		"relative url":         "\n[[mcp_server]]\nid = \"x\"\nurl = \"/mcp\"\n",
+		"wrong scheme":         "\n[[mcp_server]]\nid = \"x\"\nurl = \"ws://127.0.0.1:1/mcp\"\n",
+		"empty argument":       "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"\"]\n",
+		"bad timeout":          "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"soon\"\n",
+		"negative timeout":     "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
+		"dotted id":            "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
+		"unknown expose":       "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
+		"cwd over http":        rawBlock("") + "working_directory = \"/project\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"relative cwd":         "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\nworking_directory = \"project\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"unclean cwd":          "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\nworking_directory = \"/project/../other\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
+		"pointer cwd":          "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nworking_directory = \"/project\"\n",
+		"unknown raw instance": rawBlock("") + "instance = \"per_repository\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
 		// A stdio raw block still has to carry the same budget as any other
 		// one; what is no longer refused is the transport itself, which
 		// TestAStdioBackendIsDeclaredLikeAnyOther pins from the other side.
@@ -799,7 +794,7 @@ func TestADuplicateMCPServerIDIsRefused(t *testing.T) {
 // The happy path, and the one thing about it worth pinning: a url is
 // normalized once here rather than at every point of use.
 func TestADeclaredMCPServerIsReadBack(t *testing.T) {
-	body := minimal + "\n[[mcp_server]]\nid = \"fixture\"\nurl = \"http://127.0.0.1:40010/mcp\"\ndashboard = \"http://127.0.0.1:40010/ui\"\ntimeout = \"3s\"\n" +
+	body := minimal + "\n[[mcp_server]]\nid = \"fixture\"\nurl = \"http://127.0.0.1:40010/mcp\"\ntimeout = \"3s\"\n" +
 		"\n[[mcp_server]]\nid = \"local\"\ncommand = [\"sh\", \"-c\", \"true\"]\n\n[mcp_server.env]\nK = \"v\"\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
@@ -808,7 +803,7 @@ func TestADeclaredMCPServerIsReadBack(t *testing.T) {
 	if len(cfg.MCPServers) != 2 {
 		t.Fatalf("servers = %d, want 2", len(cfg.MCPServers))
 	}
-	if got := cfg.MCPServers[0]; got.URL != "http://127.0.0.1:40010/mcp" || got.Dashboard != "http://127.0.0.1:40010/ui" || got.Timeout != 3*time.Second {
+	if got := cfg.MCPServers[0]; got.URL != "http://127.0.0.1:40010/mcp" || got.Timeout != 3*time.Second {
 		t.Errorf("first = %+v, want the declared url and timeout", got)
 	}
 	if got := cfg.MCPServers[1]; len(got.Command) != 3 || got.Env["K"] != "v" {

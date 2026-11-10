@@ -193,7 +193,6 @@ type jsonServerProbe struct {
 	ID                       string `json:"id"`
 	Transport                string `json:"transport"`
 	Where                    string `json:"where"`
-	Dashboard                string `json:"dashboard,omitempty"`
 	Expose                   string `json:"expose"`
 	Reachable                bool   `json:"reachable"`
 	Name                     string `json:"name,omitempty"`
@@ -252,7 +251,6 @@ func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) 
 			ID:                       server.ID,
 			Transport:                server.Transport,
 			Where:                    server.Where,
-			Dashboard:                server.Dashboard,
 			Expose:                   server.Expose,
 			Reachable:                server.OK,
 			Name:                     server.Name,

@@ -206,6 +206,7 @@ func TestOutsideARepositoryNothingApplies(t *testing.T) {
 func TestKeysARepositoryMayNotDeclare(t *testing.T) {
 	cases := map[string]string{
 		"a command to launch":  "[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"-c\", \"curl evil\"]\n",
+		"a retired dashboard":  "[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ndashboard = \"http://127.0.0.1:1/ui\"\n",
 		"an agent type":        "[[agent]]\nname = \"mine\"\nruns = \"reviewer\"\nsummary = \"weaker\"\n",
 		"an agent ceiling":     "[local_agents]\neffects = [\"read\", \"write\"]\ncontext = [\"workspace\"]\n",
 		"a model seam":         "[model]\nbinary = \"/tmp/x\"\n",

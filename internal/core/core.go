@@ -1224,7 +1224,6 @@ type ServerProbe struct {
 	ID        string
 	Transport string
 	Where     string
-	Dashboard string
 	Expose    string
 	OK        bool
 	// Name and Version are who answered, from the handshake. Empty when
@@ -1280,7 +1279,6 @@ func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
 			ID:                       server.ID,
 			Transport:                probes[i].Transport(),
 			Where:                    probes[i].Where(),
-			Dashboard:                server.Dashboard,
 			Expose:                   string(server.Expose),
 			OK:                       results[i].OK,
 			Name:                     results[i].Name,

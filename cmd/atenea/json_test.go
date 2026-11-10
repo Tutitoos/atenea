@@ -211,7 +211,7 @@ func TestDetectionJSONCarriesSourceAndProbeDetails(t *testing.T) {
 		PID:      1234,
 		Settings: "/tmp/atenea.toml",
 		Servers: []core.ServerProbe{{
-			ID: "filesystem", Transport: "stdio", Where: "local", Dashboard: "http://localhost:1",
+			ID: "filesystem", Transport: "stdio", Where: "local",
 			Expose: "raw", OK: true, Name: "fs", Version: "1.2", Took: 1500 * time.Millisecond, PinnedPath: true,
 		}, {
 			ID: "broken", Transport: "stdio", Where: "local", Reason: "not found", Took: 2 * time.Millisecond,
