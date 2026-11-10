@@ -1091,7 +1091,6 @@ the [5.0 migration guide]({{< relref "migration-5" >}}).
 [[mcp_server]]
 id = "fixture"                        # the name the client will see
 url = "http://127.0.0.1:40010/mcp"   # http endpoint
-dashboard = "http://127.0.0.1:40010/dashboard"  # optional web UI; opened only by `atenea dashboard <id>`
 timeout = "5s"                       # bounds the check; omitted takes the default
 expose = "off"                       # off (default) points the client here; raw is a passthrough
 
@@ -1107,18 +1106,11 @@ its own providers through adapters; these are endpoints `atenea wrap` hands to
 *someone else's* client so that client stops spawning a private copy of a
 server that is already running.
 
-`dashboard` is optional metadata for a real HTTP(S) web UI belonging to the
-MCP. Atenea validates its scheme, host and port, reports the URL in `status`
-and `detect`, and never opens a browser when the MCP starts or is probed. To
-open one explicitly, use `atenea dashboard <id>`. The command checks that the
-URL is reachable first. `atenea dashboard hosts --dry-run` previews the
-idempotent, Atenea-managed block in `/etc/hosts`; writing that file requires
-the explicit `atenea dashboard hosts` command and appropriate permissions.
-
-Dashboards use the explicitly configured URL. No provider discovery is performed.
-Atenea no longer serves a dashboard of its own: a settings file that still has
-a `[dashboard]` table is rejected as an unknown key, and the table must be
-deleted.
+The `dashboard` key was removed in contract 5.0.0 with the provider dashboard
+command (#235): a `[[mcp_server]]` block that still has it is refused at load,
+naming the server, and the key must be deleted (see the
+[5.0 migration guide]({{< relref "migration-5" >}})). Atenea serves, opens and
+reports no dashboard, its own or a provider's.
 
 Each block sets `url` or `command`, never both; repeating an `id` is refused
 rather than resolved; and an `id` may not contain a dot. Those refusals are

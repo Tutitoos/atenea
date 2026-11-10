@@ -226,6 +226,19 @@ here invalidates the real Codex certification: **repeat it before the next
 release** (#229). Dated audit evidence that measured Kivgraph is kept and marked
 as such. See [the migration guide](docs/content/migration-5.md).
 
+The provider dashboard command is removed (#235): `atenea dashboard ID` and
+`atenea dashboard hosts`, `internal/dashboard`, the `dashboard` key of
+`[[mcp_server]]` and the dashboard URL that `status` and `detect` printed per
+server (text and json). Only that command read the key. **Delete `dashboard`
+from every `[[mcp_server]]` block** of your settings file: it is refused at load
+with `mcp_server "<id>" key dashboard was removed in contract 5.0.0 with the
+provider dashboard command; delete the key`. A block written to `/etc/hosts` by
+`atenea dashboard hosts` stays there; delete it by hand. The contract version is
+unchanged. Every source change here invalidates the real Codex certification:
+**repeat it before the next release** (#229). Dated audit evidence that measured
+the command is kept and marked as such. See
+[the migration guide](docs/content/migration-5.md).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On

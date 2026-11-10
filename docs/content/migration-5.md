@@ -40,6 +40,26 @@ behave as before. `[orchestrator]`, the selector, the metrics base, the result
 cache and the catalog blocks are untouched apart from what the next section
 lists, so no other key moves.
 
+## The provider dashboard command
+
+`atenea dashboard ID` and `atenea dashboard hosts` are gone (#235), with the
+`dashboard` key of `[[mcp_server]]` and the dashboard URL that `status` and
+`detect` printed per server (text and `--json`). The command only checked and
+opened a URL you declared; nothing else read the key, and Atenea never managed
+a dashboard of its own after #211. `/etc/hosts` is no longer touched: a block
+that an earlier `atenea dashboard hosts` wrote stays there, between its
+`atenea` markers; delete it by hand if you want it gone.
+
+A settings file whose `[[mcp_server]]` still has `dashboard` is refused at
+load, naming the server, with every other removed setting in the same message:
+
+```text
+mcp_server "fixture" key dashboard was removed in contract 5.0.0 with the provider dashboard command; delete the key (see docs/content/migration-5.md)
+```
+
+Delete the key. A repository `.atenea/config.toml` may not declare
+`[[mcp_server]]` at all, so the overlay needs no edit.
+
 ## The Kivgraph provider and the capabilities only it served
 
 Kivgraph is no longer part of Atenea (#208): the adapter, its `kivgraph`
@@ -112,7 +132,7 @@ run `atenea config init --force` and re-apply your own changes. A file that decl
 header and has none of those tables is refused by the contract check instead:
 
 ```text
-atenea: invalid_input: settings ~/.config/atenea/atenea.toml: contract 4.1.0 is not supported by this core (5.0.0): contract 5.0.0 removed the agents, the workflow engine, the decide command, the knowledge store and the Kivgraph provider: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables, the [orchestrator.kivgraph] tables, the "kivgraph" runner, the kivgraph.* implementations, the capabilities named in docs/content/migration-5.md and every indexed_by key if present, then change the contract line to "5.0.0" (see docs/content/migration-5.md)
+atenea: invalid_input: settings ~/.config/atenea/atenea.toml: contract 4.1.0 is not supported by this core (5.0.0): contract 5.0.0 removed the agents, the workflow engine, the decide command, the knowledge store, the Kivgraph provider and the provider dashboard command: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables, the [orchestrator.kivgraph] tables, the "kivgraph" runner, the kivgraph.* implementations, the capabilities named in docs/content/migration-5.md, every indexed_by key and the dashboard key of every [[mcp_server]] if present, then change the contract line to "5.0.0" (see docs/content/migration-5.md)
 ```
 
 Validate the result with `atenea config show`. A 3.x file still needs the
