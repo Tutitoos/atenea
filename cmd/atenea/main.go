@@ -83,7 +83,7 @@ Commands:
   config path            Print where settings are read from
   config show            Print the settings that apply here, and from where
   wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
-                         moment ago; --via-headroom composes Headroom too
+                         moment ago
   compat-overlay --client CLIENT
                          Emit the machine-readable ephemeral wrap overlay
   codex agents sync --global|--project PATH [--prune]
@@ -367,8 +367,8 @@ and never removed from it). Every other key is refused by name: a file
 that arrives with a git clone may not hand this machine a command to run.
 Set ATENEA_LOCAL_CONFIG=0 to ignore the layer entirely.
 `,
-	"wrap": `Usage: atenea wrap CLIENT [--profile NAME] [--via-headroom] [client args...]
-	       atenea wrap --client CLIENT [--profile NAME] [--via-headroom]
+	"wrap": `Usage: atenea wrap CLIENT [--profile NAME] [client args...]
+	       atenea wrap --client CLIENT [--profile NAME]
 
 Launches CLIENT with MCP configuration Atenea generated from the
 [[mcp_server]] blocks in the settings file, having checked every one of
@@ -392,8 +392,6 @@ to undo.
 
 Flags:
   --profile NAME     desktop policy profile
-  --via-headroom     compose Headroom's proxy wrapper with Atenea's MCP overlay
-  --headroom-port N   Headroom proxy port (default 8787)
   --emit-config      print the generated client configuration without launching
 
 Arguments after CLIENT are passed through untouched.
@@ -410,11 +408,6 @@ OMP is a pass-through alias for now. Its MCP servers are read from
 ephemeral MCP overlay that wrap can use without writing one of those files.
 The wrapper therefore preserves OMP's own configuration and arguments while
 still checking and reporting Atenea's declared servers.
-
-With --via-headroom, Headroom launches the same client through its proxy and
-Atenea's checked MCP overlay is merged immediately before the real binary.
-Headroom's Serena and retrieve MCP entries are disabled in that mode because
-the corresponding Atenea entries remain the single advertised copy.
 `,
 	"compat-overlay": `Usage: atenea compat-overlay --client CLIENT
 
@@ -616,8 +609,6 @@ func run(args []string, out io.Writer) error {
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
 		return cmdIncidents(settingsPath, commandArgs, out)
-	case headroomReentryCommand:
-		return cmdHeadroomReentry(commandArgs)
 	case "stats":
 		return cmdStats(settingsPath, commandArgs, out)
 	case "metrics":
@@ -3087,11 +3078,6 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureNotFound,
 			"%s no está disponible en PATH ni en el bundle de ChatGPT", name)
 	}
-	if options.ViaHeadroom && !options.EmitConfig {
-		if _, err := resolveHeadroomBinary(); err != nil {
-			return contract.Fail(contract.FailureNotFound, "headroom no está disponible en PATH: %v", err)
-		}
-	}
 
 	// Settings only. A Core would open the measurement base and may start a
 	// managed MCP server, and this command holds no lock and asks no provider
@@ -3160,9 +3146,6 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		return nil
 	}
 	argv := clientArgv(name, flags, rest, client.variadic)
-	if options.ViaHeadroom {
-		return launchViaHeadroom(name, binary, self, argv[1:], env, options.HeadroomPort)
-	}
 	return launch(binary, argv, env)
 }
 

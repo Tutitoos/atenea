@@ -118,9 +118,9 @@ func TestABareNameNotOnPATHFailsWithAReasonThatNamesIt(t *testing.T) {
 // there is nothing to say. Making that emptiness unreadable as health is the
 // renderer's job, and cmd/atenea tests it there.
 func TestUnexercisedServerReadsUnknownNotOK(t *testing.T) {
-	atenea := build(t, deadServer(t, "headroom", "/nonexistent/headroom"))
+	atenea := build(t, deadServer(t, "idle", "/nonexistent/idle"))
 
-	row := rowFor(t, atenea, "headroom")
+	row := rowFor(t, atenea, "idle")
 	if row.State != core.BackendUnknown {
 		t.Errorf("state = %q, want %q: nobody has asked this server anything", row.State, core.BackendUnknown)
 	}
