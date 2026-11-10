@@ -40,7 +40,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_opencode_jsonc_and_disabled_core(self):
         self.write(".config/opencode/opencode.jsonc",
-                   '{"mcp":{"atenea":{"enabled":false},"headroom":{}},}')
+                   '{"mcp":{"atenea":{"enabled":false}},}')
         self.g["check_opencode"]()
         self.assertEqual(len(self.g["fails"]), 1)
         self.assertIn("deshabilitado", self.g["fails"][0][1])
@@ -48,7 +48,7 @@ class ConfigTests(unittest.TestCase):
     def test_opencode_checks_both_files(self):
         backend = sorted(self.g["BACKENDS"])[0]
         self.write(".config/opencode/opencode.json", json.dumps({"mcp": {backend: {}}}))
-        self.write(".config/opencode/opencode.jsonc", '{"mcp":{"atenea":{},"headroom":{}}}')
+        self.write(".config/opencode/opencode.jsonc", '{"mcp":{"atenea":{}}}')
         self.g["check_opencode"]()
         self.assertEqual(len(self.g["fails"]), 1)
         self.assertEqual(self.g["fails"][0][0], "installer")

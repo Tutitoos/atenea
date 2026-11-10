@@ -5,6 +5,8 @@ weight: 8
 
 # Upstream issue drafts
 
+Headroom was measured at the time of this audit; it is no longer a supported or declared provider (see #234). The draft below is kept as dated evidence.
+
 Defects found in tools this project depends on, written up here **and not filed
 anywhere**. A draft leaves this page when it is opened upstream, with the link
 replacing the body — never by being deleted. Each one states the reproducer on

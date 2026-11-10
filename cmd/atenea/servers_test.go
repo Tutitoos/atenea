@@ -15,7 +15,7 @@ import (
 func TestPrintServersNeverLetsUnknownReadAsHealthy(t *testing.T) {
 	var out bytes.Buffer
 	printServers(&out, core.Status{Servers: []core.ServerStatus{
-		{ID: "headroom", Transport: "stdio", Expose: "off", Where: "headroom mcp serve", State: core.BackendUnknown},
+		{ID: "idle", Transport: "stdio", Expose: "off", Where: "idle mcp serve", State: core.BackendUnknown},
 		{ID: "semgrep", Transport: "stdio", Expose: "raw", State: core.BackendOK, LastChecked: time.Now().Add(-8 * time.Second)},
 		{
 			ID: "agent-device", Transport: "stdio", Expose: "raw", State: core.BackendFailed,
@@ -26,7 +26,7 @@ func TestPrintServersNeverLetsUnknownReadAsHealthy(t *testing.T) {
 
 	lines := map[string]string{}
 	for _, line := range strings.Split(text, "\n") {
-		for _, id := range []string{"headroom", "semgrep", "agent-device"} {
+		for _, id := range []string{"idle", "semgrep", "agent-device"} {
 			if strings.Contains(line, id) {
 				lines[id] = line
 			}
@@ -36,7 +36,7 @@ func TestPrintServersNeverLetsUnknownReadAsHealthy(t *testing.T) {
 	// An untouched server has no reason and no timestamp in the record, so the
 	// row has to supply the sentence itself. Without it the line is a server id
 	// next to a word and two dashes, which is what an operator reads as fine.
-	unknown := lines["headroom"]
+	unknown := lines["idle"]
 	if !strings.Contains(unknown, "unknown") || !strings.Contains(unknown, "nobody has asked") {
 		t.Errorf("unknown row = %q, want the state and the sentence", unknown)
 	}

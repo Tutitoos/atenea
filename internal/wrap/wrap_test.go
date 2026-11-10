@@ -286,7 +286,7 @@ func TestABackendBehindACapabilityIsNotHandedToTheClient(t *testing.T) {
 	url := live(t)
 	plan := wrap.Check(t.Context(), []config.MCPServer{
 		{ID: "fixture", URL: url},
-		{ID: "headroom", URL: url},
+		{ID: "unserved", URL: url},
 	}, map[string]bool{"fixture": true})
 
 	servers := payload(t, plan)
@@ -296,8 +296,8 @@ func TestABackendBehindACapabilityIsNotHandedToTheClient(t *testing.T) {
 	// The other half of the same rule: holding back everything would be a
 	// different bug wearing this one's clothes. A backend nobody implements
 	// against is one Atenea cannot answer for, and the client keeps it.
-	if _, ok := servers["headroom"]; !ok {
-		t.Error("headroom is missing; a backend no capability uses is the client's to declare")
+	if _, ok := servers["unserved"]; !ok {
+		t.Error("unserved is missing; a backend no capability uses is the client's to declare")
 	}
 	if len(plan.Held) != 1 || plan.Held[0].Server.ID != "fixture" {
 		t.Errorf("held = %v, want fixture held", plan.Held)

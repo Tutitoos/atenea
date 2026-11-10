@@ -8,6 +8,8 @@ weight: 6
 
 # Auditoría final 1.0.0
 
+Headroom was measured at the time of this audit; it is no longer a supported or declared provider (see #234).
+
 Kivgraph was measured at the time of this audit; it is no longer part of Atenea (see #208). Every Kivgraph mention in this document, and the `symbol.*`, `graph.*`, `code.impact` and `repository.index` capabilities that only it served, are dated evidence.
 
 The provider dashboard command (`atenea dashboard`) was measured at the time of this audit; it is no longer part of Atenea (see #235).

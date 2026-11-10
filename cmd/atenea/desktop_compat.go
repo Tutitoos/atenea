@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,16 +25,14 @@ import (
 )
 
 type wrapOptions struct {
-	Client       string
-	Profile      string
-	EmitConfig   bool
-	ViaHeadroom  bool
-	HeadroomPort int
-	ClientArgs   []string
+	Client     string
+	Profile    string
+	EmitConfig bool
+	ClientArgs []string
 }
 
 func parseWrapOptions(args []string) (wrapOptions, error) {
-	options := wrapOptions{HeadroomPort: 8787}
+	var options wrapOptions
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--":
@@ -53,17 +50,10 @@ func parseWrapOptions(args []string) (wrapOptions, error) {
 			options.Profile, i = args[i+1], i+1
 		case "--emit-config":
 			options.EmitConfig = true
-		case "--via-headroom":
-			options.ViaHeadroom = true
-		case "--headroom-port":
-			if i+1 >= len(args) {
-				return wrapOptions{}, errors.New("--headroom-port requires a value")
-			}
-			port, err := strconv.Atoi(args[i+1])
-			if err != nil || port < 1 || port > 65535 {
-				return wrapOptions{}, errors.New("--headroom-port must be between 1 and 65535")
-			}
-			options.HeadroomPort, i = port, i+1
+		case "--via-headroom", "--headroom-port":
+			// Named, not a bare unknown flag: shell aliases still pass it.
+			return wrapOptions{}, fmt.Errorf(
+				"%s was removed in contract 5.0.0 with Headroom; run `atenea wrap CLIENT` instead (see docs/content/migration-5.md)", args[i])
 		default:
 			if options.Client == "" && !strings.HasPrefix(args[i], "-") {
 				options.Client = args[i]
@@ -194,8 +184,8 @@ func resolveDesktopClient(client string, flags []string) desktopClientResolution
 		path, err := exec.LookPath(client)
 		if err == nil {
 			// LookPath can return a relative path when PATH contains a relative
-			// entry. The composed launcher must hand Headroom an absolute binary
-			// so a later cwd change cannot redirect the real client.
+			// entry; an absolute binary keeps a later cwd change from
+			// redirecting the real client.
 			if absolute, absErr := filepath.Abs(path); absErr == nil {
 				path = absolute
 			}

@@ -1278,11 +1278,6 @@ wrap opencode  4 checked: 3 declared, 0 refused, 1 held
 
 chrome-devtools was measured at the time of this audit; it is no longer a supported or declared backend (see #209). context7 was measured at the time of this audit; it is no longer a supported or declared backend (see #209). The capture above is dated evidence.
 
-`atenea wrap --via-headroom opencode` composes the same Atenea overlay with
-Headroom's provider and transport configuration. The two JSON payloads are
-deep-merged by key; malformed payloads or incompatible key collisions stop the
-launch instead of silently dropping an MCP server or changing the route.
-
 ## What `declared` promises, and what it does not
 
 The check is one MCP handshake per server. That is a real measurement and it
@@ -1389,7 +1384,7 @@ because it is the one part of the launch line Atenea does not govern. It
 belongs to opencode, whose own help describes it as *auto-approve permissions
 that are not explicitly denied (dangerous!)*. It is not a `wrap` option and
 never was; on the machine this was written on it arrived by inheritance, from
-an older `headroom wrap opencode --auto` alias, and rode along unexamined when
+an older shell alias, and rode along unexamined when
 the alias moved to `atenea wrap` on 2026-08-09.
 
 It does not widen anything Atenea enforces. The permission check refuses a

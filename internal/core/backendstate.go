@@ -203,8 +203,8 @@ type providerHealth struct {
 // has none -- it is never asked for tools -- so the catalog's remembered
 // health for its implementations answers instead. A server neither path has
 // touched keeps "unknown", which includes the honest case of a declaration
-// nothing in the Core reaches at all: headroom on this machine is not raw and
-// no implementation names it as provider, so nothing but `atenea detect` can
+// nothing in the Core reaches at all: a server that is not raw and
+// no implementation names as provider, so nothing but `atenea detect` can
 // ever give it a verdict, and inventing one here would be the same lie in a
 // new place.
 func (c *Core) serverStatus(byProvider map[string]providerHealth) []ServerStatus {

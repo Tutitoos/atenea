@@ -239,6 +239,20 @@ unchanged. Every source change here invalidates the real Codex certification:
 the command is kept and marked as such. See
 [the migration guide](docs/content/migration-5.md).
 
+Headroom support is removed (#234): `atenea wrap --via-headroom` and `--headroom-port`
+(and the Headroom overlay, re-entry shim and OpenCode payload merge behind them),
+the Headroom special cases in the tests and the core's backend-state comments, and
+Headroom as a core of `tools/mcp-agree`. A command line that still passes either
+flag is refused with ``--via-headroom was removed in contract 5.0.0 with Headroom;
+run `atenea wrap CLIENT` instead``; `atenea wrap CLIENT` is unchanged, and an
+`[[mcp_server]]` with `id = "headroom"` is an ordinary MCP server that still loads.
+Replace shell aliases that call `atenea wrap --via-headroom`, run `headroom unwrap
+CLIENT` and stop the proxy yourself: those steps are outside Atenea. The contract
+version is unchanged. Every source change here invalidates the real Codex
+certification: **repeat it before the next release** (#229). Dated audit evidence
+that measured Headroom is kept and marked as such. See
+[the migration guide](docs/content/migration-5.md).
+
 ### Fixed
 
 A stale or recycled pid in `upkeep.lock` no longer keeps the service down. On
