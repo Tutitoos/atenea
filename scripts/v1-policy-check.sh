@@ -57,7 +57,7 @@ policy_docs=(docs/content/v1-policy.md docs/content/v1-contracts.md docs/content
 contains_any 'advisory|hard cap' "${policy_docs[@]}"
 contains 'interactive permission|confirmación interactiva|interactivo' \
 	docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains_any 'Tokensave|Semgrep|Headroom' docs/content/v1-final-audit.md
+contains_any 'Tokensave|Semgrep' docs/content/v1-final-audit.md
 # The structural-search and code.impact/repository.index anchors went with the
 # Kivgraph provider (#208): nothing implements those capabilities any more, so
 # the policy no longer promises them.
