@@ -18,7 +18,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
-	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -1024,9 +1023,6 @@ func TestCommandArgumentGuardsDoNotStartExternalWork(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{name: "dashboard missing", call: func() error { return cmdDashboard("", nil, &out) }},
-		{name: "dashboard flag first", call: func() error { return cmdDashboard("", []string{"--check"}, &out) }},
-		{name: "dashboard hosts flag", call: func() error { return cmdDashboardHosts(config.Config{}, []string{"--bad"}, &out) }},
 		{name: "incidents unknown", call: func() error { return cmdIncidents("", []string{"unknown"}, &out) }},
 		{name: "metrics bad flag", call: func() error { return cmdMetrics("", []string{"--bad"}, &out) }},
 		{name: "backup missing", call: func() error { return cmdBackup("", nil, &out) }},

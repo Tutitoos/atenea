@@ -290,10 +290,6 @@ declared MCP servers; a successful handshake does not prove every tool works.
 Calendar periods, filters and historical limits are in the
 [stats guide](docs/content/stats.md).
 
-`atenea dashboard ID` checks and opens the web UI that a declared MCP
-server publishes in its own `dashboard` setting; see the
-[settings reference](docs/content/settings.md).
-
 Measurements are stored in DuckDB; run receipts and incidents
 provide separate execution evidence. State normally lives under
 `$XDG_STATE_HOME/atenea` or `~/.local/state/atenea`. See

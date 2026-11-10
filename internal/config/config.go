@@ -19,7 +19,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -120,9 +119,6 @@ type MCPServer struct {
 	// WorkingDirectory fixes the cwd of a raw stdio child. Empty preserves the
 	// inherited cwd. It cannot be selected or changed by a tool request.
 	WorkingDirectory string
-	// Dashboard is an optional HTTP(S) web UI belonging to this MCP. It is
-	// metadata only: Atenea never opens it during startup or probing.
-	Dashboard string
 	// Timeout bounds the readiness check. Zero takes the probe's default.
 	Timeout time.Duration
 	// ProtocolMode selects the exact MCP transport policy: legacy (default),
@@ -1281,14 +1277,15 @@ type fileMCPServer struct {
 	Command          []string          `toml:"command"`
 	Env              map[string]string `toml:"env"`
 	WorkingDirectory string            `toml:"working_directory"`
-	Dashboard        string            `toml:"dashboard"`
-	Timeout          string            `toml:"timeout"`
-	ProtocolMode     string            `toml:"protocol_mode"`
-	Expose           string            `toml:"expose"`
-	Instance         string            `toml:"instance"`
-	Tools            []string          `toml:"tools"`
-	Effects          []string          `toml:"effects"`
-	Tool             []fileMCPTool     `toml:"tool"`
+	// Dashboard is only read to refuse it: the key was removed in contract 5.0.0.
+	Dashboard    *string       `toml:"dashboard"`
+	Timeout      string        `toml:"timeout"`
+	ProtocolMode string        `toml:"protocol_mode"`
+	Expose       string        `toml:"expose"`
+	Instance     string        `toml:"instance"`
+	Tools        []string      `toml:"tools"`
+	Effects      []string      `toml:"effects"`
+	Tool         []fileMCPTool `toml:"tool"`
 }
 
 type fileMCPTool struct {
@@ -1339,19 +1336,12 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	if protocolMode != "legacy" && protocolMode != "auto" && protocolMode != "modern-pin" {
 		return fail("mcp_server %s: protocol_mode %q is not legacy, auto, or modern-pin", id, protocolMode)
 	}
-	out := MCPServer{ID: id, Command: m.Command, Env: m.Env, Dashboard: strings.TrimSpace(m.Dashboard), ProtocolMode: protocolMode}
+	out := MCPServer{ID: id, Command: m.Command, Env: m.Env, ProtocolMode: protocolMode}
 	if m.WorkingDirectory != "" {
 		if !hasCommand || !filepath.IsAbs(m.WorkingDirectory) || filepath.Clean(m.WorkingDirectory) != m.WorkingDirectory {
 			return fail("mcp_server %s: working_directory requires a canonical absolute path and a stdio command", id)
 		}
 		out.WorkingDirectory = m.WorkingDirectory
-	}
-	if out.Dashboard != "" {
-		validated, err := validateDashboardURL(source, "mcp_server", id, out.Dashboard)
-		if err != nil {
-			return MCPServer{}, err
-		}
-		out.Dashboard = validated
 	}
 	if hasURL {
 		validated, err := validateAbsoluteURL(source, "mcp_server", id, "url", m.URL)
@@ -1511,10 +1501,7 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 
 // validateAbsoluteURL checks that raw is a URL a plain http(s) client could
 // dial: some scheme, some host, nothing fancier. This is the shape the far
-// side of an MCP connection itself takes -- mcp_server's own url -- as
-// opposed to validateDashboardURL just below, which is a viewer bolted onto a
-// server rather than the server itself and carries a dashboard alias
-// requirement this one does not.
+// side of an MCP connection itself takes -- mcp_server's own url.
 func validateAbsoluteURL(source, section, id, field, raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -1524,38 +1511,6 @@ func validateAbsoluteURL(source, section, id, field, raw string) (string, error)
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %s %s: %s scheme %q is not http or https", source, section, id, field, parsed.Scheme)
-	}
-	return parsed.String(), nil
-}
-
-func validateDashboardURL(source, section, id, raw string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", contract.Fail(contract.FailureInvalidInput,
-			"settings %s: %s %s: dashboard %q is not an absolute http(s) url", source, section, id, raw)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", contract.Fail(contract.FailureInvalidInput,
-			"settings %s: %s %s: dashboard scheme %q is not http or https", source, section, id, parsed.Scheme)
-	}
-	if parsed.User != nil {
-		return "", contract.Fail(contract.FailureInvalidInput,
-			"settings %s: %s %s: dashboard must not contain credentials", source, section, id)
-	}
-	if parsed.Hostname() == "" {
-		return "", contract.Fail(contract.FailureInvalidInput,
-			"settings %s: %s %s: dashboard has no host", source, section, id)
-	}
-	if port := parsed.Port(); port != "" {
-		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
-			return "", contract.Fail(contract.FailureInvalidInput,
-				"settings %s: %s %s: dashboard port %q is invalid", source, section, id, port)
-		}
-	}
-	if !dnsLabel(id) {
-		return "", contract.Fail(contract.FailureInvalidInput,
-			"settings %s: %s %s: id is not a valid DNS label for its dashboard alias", source, section, id)
 	}
 	return parsed.String(), nil
 }
@@ -1594,21 +1549,6 @@ func namedEffects(raw []string) ([]contract.Effect, error) {
 		out = append(out, effect)
 	}
 	return out, nil
-}
-
-// dnsLabel is deliberately narrower than a general hostname. Dashboard
-// aliases are one local label, not a path or a multi-label name, so the
-// mapping remains deterministic and safe to place in a hosts file.
-func dnsLabel(s string) bool {
-	if len(s) == 0 || len(s) > 63 || s[0] == '-' || s[len(s)-1] == '-' {
-		return false
-	}
-	for _, r := range s {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
-			return false
-		}
-	}
-	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1764,9 +1704,6 @@ func parse(raw []byte, source string) (Config, error) {
 	// payload is a map keyed by id, so the later would win and the earlier
 	// would never be probed or declared. Refusing is the only way the file
 	// can say which one it meant.
-	//
-	// A dashboard alias is the server's own id, so the same check covers it:
-	// two blocks claiming one alias are two blocks claiming one id.
 	seen := make(map[string]bool, len(decoded.MCPServers))
 	for _, raw := range decoded.MCPServers {
 		server, err := raw.build(source)
@@ -1962,6 +1899,12 @@ func retiredCatalog(decoded file) []string {
 		out = append(out, retired(section, "the Kivgraph provider, the only implementation they had",
 			"delete their [[capability]] blocks, every [[implementation]] that serves them and every [[selector.rule]] that names them"))
 	}
+	// Decoded rather than undecoded, so each refusal can name its server.
+	for _, server := range decoded.MCPServers {
+		if server.Dashboard != nil {
+			out = append(out, retired(fmt.Sprintf("mcp_server %q key dashboard", server.ID), "the provider dashboard command", "delete the key"))
+		}
+	}
 	return out
 }
 
@@ -1986,7 +1929,7 @@ func retiredKeyMessage(key string) string {
 // confusing failure.
 func contractRemedy(declared contract.Version) string {
 	if declared.Major < contract.Current.Major {
-		remedy := fmt.Sprintf("contract 5.0.0 removed the agents, the workflow engine, the decide command, the knowledge store and the Kivgraph provider: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables, the [orchestrator.kivgraph] tables, the \"kivgraph\" runner, the kivgraph.* implementations, the capabilities named in docs/content/migration-5.md and every indexed_by key if present, then change the contract line to %q (see docs/content/migration-5.md)", contract.Current)
+		remedy := fmt.Sprintf("contract 5.0.0 removed the agents, the workflow engine, the decide command, the knowledge store, the Kivgraph provider and the provider dashboard command: delete the [model], [workflow], [[workflow_profile]], [local_agents], [decision], [knowledge] and [[agent]] tables, the [orchestrator.kivgraph] tables, the \"kivgraph\" runner, the kivgraph.* implementations, the capabilities named in docs/content/migration-5.md every indexed_by key and the dashboard key of every [[mcp_server]] if present, then change the contract line to %q (see docs/content/migration-5.md)", contract.Current)
 		if declared.Major < 4 {
 			remedy = "remove Serena runner, adapter/process, MCP, implementations and indexed_by entries, and " + remedy
 		}
